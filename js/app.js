@@ -284,7 +284,7 @@
       title: '按卖家的开票入口申请',
       note: '共 ' + xs.length + ' 单。确认后逐单打开与卖家的旺旺会话，点击卖家发来的开票卡片上的「去申请」；'
         + '在淘宝「开具发票」页核对订单号与发票抬头「' + S.invoice.title + '」一致后，点击「提交申请」并「确认提交」。核对不一致的不提交。',
-      rows: xs.map(x => { const k = cardOfX(x); return orderRow(x.o, x.lines, '卡片：' + (k ? String(k.time).slice(0, 16) + ' ' + k.title + (k.price ? ' ¥' + k.price : '') : '—')
+      rows: xs.map(x => { const k = cardOfX(x); return orderRow(x.o, x.lines, '卡片：' + (k ? String(k.time).slice(0, 16) + ' ' + k.title + (k.price ? ' ' + yuan(+k.price) : '') : '—')
         + (k && k.shared ? '　⚠ 同店多单，请核对归属（申请页订单号不符时不会提交）' : '')); }),
       ok: '确认并提交申请', okTip: '按上述清单逐单打开开票申请页，核对后提交',
     });
@@ -302,7 +302,7 @@
         try { r = k ? await runCard(x.o, k, c) : { ok: false, why: '未找到开票卡片' }; }
         catch (e) { r = { ok: false, why: e.message }; }
         if (!r.ok) await patchCardJob(x.o.no, { state: 'cancelled' });          // 晚到的申请页不再提交
-        out.push((r.ok ? '已提交　' : '未完成　') + x.o.shop + '（' + (x.o.time || '').slice(0, 10) + '，¥' + x.o.pay + '，' + x.o.no + '）' + (r.ok ? '' : '：' + r.why));
+        out.push((r.ok ? '已提交　' : '未完成　') + x.o.shop + '（' + (x.o.time || '').slice(0, 10) + '，' + yuan(+x.o.pay) + '，' + x.o.no + '）' + (r.ok ? '' : '：' + r.why));
         if (i < sel.length - 1) await sleepMs(3000 + Math.random() * 3000);       // 单与单之间隔几秒
       }
     } finally { cardBusy = false; }
@@ -340,7 +340,7 @@
   function orderRow(o, lines, extra) {
     const t = (lines[0] && lines[0].title) || '';
     return '<b>' + esc(o.shop || '未知店铺') + '</b><span class="detail">' + esc((o.time || '').slice(0, 10)) + ' · ' + esc(t.length > 40 ? t.slice(0, 40) + '…' : t)
-      + (lines.length > 1 ? ' 等 ' + lines.length + ' 件' : '') + ' · ¥' + esc(o.pay) + ' · 订单号 ' + esc(o.no) + '</span>'
+      + (lines.length > 1 ? ' 等 ' + lines.length + ' 件' : '') + ' · ' + esc(yuan(+o.pay)) + ' · 订单号 ' + esc(o.no) + '</span>'
       + (extra ? '<span class="ask-msg">' + esc(extra) + '</span>' : '');
   }
   function confirmList(opt) {
@@ -1013,7 +1013,7 @@
     $('ask-note').textContent = '共 ' + items.length + ' 家。确认后插件逐家打开旺旺，核对会话属于该店铺后发送以下消息，每家间隔数秒。'
       + (noNick.length ? ' 另有 ' + noNick.length + ' 家卖家旺旺名未知，本次不发送。' : '');
     $('ask-list').innerHTML = items.map((g, i) => '<label class="ask-row"><input type="checkbox" data-ask="' + i + '" checked title="取消勾选则不发送给该店铺"> <b>' + esc(g.shop) + '</b>'
-      + '<span class="detail">' + g.orders.map(o => esc(o.date) + ' ¥' + esc(o.amount) + ' ' + esc(o.no)).join('；') + '</span>'
+      + '<span class="detail">' + g.orders.map(o => esc(o.date) + ' ' + esc(yuan(+o.amount)) + ' ' + esc(o.no)).join('；') + '</span>'
       + '<span class="ask-msg">' + esc(g.msg) + '</span></label>').join('');
     $('dlg-ask').showModal();
     return new Promise(res => {
@@ -1204,8 +1204,8 @@
     got.forEach(r => { if (seen.has(r.invNo)) twice.push(r.file + '（与 ' + seen.get(r.invNo) + ' 为同一张）'); else seen.set(r.invNo, r.file); });
     const res = I.checkFiles(got, S.orders.map(o => ({ no: o.no, shop: o.shop, time: o.time, amount: o.pay })));
     const moved = await applyFileCheck(res);
-    const ord = no => { const o = S.orders.find(x => x.no === no); return o ? (o.time || '').slice(0, 10) + ' ' + o.shop + ' ¥' + o.pay + '（' + no + '）' : no; };
-    const what = r => '¥' + r.amount + '，开票日期 ' + (r.date || '未读取');
+    const ord = no => { const o = S.orders.find(x => x.no === no); return o ? (o.time || '').slice(0, 10) + ' ' + o.shop + ' ' + yuan(+o.pay) + '（' + no + '）' : no; };
+    const what = r => yuan(r.amount) + '，开票日期 ' + (r.date || '未读取');
     const KIND = {
       move: r => '不属于文件名中的订单。票面 ' + what(r) + '，属于 ' + ord(r.to) + '（已更正）',
       merged: r => '票面 ' + what(r) + '，为同店多单合开：' + r.nos.map(ord).join(' + '),
@@ -1301,7 +1301,7 @@
     const p = packPlan(seq0);
     $('pack-note').textContent = '找到发票 ' + p.rows.length + ' 张（' + p.rows.reduce((a, r) => a + r.xs.length, 0) + ' 单），合计 ' + yuan(p.total)
       + (p.miss.length ? '；另有 ' + p.miss.length + ' 单实验室订单尚无发票文件，将列在汇总表末尾' : '') + '。确认后存入下载文件夹的「订单分拣-报销」。';
-    $('pack-list').value = p.rows.map(r => (r.amount > 200 ? '［低值品］' : '') + r.name + '    ← ' + r.f.name + (r.warn ? '    ⚠ ' + r.warn : '')).join('\n') + (p.miss.length ? '\n\n尚无发票：\n' + p.miss.map(m => '  ' + (m.x.o.time || '').slice(0, 10) + ' ' + m.x.o.shop + ' ¥' + m.x.o.pay + ' ' + m.x.o.no + '（' + m.st.label + '）').join('\n') : '');
+    $('pack-list').value = p.rows.map(r => (r.amount > 200 ? '［低值品］' : '') + r.name + '    ← ' + r.f.name + (r.warn ? '    ⚠ ' + r.warn : '')).join('\n') + (p.miss.length ? '\n\n尚无发票：\n' + p.miss.map(m => '  ' + (m.x.o.time || '').slice(0, 10) + ' ' + m.x.o.shop + ' ' + yuan(m.x.o.pay) + ' ' + m.x.o.no + '（' + m.st.label + '）').join('\n') : '');
     $('pack-go').disabled = !p.rows.length;
     return p;
   }
@@ -1481,7 +1481,7 @@
     if (st.key !== 'done') return st;
     const got = (X.dlDone[o.no] || []).concat(S.invFiles[o.no] || []);
     const notes = got.map(g => (S.fileChecks || {})[g.file]).filter(Boolean)
-      .map(c => (CHECK_NOTE[c.kind] || '') + (c.kind === 'short' ? '（少 ¥' + c.short + '）' : '') + (c.amount != null && c.kind !== 'error' ? '（¥' + c.amount + '，' + (c.date || '日期未读取') + '）' : '') + (c.dup ? '；与已整理的 ' + c.dup + ' 为同一张' : ''));
+      .map(c => (CHECK_NOTE[c.kind] || '') + (c.kind === 'short' ? '（少 ' + yuan(+c.short) + '）' : '') + (c.amount != null && c.kind !== 'error' ? '（' + yuan(+c.amount) + '，' + (c.date || '日期未读取') + '）' : '') + (c.dup ? '；与已整理的 ' + c.dup + ' 为同一张' : ''));
     return notes.length ? Object.assign({}, st, { detail: st.detail + ' · ' + notes.join('；'), checks: notes.join('；') }) : st;
   }
 
@@ -1493,7 +1493,7 @@
     await chrome.storage.local.set({ nickWant: Object.fromEntries(os.map(o => [o.no, Date.now()])), detailFound: {} });
     let refunded = 0, partial = 0;
     for (const o of os) {
-      toast('正在读取订单详情：' + o.shop + '（' + (o.time || '').slice(0, 10) + '，¥' + o.pay + '）');
+      toast('正在读取订单详情：' + o.shop + '（' + (o.time || '').slice(0, 10) + '，' + yuan(+o.pay) + '）');
       const tab = await chrome.tabs.create({ url: detailUrl(o.no), active: true });
       for (let t = 0; t < 25000; t += 800) {
         await sleepMs(800);
