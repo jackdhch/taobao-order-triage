@@ -219,7 +219,7 @@ def run(p, tmp):
         return app.evaluate('''() => Object.fromEntries([...document.querySelectorAll('.inv-table tbody tr')].map(tr => [
             tr.children[2].querySelector('.detail').textContent.trim(),
             { st: tr.querySelector('.st').textContent.trim(), detail: [...tr.children[5].querySelectorAll('.detail')].map(d => d.textContent).join(' | '),
-              btns: [...tr.querySelectorAll('button')].map(b => b.textContent.trim()) }]))''')
+              btns: [...tr.querySelectorAll('.acts button')].map(b => b.textContent.trim()) }]))''')
 
     def check_status(want, msg, hint=''):
         rows = inv_rows()
@@ -287,8 +287,8 @@ def run(p, tmp):
           f'会命中外层 .message-item-line，所有图片都被滤掉）')
     app.wait_for_timeout(500)
     rows = check_status(AFTER_SCAN, '扫描后主页状态：E 卖家发来了文件，F 图片（二维码），G 提到邮箱，I 已要过等回复，H 仍需找卖家', F_HINT)
-    check(rows.get(NO['E'], {}).get('btns') == ['下载 1 个文件'] and rows.get(NO['A'], {}).get('btns') == ['下载'],
-          'A 有「下载」按钮，E 有「下载 1 个文件」按钮', {k: rows.get(NO[k], {}).get('btns') for k in 'AE'})
+    check(rows.get(NO['E'], {}).get('btns') == ['下载卖家发的文件（1 个）'] and rows.get(NO['A'], {}).get('btns') == ['下载发票'],
+          'A 有「下载发票」按钮，E 有「下载卖家发的文件（1 个）」按钮', {k: rows.get(NO[k], {}).get('btns') for k in 'AE'})
 
     by_url = [u for pg in ctx.pages if '/app/im/' in pg.url for fr in pg.frames if '/chat-core/' in fr.url for u in (fr.evaluate('window.__mock.byUrl || []'))]
     check('某某虚构碳纤维加工' in by_url or any('碳纤维' in k for k in (store('chatScan') or {}).get('convs', {})),
@@ -370,7 +370,7 @@ def run(p, tmp):
           f'读到 {len(s2.get("rows", {}))} 单，应为 {len(rows_all)} 单；写回时页面渲染过的页 {slow.evaluate("window.__mock.log")}'
           '（是空的就说明 invoice-list.js 领到活马上就读，没等表格出来：找不到标签就跳过，最后把空结果写回 invSync）')
 
-    print('\n[6b] 一键处理发票：点一次，依次同步 → 看卖家回复 → 下载，不用再点别的')
+    print('\n[6b] 检查开票情况：点一次，依次同步 → 看卖家回复 → 下载，不用再点别的')
     for pg in [pg for pg in ctx.pages if pg.url.startswith(INV_URL) or '/app/im/' in pg.url]: pg.close()
     at = lambda k: app.evaluate('k => chrome.storage.local.get(k).then(r => r[k] ? r[k].at : 0)', k)
     s0, c0 = at('invSync'), at('chatScan')
@@ -492,7 +492,7 @@ def run(p, tmp):
 
     print('\n[10] 卖家发的是税务局发票二维码：插件打开那个地址，核对抬头、税号、金额，点「PDF下载」，按订单存好，关掉页面')
     check(any(o.get('nick') == '某某虚构传感器店' for o in app.evaluate("JSON.parse(localStorage.getItem('orderTriage.app.v1')).orders")),
-          '一键处理前，不知道旺旺名的传感器店：插件开订单详情页，从旺旺图标读到了旺旺名')
+          '检查开票情况前，不知道旺旺名的传感器店：插件开订单详情页，从旺旺图标读到了旺旺名')
     app.evaluate('''() => chrome.storage.local.get('chatScan').then(r => { const c = r.chatScan; const k = Object.keys(c.convs).find(n => n.includes('传感器'));
         c.convs[k].images = [{ time: '2026-08-15 20:05:30', src: 'https://img.alicdn.com/mock/qr-dppt-106.png' }]; c.at = Date.now(); return chrome.storage.local.set({ chatScan: c }); })''')
     for pg in [pg for pg in ctx.pages if '/app/im/' in pg.url or INV_URL in pg.url]: pg.close()
@@ -509,16 +509,19 @@ def run(p, tmp):
     closed = wait_until(app, lambda: not [pg for pg in ctx.pages if 'chinatax' in pg.url], 10)
     check(bool(closed), '下完后税务局页面自己关掉了', [pg.url for pg in ctx.pages if 'chinatax' in pg.url])
 
-    print('\n[11] 插件自己提醒还有多少单没拿到发票：主页顶上的提醒条 + 工具栏插件图标上的数字')
+    print('\n[11] 插件自己提醒还有多少单没拿到发票：主页顶上的进度条 + 工具栏插件图标上的数字')
     app.bring_to_front(); app.reload(); app.wait_for_timeout(1500)
     txt = app.inner_text('#remind')
     pend = app.evaluate("chrome.storage.local.get('invPending').then(r => r.invPending)")
     n = pend and pend.get('n')
-    check(bool(n) and f'还有 {n} 单实验室订单没拿到发票' in txt and ('等卖家回复' in txt or '要你动手' in txt), f'提醒条：还有 {n} 单，按在等谁分开', txt[:200])
+    frac = re.search(r'发票（已拿到 / 应开）\s*(\d+)\s*/\s*(\d+)\s*单', txt)
+    check(bool(n) and bool(frac) and int(frac.group(2)) - int(frac.group(1)) == n and f'还差 {n} 单' in txt,
+          f'进度条：发票「已拿到 / 应开」两数相差 {n}，写着还差 {n} 单', txt[:300])
+    check('要你处理' in txt and '等待中' in txt and '待下载' in txt, '进度条按「要你处理 / 等待中 / 待下载」分开计数', txt[:300])
     badge = app.evaluate('chrome.action.getBadgeText({})')
     check(badge == str(n), f'插件图标上显示 {n}', badge)
     app.click('#remind [data-goto="invoice"]'); app.wait_for_timeout(500)
-    check(app.locator('#inv-bar:not([hidden])').count() == 1, '点「去发票栏看」跳到发票栏')
+    check(app.locator('#inv-bar:not([hidden])').count() == 1, '点进度条上的发票跳到发票栏')
 
     print('\n[12] 找淘宝官方人工客服督促：先发「人工」直到转人工，再一单一句督促；转人工之前一句督促的话都不发')
     label = app.inner_text('#inv-vip')
@@ -576,11 +579,11 @@ def run(p, tmp):
     check('合计' in csv_txt and '还没有发票的实验室订单' in csv_txt, '汇总表里有合计，最后列出还没有发票的实验室订单', csv_txt[:120])
     check(sorted(x.name for x in src.iterdir()) == before, '原来的「订单分拣-发票」文件夹一个文件都没变')
 
-    print('\n[14] 每天自动处理：后台到点打开主页（带 #auto），主页自己点「一键处理发票」')
+    print('\n[14] 每天自动处理：后台到点打开主页（带 #auto），主页自己点「检查开票情况」')
     app.goto(f'chrome-extension://{eid}/index.html#auto')
     app.reload()                                       # 后台也是改地址后再刷新（只改 # 不会重新加载）
-    t = wait_until(app, lambda: re.search('每天自动处理|一键处理', app.inner_text('#toast')) and app.inner_text('#toast'), 15)
-    check(bool(t), '打开 #auto 的主页后自动开始一键处理', app.inner_text('#toast'))
+    t = wait_until(app, lambda: re.search('每天自动处理|检查开票情况', app.inner_text('#toast')) and app.inner_text('#toast'), 15)
+    check(bool(t), '打开 #auto 的主页后自动开始检查开票情况', app.inner_text('#toast'))
     check('#auto' not in app.url, '跑过以后地址里的 #auto 去掉了（刷新不会再跑一次）', app.url)
     ctx.close()
 

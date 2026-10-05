@@ -46,7 +46,8 @@ index.html                 页面（样式内联；扩展页不允许内联脚�
 js/xlsx-lite.js            零依赖 xlsx/csv 读取（DecompressionStream 解 zip，正则读 sheet XML）
 js/normalize.js            列名别名 → 统一订单结构；一单多件续行合并；抓取数据按订单号合并；退款判断
 js/classify.js             关键词打分 + 同店铺/同商品记忆；classifyAll 两遍扫描（补邮费链接跟随店铺）；suggest 根据手动判断推荐增删词
-js/app.js                  界面、状态（localStorage）、导入导出、键盘操作
+js/app.js                  界面、状态（localStorage）、导入订单表、键盘操作。界面是一条线的 8 步（flowSteps），顶上进度条（renderDash），
+                           不常用的收在顶栏「更多」；不提供导出、不提供改词表（用户 2026-10-05 要求去掉多余的自由度）
 js/sample.js               虚构示例数据（给没有数据的人试用）
 scraper/taobao-scraper.js  在淘宝「已买到的宝贝」页控制台运行：按文字特征定位订单块，抓图片/逐件退款，可自动翻页，存本地 JSON
 tools/eval.mjs             node 评估分类效果：node tools/eval.mjs [订单表] [labels.json]

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-离线端到端测试：一键平台申请（批量开票页）。全程不连淘宝、不联网，订单、店铺全部虚构。
+离线端到端测试：申请平台开票（批量开票页）。全程不连淘宝、不联网，订单、店铺全部虚构。
 
     env -u TMPDIR python3 tools/e2e-apply.py
 
@@ -95,19 +95,20 @@ def run(p, tmp):
                     'lines': [{'title': t, 'img': 'https://img.alicdn.com/x.jpg'}]} for no, d, shop, pay, t in O.values()}
     app.evaluate('s => chrome.storage.local.set({ scraped: s })', scraped)
     app.wait_for_timeout(800)
-    (tmp / 'have.json').write_text(json.dumps({'orders': [NO['N1']]}), encoding='utf-8')
-    app.set_input_files('#inv-have', str(tmp / 'have.json'))
-    app.wait_for_timeout(600)
+    # N1 已经报销过（主页存储里的已报销订单号 haveNos；导入 JSON 清单的入口已从界面去掉，直接写进存储）
+    app.evaluate('''no => { const S = JSON.parse(localStorage.getItem('orderTriage.app.v1')); S.haveNos = [no];
+                         localStorage.setItem('orderTriage.app.v1', JSON.stringify(S)); }''', NO['N1'])
+    app.reload(); app.wait_for_selector('#main:not([hidden])'); app.wait_for_timeout(800)
     # 导入已有票的订单号后，插件会自动把最晚那单当成「上次报销到这」；这里要从第一单开始算
     app.click('.flow li[data-step="1"]'); app.click('button[data-flow="since-none"]'); app.wait_for_timeout(400)
     app.click('#seg-cat button[data-cat="invoice"]'); app.wait_for_timeout(500)
     btn = app.inner_text('#inv-apply')
     rows = app.evaluate(r"[...document.querySelectorAll('.inv-table tbody tr')].map(tr => tr.innerText.replace(/\s+/g, ' ').slice(0, 90))")
-    check(btn == '平台申请（4 单）', '「平台申请」按钮显示 4 单（T1~T4；已有票的 N1、个人的 P1 不算）', btn + ' ｜ ' + ' ｜ '.join(rows))
+    check(btn == '申请平台开票（4 单）', '「申请平台开票」按钮显示 4 单（T1~T4；已有票的 N1、个人的 P1 不算）', btn + ' ｜ ' + ' ｜ '.join(rows))
     nick = app.evaluate('chrome.storage.local.get("invWant").then(r => (r.invWant.orders || []).map(o => o.nick))')
     check(all(n.startswith('nick') for n in nick) and nick, '补图时记下的卖家旺旺名带进了 invWant', nick)
 
-    print('\n[2] 一键平台申请')
+    print('\n[2] 申请平台开票')
     n0 = len(pages)
     app.click('#inv-apply')
     res = lambda: app.evaluate('chrome.storage.local.get("applyResult").then(r => r.applyResult)')

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "订单分拣（实验版）",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "把淘宝订单分成实验室与个人，补商品图片、退款状态，整理发票。全部在本机处理；对淘宝的操作只读，下载发票要你点了才做。",
   "action": {
     "default_title": "打开订单分拣"
