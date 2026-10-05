@@ -1022,7 +1022,7 @@
       if (!g) { miss.push({ x, st }); continue; }
       const f = byName.get(baseOf(g.path)) || byName.get(g.file);
       const k = f.name;
-      if (!groups.has(k)) groups.set(k, { f, xs: [], chk: (S.fileChecks || {})[g.file] || null });
+      if (!groups.has(k)) groups.set(k, { f, xs: [], chk: packRead.get(f.name) || (S.fileChecks || {})[g.file] || null });
       groups.get(k).xs.push(x);
     }
     const rows = [...groups.values()].sort((a, b) => (a.xs[0].o.time || '').localeCompare(b.xs[0].o.time || ''));
@@ -1036,6 +1036,8 @@
       const qty = r.xs.reduce((a, x) => a + x.lines.reduce((b, l) => b + (l.qty || 1), 0), 0);
       const ext = ((/\.(pdf|ofd|xml)$/i.exec(r.f.name) || [, 'pdf'])[1]).toLowerCase();
       r.seq = nos.join('+');
+      const same = r.chk && r.chk.invNo && (S.haveIdx || []).find(h => h.invNo === r.chk.invNo);
+      r.warn = same ? '和已整理的 ' + same.file + ' 是同一张发票' : (r.chk && r.chk.titleOk === false ? '抬头不是 ' + S.invoice.title : '');
       r.name = r.seq + '_' + yymmdd(r.date) + '_' + r.amount.toFixed(2) + '-' + shortTitle(r.xs[0].lines[0].title) + '-' + qty + '件.' + ext;
     }
     return { rows, miss, total: rows.reduce((a, r) => a + r.amount, 0) };
@@ -1045,13 +1047,22 @@
     const p = packPlan(seq0);
     $('pack-note').textContent = '找到 ' + p.rows.length + ' 张发票（' + p.rows.reduce((a, r) => a + r.xs.length, 0) + ' 单），合计 ' + yuan(p.total)
       + (p.miss.length ? '；还有 ' + p.miss.length + ' 单实验室订单没有发票文件，会列在汇总表最后' : '') + '。确认后存进下载文件夹的「订单分拣-报销」。';
-    $('pack-list').value = p.rows.map(r => r.name + '    ← ' + r.f.name).join('\n') + (p.miss.length ? '\n\n还没有发票：\n' + p.miss.map(m => '  ' + (m.x.o.time || '').slice(0, 10) + ' ' + m.x.o.shop + ' ¥' + m.x.o.pay + ' ' + m.x.o.no + '（' + m.st.label + '）').join('\n') : '');
+    $('pack-list').value = p.rows.map(r => r.name + '    ← ' + r.f.name + (r.warn ? '    ⚠ ' + r.warn : '')).join('\n') + (p.miss.length ? '\n\n还没有发票：\n' + p.miss.map(m => '  ' + (m.x.o.time || '').slice(0, 10) + ' ' + m.x.o.shop + ' ¥' + m.x.o.pay + ' ' + m.x.o.no + '（' + m.st.label + '）').join('\n') : '');
     $('pack-go').disabled = !p.rows.length;
     return p;
   }
-  function openPack(files) {
+  // 选好文件夹后，把要用到的每张 PDF 都读一遍：文件名里的金额、开票日期按票面写（有的票是加「读 PDF 核对」之前下的，没读过；
+  // 2026-10-05 实测一张票面比实付多 3 元的，按实付写错了）
+  const packRead = new Map();
+  async function openPack(files) {
     packFiles = [...files].filter(f => /\.(pdf|ofd|xml)$/i.test(f.name));
     if (!$('pack-seq').value) $('pack-seq').value = nextSeq();
+    const need = packPlan(1).rows.map(r => r.f).filter(f => /\.pdf$/i.test(f.name) && !packRead.has(f.name));
+    for (let i = 0; i < need.length; i++) {
+      if (i % 10 === 0) toast('正在读发票 PDF：' + i + ' / ' + need.length);
+      try { const r = await readInvoicePdf(need[i]); if (r.isInvoice && r.amount != null) packRead.set(need[i].name, { kind: 'ok', amount: r.amount, date: r.date, invNo: r.invNo, titleOk: r.titleOk }); }
+      catch (e) { /* 读不了的按订单实付写 */ }
+    }
     renderPack();
     $('dlg-pack').showModal();
   }
@@ -1069,9 +1080,9 @@
     const batch = ($('pack-name').value.trim() || '报销').replace(/[\\/:*?"<>|]+/g, '');
     const dir = batch + '_' + td + '_' + p.total.toFixed(2);
     const cell = v => { const s = String(v == null ? '' : v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
-    const lines = [['序号', '报销文件名', '原文件名', '下单日期', '店铺', '商品', '数量', '实付', '发票金额', '开票日期', '订单号'].join(',')];
+    const lines = [['序号', '报销文件名', '原文件名', '下单日期', '店铺', '商品', '数量', '实付', '发票金额', '开票日期', '订单号', '备注'].join(',')];
     for (const r of p.rows) for (const x of r.xs)
-      lines.push([r.seq, r.name, r.f.name, (x.o.time || '').slice(0, 10), x.o.shop, x.lines.map(l => l.title).join('；'), x.lines.reduce((a, l) => a + (l.qty || 1), 0), x.o.pay, r.amount.toFixed(2), r.date, x.o.no].map(cell).join(','));
+      lines.push([r.seq, r.name, r.f.name, (x.o.time || '').slice(0, 10), x.o.shop, x.lines.map(l => l.title).join('；'), x.lines.reduce((a, l) => a + (l.qty || 1), 0), x.o.pay, r.amount.toFixed(2), r.date, x.o.no, r.warn || ''].map(cell).join(','));
     lines.push(['合计', '', '', '', '', '', '', '', p.total.toFixed(2)].map(cell).join(','));
     if (p.miss.length) {
       lines.push('', '还没有发票的实验室订单');
@@ -1455,7 +1466,7 @@
     $('inv-sync').onclick = () => invJob('sync', INV_URL);
     $('inv-auto').onclick = () => startAuto().catch(e => toast('出错：' + e.message));
     $('inv-vip').onclick = () => startVip().catch(e => toast('出错：' + e.message));
-    $('inv-pack-dir').onchange = e => { const f = [...e.target.files]; e.target.value = ''; if (f.length) openPack(f); };
+    $('inv-pack-dir').onchange = e => { const f = [...e.target.files]; e.target.value = ''; if (f.length) openPack(f).catch(err => toast('读发票出错：' + err.message)); };
     $('pack-seq').oninput = () => renderPack();
     $('pack-go').onclick = () => makePack().catch(e => { toast('整理出错：' + e.message); $('pack-go').disabled = false; });
     $('pack-cancel').onclick = () => $('dlg-pack').close();
