@@ -89,7 +89,8 @@
       if (d && Array.isArray(d.orders)) S = Object.assign(S, d);
     } catch (e) { /* 私密窗口等情况下读不到，当作空白开始 */ }
   }
-  const rules = () => S.rules || C.DEFAULT_RULES;
+  // 词表写死在代码里（设置里的词表编辑已删）；以前保存的自定义词表不再使用
+  const rules = () => C.DEFAULT_RULES;
 
   // 上次报销到哪一单：那一单及以前的订单不再判断。
   // 用户指定了日期就按日期；否则自动找「已整理的发票」（导入的发票文件夹 / 已报销订单号清单）对得上的订单里最晚的一单。
