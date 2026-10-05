@@ -1,0 +1,16 @@
+# 个人订单数据，永远不要提交
+local-data/
+*.xlsx
+*.csv
+taobao-orders-*.json
+triage-project-*.json
+
+# 测试用的虚构表格要提交
+!tools/fixtures/*.xlsx
+
+# Python 缓存（里面编译进了本机路径）
+__pycache__/
+*.pyc
+
+# 本机开发配置
+.claude/

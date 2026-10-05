@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>模拟「我的发票 · 全部发票」页（测试发票同步/下载用）</title>
+<!-- 仿照淘宝 i.taobao.com/my_itaobao/invoice 的结构（2026-09 实测的选择器），数据全部虚构。
+     tools/e2e-invoice.py 把真实网址的请求回应成这个文件，扩展的内容脚本按真实网址注入。
+     ?delay=毫秒：页面打开后过这么久才出表格（真实页面是前端异步加载的），不带参数就立刻出。
+     window.__mock：log 每次渲染的「标签:页码」；clicks 点过的页面按钮文字；downloads 触发的下载 -->
+<style>
+body{font:14px system-ui,"Microsoft YaHei";background:#fff;margin:20px;color:#333}
+.next-tabs-nav{display:flex;gap:4px;list-style:none;padding:0;margin:0 0 12px;border-bottom:1px solid #ddd}
+li.next-tabs-tab{padding:8px 16px;cursor:pointer}
+li.next-tabs-tab.active{border-bottom:2px solid #f50;color:#f50}
+table{border-collapse:collapse;width:100%}
+th,td{border:1px solid #eee;padding:6px 10px;text-align:left;vertical-align:top}
+tr[class*="group-header"] td{background:#f7f7f7;font-size:12px}
+.next-pagination{display:flex;gap:6px;align-items:center;margin-top:12px}
+.next-pagination button[disabled]{color:#bbb}
+</style>
+</head>
+<body>
+<div id="app">加载中…</div>
+<script>
+(() => {
+  const DELAY = +(new URLSearchParams(location.search).get('delay') || 0);
+  // 同一张表里每单一个 tbody。A~F、P 在分拣测试的虚构订单表里，其余（5180…）是订单表以外的旧订单
+  const r = (no, shop, item, amount, more) => Object.assign({ no, shop, item, amount }, more);
+  const TABS = [
+    { key: 'issued', name: '已开具发票', heads: ['商品信息', '发票金额', '发票抬头', '发票类型', '开票日期', '操作'], pages: [
+      [r('5180000000000000201', '某某虚构文具', '笔记本 A5', 12.00, { title: '某大学', date: '2026-09-15 10:20:30', inv: '26442000000000000201' }),
+       r('5180000000000000202', '某某虚构文具', '订书机', 18.00, { title: '某大学', date: '2026-09-12 09:00:00', inv: '26442000000000000202' }),
+       r('5190000000000000101', '某某虚构 五金工具', '304不锈钢螺丝 M3 等 2 件', 23.50, { title: '某大学', date: '2026-08-09 14:03:22', inv: '26442000000000000101' })],
+      // B：开成了别的抬头
+      [r('5190000000000000102', '某某虚构电池配件', 'XT60 公母插头 航模电池接头', 12.80, { title: '某某虚构科技有限公司', date: '2026-08-06 11:11:11', inv: '26442000000000000102' }),
+       r('5180000000000000203', '某某虚构文具', '文件夹', 9.90, { title: '某大学', date: '2026-07-31 08:00:00', inv: '26442000000000000203' })],
+      // 整页都早于订单表里最早的实验室订单（2026-08-02）：同步读完这页就该停
+      [r('5180000000000000204', '某某虚构文具', '白板笔', 6.00, { title: '某大学', date: '2026-07-20 16:00:00', inv: '26442000000000000204' }),
+       r('5180000000000000205', '某某虚构文具', '胶带', 3.00, { title: '某大学', date: '2026-07-02 16:00:00', inv: '26442000000000000205' })],
+      // 不该被翻到
+      [r('5180000000000000206', '某某虚构文具', '剪刀', 5.00, { title: '某大学', date: '2026-06-10 16:00:00', inv: '26442000000000000206' })],
+    ] },
+    { key: 'applying', name: '申请中发票', heads: ['商品信息', '发票金额', '发票抬头/类型', '开票进度', '操作'], pages: [
+      [r('5190000000000000103', '某某虚构接插件', '杜邦线 公对母 40P', 6.50, { title: '某大学', applied: '2026-09-02 10:11:12', progress: '申请中' }),
+       r('5180000000000000207', '某某虚构文具', '回形针', 2.00, { title: '某大学', applied: '2026-08-30 10:00:00', progress: '商家处理中' })],
+      [r('5180000000000000208', '某某虚构文具', '便签纸', 4.00, { title: '某大学', applied: '2026-07-01 10:00:00', progress: '申请中' })],
+    ] },
+    { key: 'unapplied', name: '未申请', heads: ['商品信息', '实付金额', '操作'], pages: [
+      [r('5190000000000000104', '某某虚构线材', '硅胶线 16AWG 1米', 19.00, { ordered: '2026-08-25 10:00:00' }),
+       r('5190000000000000110', '某某虚构日用百货', '牙膏 家庭装', 29.90, { ordered: '2026-08-08 10:00:00' })],
+      [r('5180000000000000209', '某某虚构文具', '橡皮', 1.00, { ordered: '2026-06-01 10:00:00' })],
+    ] },
+  ];
+  const TYPE = '电子普通发票';
+  const mock = window.__mock = { log: [], clicks: [], downloads: [], data: TABS };
+  let tab = 0, page = 0, loading = false;
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+  function body(t, x) {
+    // 分组头：店名、订单号；申请中的申请时间、未申请的下单时间也在这里
+    const extra = x.applied ? '<span>申请时间：' + x.applied + '</span>' : x.ordered ? '<span>下单时间：' + x.ordered + '</span>' : '';
+    const head = '<tr class="invoice-table-group-header--h7x2"><td colspan="' + t.heads.length + '">'
+      + '<span class="group-header-logo--k2m9">' + esc(x.shop) + '</span> 订单号：<span class="group-header-title-number--p3q1">' + x.no + '</span> ' + extra + '</td></tr>';
+    const item = '<td><div><span>' + esc(x.item) + '</span></div></td>', amt = '<td><span>¥' + x.amount.toFixed(2) + '</span></td>';
+    let cells;
+    if (t.key === 'issued') cells = item + amt + '<td><div>' + esc(x.title) + '</div></td><td><div>' + TYPE + '</div></td><td>' + x.date + '</td>'
+      + '<td><button type="button" data-dl="' + x.no + '">下载到本地</button> <button type="button">换开</button></td>';
+    else if (t.key === 'applying') cells = item + amt + '<td><div><span>' + esc(x.title) + '</span></div><div><span>' + TYPE + '</span></div></td>'
+      + '<td><div class="invoice-progress--z8w1">' + x.progress + '</div></td><td><button type="button">撤销申请</button></td>';
+    else cells = item + amt + '<td><button type="button">申请开票</button></td>';
+    return '<tbody>' + head + '<tr>' + cells + '</tr></tbody>';
+  }
+  function render() {
+    const t = TABS[tab], n = t.pages.length;
+    mock.log.push(t.key + ':' + (page + 1));
+    document.getElementById('app').innerHTML = '<div class="next-tabs"><ul class="next-tabs-nav">'
+      + TABS.map((x, i) => '<li class="next-tabs-tab' + (i === tab ? ' active' : '') + '" data-tab="' + i + '">' + x.name + '</li>').join('') + '</ul></div>'
+      + '<table class="next-table"><thead><tr>' + t.heads.map(h => '<th>' + h + '</th>').join('') + '</tr></thead>'
+      + t.pages[page].map(x => body(t, x)).join('') + '</table>'
+      + '<div class="next-pagination"><button type="button" class="next-prev"' + (page ? '' : ' disabled') + '>上一页</button>'
+      + t.pages.map((_, i) => '<button type="button" class="next-pagination-item' + (i === page ? ' next-current' : '') + '">' + (i + 1) + '</button>').join('')
+      + '<button type="button" class="next-next"' + (page < n - 1 ? '' : ' disabled') + '>下一页</button></div>';
+  }
+  // 换标签、翻页都要等「接口」回来才换内容
+  const later = fn => { loading = true; setTimeout(() => { fn(); loading = false; render(); }, 400); };
+
+  document.addEventListener('click', e => {
+    const b = e.target.closest('button, li.next-tabs-tab');
+    if (!b || !b.closest('#app')) return;          // 只记页面自己的按钮（扩展加的面板在 #app 外面）
+    mock.clicks.push(b.textContent.trim());
+    if (loading) return;
+    if (b.dataset.tab) {
+      const i = +b.dataset.tab;
+      if (i === tab) return;
+      b.parentNode.querySelectorAll('li').forEach(li => li.classList.toggle('active', li === b));
+      later(() => { tab = i; page = 0; });
+    } else if (b.classList.contains('next-next') && !b.disabled) later(() => page++);
+    else if (b.classList.contains('next-prev') && !b.disabled) later(() => page--);
+    else if (b.dataset.dl) {
+      const x = TABS[0].pages.flat().find(y => y.no === b.dataset.dl);
+      const name = x.title.replace(/^企业-/, '') + '_' + x.no + '.pdf';     // 真实页面下下来的就叫「抬头_订单号.pdf」（2026-09 实测）
+      mock.downloads.push({ no: x.no, name });
+      const a = document.createElement('a');
+      if (/1$/.test(x.no)) {
+        // 真实页面的另一种（2026-09 实测）：链接指向阿里云上的发票文件，download 只写了抬头；扩展代点时浏览器不认这种跨站下载
+        a.href = 'https://einvoice-file.oss-cn-beijing.aliyuncs.com/mock/OSTB_' + x.inv + '.pdf?Expires=1&Signature=mock';
+        a.download = x.title.replace(/^企业-/, '');
+      } else {
+        a.href = URL.createObjectURL(new Blob(['%PDF-1.4\n%虚构测试发票 订单 ' + x.no + ' 发票号 ' + x.inv + '\n%%EOF\n'], { type: 'application/pdf' }));
+        a.download = name;
+      }
+      document.body.appendChild(a); a.click(); a.remove();
+    }
+  });
+  if (DELAY) setTimeout(render, DELAY); else render();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>批量开票（模拟）</title>
+<!--
+  仿淘宝「我的发票 → 批量开票」页（2026-10 用户在真实页面上示范过），数据全部虚构。给 tools/e2e-apply.py 用：
+  - 日期是只读的范围选择器：点开后面板上方两个输入框可写；起点要回车（keyCode 13）才生效；点格子改的是「当前光标所在」的那一端
+  - 每页 9 单，翻页保留勾选；改筛选清空勾选；「清空选择」要再确认
+  - 「提交申请」→「批量开票申请」（藏着一套看不见的「个人或事业单位」表单；「明细」默认不选）→「下一步」→「批量开票确认」
+  - localStorage.mockTitle 可以改弹窗里自动带出的抬头（测抬头不对时插件会不会停下）
+  window.__mock：clicks（点过的按钮）、confirm（有没有人点「确认提交」）
+-->
+<style>
+body{font:14px system-ui,"Microsoft YaHei";margin:20px}
+.bar{display:flex;gap:12px;align-items:center;margin-bottom:10px}
+.trigger{display:flex;gap:6px;border:1px solid #ccc;padding:4px 8px;position:relative}
+.trigger input{border:0;width:110px}
+.panel{position:absolute;top:34px;left:0;background:#fff;border:1px solid #ccc;padding:8px;z-index:10;width:300px}
+.panel table{border-collapse:collapse}.panel td{padding:3px 5px;cursor:pointer}
+.next-calendar-cell-prev-month,.next-calendar-cell-next-month{color:#bbb}
+.next-selected{background:#f50;color:#fff}
+.group{border:1px solid #eee;margin-bottom:8px}.gh{background:#f5f5f5;padding:6px}
+.next-dialog{position:fixed;top:60px;left:50%;transform:translateX(-50%);background:#fff;border:1px solid #888;padding:14px;width:520px;z-index:20}
+.next-pagination button[disabled]{color:#aaa}
+</style>
+</head>
+<body>
+<div class="bar">
+  <div class="trigger" id="trig"><input placeholder="起始日期" readonly role="combobox"> - <input placeholder="结束日期" readonly role="combobox"></div>
+  <button id="cancel">取消并返回</button><button id="submit" class="next-btn">提交申请</button>
+</div>
+<div class="bar"><span id="sel"></span><button id="clear">清空选择</button></div>
+<div id="list"></div>
+<div class="next-pagination" id="pager"></div>
+<script>
+const TITLE = localStorage.getItem('mockTitle') || '某大学', TAX = '121000009999999996';
+// 虚构订单（批量开票页上「还能申请」的）。no 末三位和 e2e-apply.py 的订单对得上
+const ORDERS = [];
+const add = (no, d, shop, title, amt) => ORDERS.push({ no, d, shop, title, amt });
+add('5190000000000000201', '2026-08-02', '某某虚构五金工具', '304不锈钢螺丝 M3', 23.5);       // T1 要申请
+add('5190000000000000202', '2026-08-20', '某某虚构接插件', '杜邦线 公对母', 6.5);            // T2 要申请
+add('5190000000000000203', '2026-09-05', '某某虚构线材', '硅胶线 16AWG', 19);               // T3 要申请
+add('5190000000000000205', '2026-08-10', '某某虚构电池配件', 'XT60 插头', 12.8);            // N1 已经有卖家开的票：不能勾
+add('5190000000000000206', '2026-08-12', '某某虚构日用百货', '牙膏 家庭装', 29.9);           // P1 个人：不能勾
+for (let i = 0; i < 22; i++) {                                                              // 其他填充单（不在订单表里）
+  const day = new Date(Date.UTC(2026, 6, 25) + i * 3 * 864e5).toISOString().slice(0, 10);
+  add('51900000000000003' + String(i).padStart(2, '0'), day, '某某虚构其他店' + i, '填充商品 ' + i, 5 + i);
+}
+ORDERS.sort((a, b) => b.d.localeCompare(a.d));
+window.__mock = { clicks: [], confirm: false };
+let range = ['', ''], sel = new Set(), page = 0, panel = null, view = null, active = 'start', pend = ['', ''];
+const $ = id => document.getElementById(id);
+const list = () => ORDERS.filter(o => (!range[0] || o.d >= range[0]) && (!range[1] || o.d <= range[1]));
+const fmt = n => n.toFixed(2);
+function render() {
+  const L = list(), n = Math.max(1, Math.ceil(L.length / 9));
+  page = Math.min(page, n - 1);
+  $('list').innerHTML = L.length ? L.slice(page * 9, page * 9 + 9).map(o =>
+    '<div class="next-table group"><table><tbody><tr class="gh"><td><label class="next-checkbox-wrapper"><span class="next-checkbox"><input type="checkbox" class="next-checkbox-input" data-no="' + o.no + '"' + (sel.has(o.no) ? ' checked' : '') + '></span></label>'
+    + '<div class="group-header-orderId--b5tpwNPs"><span class="group-header-title-before--M3QU">订单号：</span><span class="group-header-title-number--KQYr">' + o.no + '</span></div>'
+    + ' ' + o.shop + ' 可开发票类型：电子普票 订单时间：' + o.d + ' 10:00:00</td></tr>'
+    + '<tr><td>' + o.title + '</td><td>¥ ' + fmt(o.amt) + '</td><td>订单详情</td></tr></tbody></table></div>').join('')
+    : '<div>暂无未申请订单</div>';
+  $('pager').innerHTML = '<button class="next-btn"' + (page ? '' : ' disabled') + '>上一页</button>'
+    + Array.from({ length: n }, (_, i) => '<button class="next-btn">' + (i + 1) + '</button>').join('')
+    + '<button class="next-btn' + (page >= n - 1 ? ' next-btn-disabled" disabled' : '"') + '>下一页</button>';
+  const total = [...sel].reduce((s, no) => s + ORDERS.find(o => o.no === no).amt, 0);
+  $('sel').textContent = '已选 ' + sel.size + ' 个订单，总金额：' + (sel.size ? '¥' + fmt(total) : '¥--');
+  $('submit').disabled = !sel.size;
+}
+// —— 日期范围选择器 ——
+function openPanel() {
+  if (panel) return;
+  active = 'start'; pend = range.slice();
+  view = (pend[0] || '2026-08-01').slice(0, 7);
+  panel = document.createElement('div'); panel.className = 'panel next-overlay-wrapper opened';
+  $('trig').appendChild(panel); drawPanel();
+}
+function drawPanel() {
+  const [y, m] = view.split('-').map(Number), first = new Date(Date.UTC(y, m - 1, 1)), start = new Date(first - first.getUTCDay() * 864e5);
+  let cells = '';
+  for (let w = 0; w < 6; w++) { cells += '<tr>'; for (let d = 0; d < 7; d++) {
+    const t = new Date(+start + (w * 7 + d) * 864e5).toISOString().slice(0, 10), mon = t.slice(0, 7);
+    const cls = 'next-calendar-cell' + (mon < view ? ' next-calendar-cell-prev-month' : mon > view ? ' next-calendar-cell-next-month' : '') + (pend.includes(t) ? ' next-selected' : '');
+    cells += '<td title="' + t + '" class="' + cls + '"><div>' + +t.slice(8) + '</div></td>'; } cells += '</tr>'; }
+  panel.innerHTML = '<div class="next-range-picker-panel-header"><div class="next-range-picker-panel-input">'
+    + '<span class="next-input next-range-picker-panel-input-start-date"><input value="' + pend[0] + '"></span> ~ '
+    + '<span class="next-input next-range-picker-panel-input-end-date"><input value="' + pend[1] + '"></span></div></div>'
+    + '<div><button class="next-calendar-btn-prev-month">‹</button> ' + view + ' <button class="next-calendar-btn-next-month">›</button></div>'
+    + '<table>' + cells + '</table><div class="next-date-picker-panel-footer"><button class="next-btn"' + (pend[0] && pend[1] && pend[0] <= pend[1] ? '' : ' disabled') + '>确定</button></div>';
+  const [a, b] = panel.querySelectorAll('.next-range-picker-panel-input input');
+  a.addEventListener('focus', () => { active = 'start'; }); b.addEventListener('focus', () => { active = 'end'; });
+  a.addEventListener('click', () => { active = 'start'; }); b.addEventListener('click', () => { active = 'end'; });
+  a.addEventListener('keydown', e => { if (e.keyCode === 13 && /^\d{4}-\d{2}-\d{2}$/.test(a.value)) { pend[0] = a.value; view = a.value.slice(0, 7); active = 'end'; drawPanel(); } });
+  b.addEventListener('keydown', () => {});                            // 终点框打字不生效（真实页面上就是这样）
+}
+document.addEventListener('click', e => {
+  const t = e.target;
+  if (t.closest('#trig input[readonly]')) { openPanel(); return; }
+  if (panel && panel.contains(t)) {
+    const c = t.closest('td.next-calendar-cell');
+    if (c) { if (active === 'start') { pend[0] = c.title; active = 'end'; } else pend[1] = c.title; drawPanel(); return; }
+    if (t.closest('.next-calendar-btn-next-month')) { const [y, m] = view.split('-').map(Number); view = new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 7); drawPanel(); return; }
+    if (t.closest('.next-calendar-btn-prev-month')) { const [y, m] = view.split('-').map(Number); view = new Date(Date.UTC(y, m - 2, 1)).toISOString().slice(0, 7); drawPanel(); return; }
+    const ok = t.closest('.next-date-picker-panel-footer button');
+    if (ok && !ok.disabled) {
+      range = pend.slice(); const [x, y] = $('trig').querySelectorAll('input[readonly]'); x.value = range[0]; y.value = range[1];
+      panel.remove(); panel = null; sel.clear(); page = 0;            // 改筛选会清空已勾的
+      $('list').innerHTML = ''; setTimeout(render, 700);
+    }
+    return;
+  }
+  const b = t.closest('button'); if (!b) return;
+  window.__mock.clicks.push(b.innerText.trim());
+  const txt = b.innerText.trim();
+  if (b.closest('#pager')) {
+    const n = Math.max(1, Math.ceil(list().length / 9));
+    const to = txt === '上一页' ? page - 1 : txt === '下一页' ? page + 1 : +txt - 1;
+    if (to >= 0 && to < n && to !== page) { page = to; $('list').innerHTML = ''; setTimeout(render, 600); }
+  } else if (b.id === 'clear') confirmClear();
+  else if (b.id === 'submit' && sel.size) openDialog();
+});
+document.addEventListener('change', e => {
+  const c = e.target.closest('input.next-checkbox-input'); if (!c) return;
+  if (c.checked) sel.add(c.dataset.no); else sel.delete(c.dataset.no);
+  render();
+});
+function confirmClear() {
+  const d = document.createElement('div'); d.className = 'next-dialog';
+  d.innerHTML = '<div class="next-dialog-header">清空已选订单</div><div>是否清空您已选择的所有订单</div><button>清空</button><button>取消</button>';
+  document.body.appendChild(d);
+  d.addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; if (b.innerText === '清空') sel.clear(); d.remove(); render(); });
+}
+// —— 两层弹窗 ——
+function openDialog() {
+  const d = document.createElement('div'); d.className = 'next-dialog next-closeable next-dialog-v2';
+  const rows = [...sel].map(no => ORDERS.find(o => o.no === no)).map(o => '<tr><td>订单号： ' + o.no + ' ' + o.shop + ' ' + o.title + '</td><td>¥ ' + fmt(o.amt) + '</td><td>普通发票-电子</td></tr>').join('');
+  const form = vis => '<div style="' + (vis ? '' : 'display:none') + '">'
+    + '<div class="next-form-item"><label>发票类型</label><input id="invoiceKind" value="" readonly> 普通发票-电子</div>'
+    + '<div class="next-form-item"><label>抬头类型</label>'
+    + '<label class="next-radio-wrapper"><input type="radio" class="next-radio-input" name="k' + vis + '"' + (vis ? '' : ' checked') + '>个人或事业单位</label>'
+    + '<label class="next-radio-wrapper"><input type="radio" class="next-radio-input" name="k' + vis + '"' + (vis ? ' checked' : '') + '>企业</label></div>'
+    + '<div class="next-form-item"><label>发票抬头</label><input id="payerName" value="' + (vis ? TITLE : '') + '"></div>'
+    + '<div class="next-form-item"><label>税号</label><input id="payerRegisterNo" value="' + (vis ? TAX : '') + '"></div>'
+    + '<div class="next-form-item"><label>发票内容</label><label class="next-radio-wrapper"><input type="radio" class="next-radio-input" id="明细"' + (vis ? '' : ' checked') + '>明细</label></div></div>';
+  d.innerHTML = '<div class="next-dialog-header">批量开票申请</div>' + form(false) + form(true)
+    + '<table><tr><th>宝贝</th><th>开票金额</th><th>发票类型</th></tr>' + rows + '</table>'
+    + '<div class="next-dialog-footer"><button class="next-btn next-btn-primary">下一步</button></div>';
+  document.body.appendChild(d);
+  d.addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    window.__mock.clicks.push(b.innerText.trim());
+    if (b.innerText === '下一步') {
+      const vis = [...d.querySelectorAll('.next-radio-input')].filter(i => i.offsetWidth || i.getClientRects().length);
+      window.__mock.atNext = { enterprise: vis[1].checked, detail: vis[2].checked, title: d.querySelectorAll('#payerName')[1].value };
+      const sum = [...sel].reduce((s, no) => s + ORDERS.find(o => o.no === no).amt, 0);
+      d.innerHTML = '<div class="next-dialog-header">批量开票确认</div><div>普通发票-电子 共' + sel.size + '条申请 发票抬头 ' + TITLE + ' 发票内容 明细 开票金额 ¥' + fmt(sum) + ' 税号 ' + TAX + '</div>'
+        + '<div class="next-dialog-footer"><button class="next-btn">上一步</button><button class="next-btn next-btn-primary">确认提交</button></div>';
+    } else if (b.innerText === '确认提交') {
+      window.__mock.confirm = true;
+      setTimeout(() => { location.href = 'https://i.taobao.com/my_itaobao/invoice?active=application'; }, 300);
+    } else if (b.innerText === '上一步') { d.remove(); openDialog(); }
+  });
+}
+render();
+</script>
+</body>
+</html>

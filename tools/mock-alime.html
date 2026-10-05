@@ -1,0 +1,60 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>官方客服（模拟）</title>
+<!-- 模拟淘宝官方客服 ai.alimebot.taobao.com（2026-10-05 实测结构）：消息 .Message.left/.right/.center > .Message-content；
+     输入框 textarea.Composer-input，发送 button.Composer-sendBtn。行为：发「人工」第 1 次机器人敷衍，第 2 次给「立即联系」卡片，
+     点了 1.5 秒后转人工（系统消息「官方客服000000 人工客服」+ 客服打招呼）。页面上先有一段以前的聊天（里面也有「人工客服」），不能当成这次转人工。全部虚构 -->
+<style>.Message{margin:4px 8px}.left{text-align:left}.right{text-align:right}.center{text-align:center;color:#888}</style>
+<body>
+<div id="list"></div>
+<div class="Composer"><textarea class="Input Input--outline Composer-input" placeholder="请输入想咨询的问题"></textarea>
+<button class="Btn Btn--primary Composer-sendBtn">发送</button></div>
+<script>
+(function () {
+  const mock = window.__mock = { sent: [], early: [], clicked: 0, human: false };
+  const list = document.getElementById('list'), ta = document.querySelector('textarea');
+  const add = (side, html) => { const d = document.createElement('div'); d.className = 'Message ' + side;
+    d.innerHTML = '<div class="Message-main"><div class="Message-inner"><div class="Message-content">' + html + '</div></div></div>'; list.appendChild(d); return d; };
+  // 以前的聊天记录
+  add('center', '官方客服100001 人工客服'); add('left', '亲，我是您的88vip专属客服，很高兴为您服务～'); add('right', '好的谢谢');
+  let n = 0;
+  function send() {
+    const t = ta.value.trim(); if (!t) return;
+    mock.sent.push(t); add('right', t); ta.value = '';
+    if (!mock.human && /督促/.test(t)) mock.early.push(t);
+    if (mock.human) {
+      // 人工客服：收到第一句督促后问要不要投诉；回 OK 后发「提交投诉」卡片（按钮也只认完整点击）
+      if (/督促/.test(t) && !mock.asked) { mock.asked = true; const no = (t.match(/\d{19}/) || [''])[0];
+        setTimeout(() => add('left', '亲，核实您这边' + no + '订单申请开票查看到商家已延迟开票，为了更好的帮您，小二马上帮您发起投诉商家拒绝开票处理，投诉发起后可以先交给我们，我们平台会尽全力协助您处理开票问题的。'), 1500); }
+      if (t === 'OK' && mock.asked && !mock.card) {
+        mock.card = true;
+        add('left', '您别着急，针对申请开票未到账延迟开票的问题，为了更好的帮您，小二马上帮您发起投诉商家拒绝开票处理呢。');
+        setTimeout(() => {
+          const c = add('left', '请核实并提交投诉信息<br><button class="Btn Btn--primary">提交投诉</button>');
+          const b = c.querySelector('button'); let d = false;
+          b.addEventListener('mousedown', () => { d = true; });
+          b.addEventListener('click', () => { if (!d) return; mock.complained = (mock.complained || 0) + 1; c.querySelector('.Message-content').innerHTML = '已提交 查看'; add('left', '投诉卖家：卖家拒绝开发票 投诉已发起'); });
+        }, 1500);
+      }
+      return;
+    }
+    if (t === '人工') {
+      n++;
+      setTimeout(() => {
+        if (n === 1) add('left', '亲，小蜜非常理解您的心情，如果可以的话，小蜜肯定会尽力帮您的');
+        else {
+          const c = add('left', '尊贵的88VIP会员，如有需要可点击下方按钮联系人工客服哦～<br>88VIP专属客服 24小时在线服务 <button class="Btn Btn--primary Btn--sm">立即联系</button>');
+          c.querySelector('button').onclick = () => { mock.clicked++; setTimeout(() => { mock.human = true; add('center', '官方客服000000 人工客服'); add('left', '您好，我是官方客服，很高兴为您服务～'); }, 1500); };
+        }
+      }, 600);
+    }
+  }
+  // 和真实页面一样：只调 click()（没有按下、抬起）不发送
+  let downed = false;
+  const sb = document.querySelector('.Composer-sendBtn');
+  sb.addEventListener('mousedown', () => { downed = true; });
+  sb.addEventListener('click', () => { if (downed) send(); downed = false; });
+  ta.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); send(); } });
+})();
+</script>
+</body>

@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>模拟旺旺聊天界面（chat-core）</title>
+<!-- 仿照旺旺网页版 iframe 里的聊天界面（2026-09 实测的选择器），会话、消息、订单号全部虚构。
+     打开会话只显示最近 4 条；消息列表滚到顶（收到 scroll 事件）0.5 秒后再往前补 4 条。
+     window.__mock：opened 每次点开的会话；sent 对输入框的任何输入、对「发送」的任何点击（测试断言它为空）；
+                    downloads 点过的文件下载 -->
+<style>
+body{margin:0;font:13px system-ui,"Microsoft YaHei";display:flex;height:100vh;color:#333}
+.ww_conversation_list{width:220px;border-right:1px solid #eee;overflow:auto}
+.conversation-item{padding:10px;border-bottom:1px solid #f3f3f3;cursor:pointer}
+.conversation-item.active{background:#eef6ff}
+.ww_conversation{flex:1;display:flex;flex-direction:column;min-width:0}
+.ww_header{padding:10px;border-bottom:1px solid #eee;height:20px}
+.ww_message{flex:1;min-height:0}
+.rc-scrollbars-view{height:100%;overflow:auto}
+.message-item{padding:6px 12px;max-width:70%}
+.message-item.self{margin-left:auto;text-align:right}
+.message-item .time{color:#999;font-size:11px}
+.content pre.edit{white-space:pre-wrap;margin:2px 0;font:inherit}
+.file-msg{border:1px solid #ddd;border-radius:6px;padding:8px;display:inline-block}
+.file-name{max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.item-card{display:flex;gap:8px;border:1px solid #eee;padding:6px}
+.ww_input{border-top:1px solid #eee;padding:8px;display:flex;gap:8px}
+.ww_input .editBox{flex:1;position:relative}
+.ww_input pre.edit{min-height:40px;margin:0;border:1px solid #ddd;font:inherit;padding:4px;white-space:pre-wrap}
+.ww_input .placeholder{position:absolute;left:6px;top:5px;color:#aaa;pointer-events:none}
+.ww_tab{width:200px;border-left:1px solid #eee;padding:10px}
+</style>
+</head>
+<body>
+<div id="app">加载中…</div>
+<script>
+(() => {
+  // 二维码样子的小图（内联，不发网络请求）
+  const QR = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 7 7" shape-rendering="crispEdges">'
+    + '<rect width="7" height="7" fill="#fff"/><path d="M0 0h3v3H0zM4 0h3v3H4zM0 4h3v3H0zM4 4h1v1H4zM6 6h1v1H6zM5 5h1v1H5z" fill="#000"/></svg>');
+  const me = (time, text) => ({ self: true, time, text });
+  const he = (time, text) => ({ self: false, time, text });
+  // list：会话列表里显示的名字（长店名会被截断成「…」）；name：点开后顶部显示的全名；orders：右侧「我的订单」
+  const CONVS = [
+    { name: '某某虚构零食铺', orders: ['5180000000000000301'], msgs: [he('2026-09-20 12:00:00', '新品辣条上架啦')] },
+    { name: '某某虚构 五金工具', orders: ['5190000000000000101'], msgs: [he('2026-08-03 10:00:00', '亲，已发货'), me('2026-08-03 10:05:00', '好的')] },
+    { name: '某某虚构日用百货', orders: ['5190000000000000110'], msgs: [he('2026-08-09 10:00:00', '感谢购买，发票请联系客服')] },
+    // E：历史很长。卖家发的发票文件和我们要发票的消息都不在最近 4 条里，要往上滚两次才看得到
+    { list: '某某虚构电子元器件…', name: '某某虚构电子元器件专营店', orders: ['5190000000000000105'], msgs: [
+      me('2026-07-20 10:00:00', '你好，这个模块有现货吗'),
+      he('2026-07-20 10:01:10', '有的亲'),
+      Object.assign(he('2026-08-05 11:20:00'), { file: { name: 'CH340驱动安装说明.pdf', size: '1.2 MB' } }),   // 要发票之前发的资料，不算发票
+      me('2026-08-06 09:30:00', '你好，订单 5190000000000000105 需要开电子普通发票：抬头 某大学，税号 121000009999999996，谢谢'),
+      he('2026-08-06 09:31:00', '好的亲，稍等'),
+      Object.assign(he('2026-08-07 15:30:12'), { file: { name: 'dzfp_26442000000000000105_某大学_20260807153012.pdf', size: '86 KB' } }),
+      he('2026-08-07 15:30:40', '发票开好了，请查收'),
+      me('2026-08-07 16:00:00', '收到，谢谢'),
+      he('2026-08-12 09:00:00', '亲，收到货满意的话给个五星好评哦'),
+      he('2026-08-20 18:00:00', '店铺活动：满 99 减 10'),
+      he('2026-09-05 10:00:00', '新品上架'),
+      me('2026-09-06 10:00:00', '好的')] },
+    { name: '某某虚构传感器店', orders: ['5190000000000000106'], msgs: [
+      me('2026-08-15 20:00:00', '你好，订单 5190000000000000106 麻烦开个发票，抬头某大学 税号121000009999999996'),
+      he('2026-08-15 20:05:00', '亲，我们是扫码自助开票的'),
+      Object.assign(he('2026-08-15 20:05:30'), { img: QR }),
+      he('2026-08-15 20:06:00', '扫上面的码填写抬头就行'),
+      me('2026-08-15 20:10:00', '好的')] },
+    { name: '某某虚构模型配件', orders: ['5190000000000000111'], msgs: [he('2026-07-29 10:00:00', '订单已关闭，退款已原路返回')] },
+    // G：卖家要邮箱；之后推了个商品卡片（卡片里的商品图不能当成二维码）
+    // 很久以前聊的：左侧最近会话列表里没有，只能用地址 ?uid=cntaobao<旺旺名> 打开（真实页面上不少店是这样）
+    { hidden: true, name: '某某虚构碳纤维加工', orders: ['5190000000000000107'], msgs: [
+      me('2026-08-19 09:00:00', '你好，碳纤维板的订单能开发票吗？抬头某大学'),
+      he('2026-08-19 09:10:00', '可以的，麻烦留个邮箱，开好发您邮箱'),
+      Object.assign(he('2026-08-19 09:10:30'), { card: '碳纤维管 3K 10mm' }),
+      me('2026-08-19 09:15:00', '邮箱是 someone@example.com')] },
+    // 从没聊过的店：只能按旺旺名打开（发消息那一步用）
+    { hidden: true, name: '某某虚构轴承', orders: ['5190000000000000108'], msgs: [] },
+    // 个人卖家：会话名是卖家自己的旺旺名，和店名「某某虚构焊接耗材」对不上（真实页面上很常见）
+    { name: '某某虚构焊工小王', orders: ['5190000000000000109'], msgs: [
+      me('2026-09-11 08:00:00', '你好，订单需要开发票，抬头某大学，税号121000009999999996')] },
+  ];
+  // 打开过的会话跨页面跳转记下来（插件按旺旺名逐个打开时整页会重新加载）
+  const mock = window.__mock = { opened: JSON.parse(sessionStorage.getItem('mockOpened') || '[]'), sent: [], downloads: [], data: CONVS };
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  let cur = null, shown = 0, loading = false;
+
+  function msgHtml(m) {
+    let c;
+    if (m.file) c = '<div class="file-msg"><div class="file-name" title="' + esc(m.file.name) + '">' + esc(m.file.name) + '</div>'
+      + '<div class="file-size">' + m.file.size + '</div><a class="download-file" href="javascript:;">下载文件</a></div>';
+    else if (m.img) c = '<img src="' + m.img + '" width="160" height="160" alt="">';
+    else if (m.card) c = '<div class="item-card"><img src="' + QR + '" width="100" height="100" alt=""><div class="item-title">' + esc(m.card) + '</div></div>';
+    else c = '<pre class="edit">' + esc(m.text) + '</pre>';
+    return '<div class="message-item-line"><div class="message-item' + (m.self ? ' self' : '') + '">'
+      + '<div class="nick">' + (m.self ? '我' : esc(cur.name)) + '</div><div class="time">' + m.time + '</div>'
+      + '<div class="content">' + c + '</div></div></div>';
+  }
+  function renderMsgs(keep) {
+    const v = document.querySelector('.rc-scrollbars-view');
+    const h0 = v.scrollHeight, t0 = v.scrollTop;
+    v.innerHTML = cur.msgs.slice(-shown).map(msgHtml).join('');
+    // 和真实旺旺一样：往上翻远了，最下面几条消息的文字会被卸掉（只留空壳），扫描要边翻边记
+    if (keep) [...v.querySelectorAll('.message-item')].slice(-4).forEach(m => { const pre = m.querySelector('.content pre.edit'); if (pre) pre.textContent = ''; });
+    v.scrollTop = keep ? v.scrollHeight - h0 + t0 : v.scrollHeight;     // 往前补的时候保持当前看到的位置
+  }
+  function open(c) {
+    mock.opened.push(c.name); sessionStorage.setItem('mockOpened', JSON.stringify(mock.opened));
+    cur = c; shown = Math.min(4, c.msgs.length); loading = false;
+    document.querySelectorAll('.conversation-item').forEach(el => el.classList.toggle('active', el.dataset.i == CONVS.indexOf(c)));
+    document.querySelector('.ww_header .name').textContent = c.name;
+    document.querySelector('.ww_tab').innerHTML = '<div>我的订单</div>' + c.orders.map(no => '<div class="order-card">订单号 <span class="order-id">' + no + '</span></div>').join('');
+    renderMsgs(false);
+  }
+
+  function boot() {
+    document.getElementById('app').outerHTML = '<div class="ww_conversation_list">'
+      + CONVS.map((c, i) => c.hidden ? '' : '<div class="conversation-item" data-i="' + i + '"><div class="name">' + esc(c.list || c.name) + '</div></div>').join('') + '</div>'
+      + '<div class="ww_conversation"><div class="ww_header"><span class="name"></span></div>'
+      + '<div class="ww_message"><div class="rc-scrollbars-view"></div></div>'
+      // 输入区和真实页面一样（2026-10-03 实测）：.editBox 里一个提示文字 + 可编辑的 pre.edit；发送按钮 button.send-btn
+      + '<div class="ww_input"><div class="editBox"><div class="placeholder">请输入消息，按Enter键 或 点击发送按钮发送</div><pre class="edit" contenteditable="true"></pre></div>'
+      + '<div class="btn-container"><button type="button" class="next-btn next-small next-btn-primary send-btn"><span class="send-text">发送</span></button></div></div></div>'
+      + '<div class="ww_tab"></div>';
+    document.querySelector('.ww_conversation_list').addEventListener('click', e => {
+      const it = e.target.closest('.conversation-item');
+      if (it) open(CONVS[+it.dataset.i]);
+    });
+    const v = document.querySelector('.rc-scrollbars-view');
+    v.addEventListener('scroll', () => {
+      if (!cur || loading || v.scrollTop > 5 || shown >= cur.msgs.length) return;
+      loading = true;
+      const c = cur;
+      setTimeout(() => { if (cur !== c) return; loading = false; shown = Math.min(shown + 4, c.msgs.length); renderMsgs(true); }, 500);
+    });
+    v.addEventListener('click', e => {
+      const a = e.target.closest('a.download-file');
+      if (!a) return;
+      e.preventDefault();
+      const name = a.closest('.file-msg').querySelector('.file-name').title;
+      mock.downloads.push(name);
+      const d = document.createElement('a');
+      d.href = URL.createObjectURL(new Blob(['%PDF-1.4\n%虚构测试文件 ' + name + ' 会话里的订单 ' + cur.orders.join(',') + '\n%%EOF\n'], { type: 'application/pdf' }));
+      d.download = name;
+      document.body.appendChild(d); d.click(); d.remove();
+    });
+    // 输入框、发送按钮：任何动静都记下来（扩展绝不能碰）
+    const box = document.querySelector('.ww_input pre.edit');
+    for (const ev of ['focus', 'keydown', 'beforeinput', 'input', 'paste']) box.addEventListener(ev, () => mock.sent.push(ev));
+    new MutationObserver(() => mock.sent.push('改了输入框内容：' + box.textContent)).observe(box, { childList: true, characterData: true, subtree: true });
+    // 点发送：输入框里的字变成一条自己的消息（真实页面一样）
+    const send = () => {
+      mock.sent.push('点了发送');
+      const t = box.innerText.trim();
+      if (!t || !cur) return;
+      cur.msgs.push(me('2026-10-03 15:07:00', t)); shown++; renderMsgs(false);
+      mock.posted = (mock.posted || []).concat({ to: cur.name, text: t });
+      sessionStorage.setItem('mockPosted', JSON.stringify(mock.posted));
+      box.textContent = '';
+    };
+    document.querySelector('.ww_input .send-btn').addEventListener('click', send);
+    box.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
+    // 地址里带 uid=cntaobao<旺旺名>：直接打开那个会话，并把它加到左侧列表最上面（真实旺旺就是这样）
+    const m = /[?&]uid=([^&#]+)/.exec(location.search);
+    if (m) {
+      const nick = decodeURIComponent(m[1]).replace(/^cntaobao/, '');
+      const c = CONVS.find(x => x.name === nick);
+      if (c) {
+        mock.byUrl = (mock.byUrl || []).concat(nick);
+        if (c.hidden) {
+          c.hidden = false;
+          const el = document.createElement('div'); el.className = 'conversation-item'; el.dataset.i = CONVS.indexOf(c);
+          el.innerHTML = '<div class="name">' + esc(c.name) + '</div>';
+          document.querySelector('.ww_conversation_list').prepend(el);
+        }
+        setTimeout(() => open(c), 400);
+      }
+    }
+  }
+  setTimeout(boot, 800);          // 聊天界面是异步渲染的
+})();
+</script>
+</body>
+</html>

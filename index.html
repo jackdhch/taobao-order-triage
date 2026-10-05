@@ -1,0 +1,460 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>订单分拣</title>
+<!-- 不加载任何外部字体、脚本或统计：除商品图片外，本页不发出网络请求 -->
+<style>
+:root{
+  --ground:#F3F4F1; --surface:#FFFFFF; --sunk:#ECEEEA; --line:#DCE1DC; --line-soft:#E8EBE7;
+  --text:#1D2629; --muted:#5F6C72; --faint:#949EA2;
+  --lab:#1C6E8C; --lab-wash:#E2EEF3; --lab-ink:#17596F;
+  --per:#A5436A; --per-wash:#F5E5EB; --per-ink:#8A3558;
+  --uns:#A2680F; --uns-wash:#F7EDDA; --uns-ink:#86560C;
+  --ref:#6E7479; --ref-wash:#E7E8E6;
+  --focus:#1C6E8C;
+  --shadow:0 1px 2px rgba(29,38,41,.05),0 4px 16px -8px rgba(29,38,41,.14);
+  --mono:ui-monospace,"Cascadia Mono","SF Mono",Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --ground:#121516; --surface:#1A1E20; --sunk:#202527; --line:#30373A; --line-soft:#272D30;
+    --text:#E3E7E8; --muted:#9AA6AB; --faint:#6D787D;
+    --lab:#5FB2D0; --lab-wash:#16303A; --lab-ink:#8ACBE2;
+    --per:#E08AAB; --per-wash:#3A1E2A; --per-ink:#EFA9C3;
+    --uns:#E0A649; --uns-wash:#382A12; --uns-ink:#EDC079;
+    --ref:#9AA0A4; --ref-wash:#2A2E30;
+    --focus:#5FB2D0;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 4px 16px -8px rgba(0,0,0,.6);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#121516; --surface:#1A1E20; --sunk:#202527; --line:#30373A; --line-soft:#272D30;
+  --text:#E3E7E8; --muted:#9AA6AB; --faint:#6D787D;
+  --lab:#5FB2D0; --lab-wash:#16303A; --lab-ink:#8ACBE2;
+  --per:#E08AAB; --per-wash:#3A1E2A; --per-ink:#EFA9C3;
+  --uns:#E0A649; --uns-wash:#382A12; --uns-ink:#EDC079;
+  --ref:#9AA0A4; --ref-wash:#2A2E30;
+  --focus:#5FB2D0;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 4px 16px -8px rgba(0,0,0,.6);
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{margin:0}
+body{background:var(--ground); color:var(--text); font:14px/1.6 system-ui,-apple-system,"PingFang SC","Microsoft YaHei","Noto Sans SC",sans-serif}
+.num{font-family:var(--mono); font-variant-numeric:tabular-nums}
+button{font:inherit; color:inherit}
+.wrap{max-width:1180px; margin:0 auto; padding-inline:20px}
+
+/* 顶栏 */
+.top{display:flex; align-items:center; gap:14px; flex-wrap:wrap; padding-block:18px 14px}
+.brand{display:flex; align-items:baseline; gap:10px; margin-right:auto}
+.brand h1{font-size:19px; margin:0; font-weight:650; letter-spacing:.02em}
+.brand span{font-size:12.5px; color:var(--muted)}
+.tag-exp{font-size:11px; color:var(--uns-ink); background:var(--uns-wash); padding:1px 7px; border-radius:10px}
+.btn{appearance:none; border:1px solid var(--line); background:var(--surface); padding:6px 12px; border-radius:7px; cursor:pointer; font-size:13px; white-space:nowrap}
+.btn:hover{background:var(--sunk)}
+.btn.primary{background:var(--lab); border-color:var(--lab); color:#fff}
+.btn.primary:hover{filter:brightness(1.06)}
+.btn:focus-visible,.seg button:focus-visible,.cls button:focus-visible{outline:2px solid var(--focus); outline-offset:1px}
+.menu{position:relative}
+.menu-pop{position:absolute; right:0; top:calc(100% + 6px); background:var(--surface); border:1px solid var(--line); border-radius:9px;
+          box-shadow:var(--shadow); padding:6px; min-width:210px; z-index:30; display:flex; flex-direction:column}
+.menu-pop button{appearance:none; border:0; background:none; text-align:left; padding:7px 10px; border-radius:6px; cursor:pointer; font-size:13px}
+.menu-pop button:hover{background:var(--sunk)}
+.menu-pop small{display:block; color:var(--faint); font-size:11.5px}
+
+/* 汇总 */
+.summary{background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:14px 16px 12px; box-shadow:var(--shadow)}
+/* 一条线的步骤 */
+.flow{list-style:none; margin:0 0 12px; padding:0; display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:6px}
+.flow li{position:relative; display:flex; flex-direction:column; gap:2px; padding:8px 10px 9px; border-radius:8px; cursor:pointer;
+         background:var(--sunk); border:1px solid transparent; min-width:0}
+.flow li:hover{border-color:var(--line)}
+.flow li:focus-visible{outline:2px solid var(--focus); outline-offset:1px}
+.flow-n{width:20px; height:20px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center; font-size:11.5px; font-weight:600;
+        background:var(--surface); color:var(--muted); border:1px solid var(--line)}
+.flow-t{font-weight:600; font-size:13px}
+.flow-s{font-size:11.5px; color:var(--muted); line-height:1.4; overflow-wrap:anywhere}
+.flow li.is-done .flow-n{background:var(--lab-wash); color:var(--lab-ink); border-color:transparent}
+.flow li.is-done .flow-t{color:var(--muted)}
+.flow li.is-cur{background:var(--uns-wash)}
+.flow li.is-cur .flow-n{background:var(--uns); color:#fff; border-color:transparent}
+.flow li.is-sel{border-color:var(--text); background:var(--surface)}
+.flow-detail{display:flex; gap:16px; align-items:center; justify-content:space-between; flex-wrap:wrap; padding:4px 2px 0}
+.flow-detail p{margin:3px 0 0; color:var(--muted); font-size:13px; max-width:78ch}
+.flow-hint{color:var(--uns-ink); font-size:12.5px; margin-left:8px}
+.flow-acts{display:flex; gap:10px; align-items:center; flex-wrap:wrap}
+.flow-date{font-size:12.5px; color:var(--muted); display:flex; align-items:center; gap:6px}
+.flow-date input{font:inherit; font-size:12.5px; background:var(--surface); border:1px solid var(--line); border-radius:6px; padding:3px 6px; color:var(--text)}
+/* 每一页顶上的说明条 */
+.page-bar{display:flex; gap:14px; align-items:center; justify-content:space-between; flex-wrap:wrap; background:var(--surface); border:1px solid var(--line);
+          border-left:3px solid var(--uns); border-radius:8px; padding:10px 14px; font-size:13px}
+.page-bar.done{border-left-color:var(--lab)}
+.page-bar kbd{font-family:var(--mono); font-size:11px; border:1px solid var(--line); border-bottom-width:2px; border-radius:4px; padding:0 5px; background:var(--sunk)}
+/* 发票三类 */
+.inv-sect{margin-bottom:18px}
+.inv-sect h3{margin:6px 0 2px; font-size:15px}
+.inv-sect h3 .c{font-size:12px; font-weight:400; color:var(--muted)}
+.inv-sect > .detail{margin:0 0 8px}
+details.more{position:relative}
+details.more summary{cursor:pointer; color:var(--muted); font-size:12.5px; list-style:none; padding:6px 4px}
+details.more summary::-webkit-details-marker{display:none}
+details.more summary::after{content:" ▾"}
+.more-pop{position:absolute; right:0; top:100%; z-index:25; background:var(--surface); border:1px solid var(--line); border-radius:9px; box-shadow:var(--shadow);
+          padding:8px; display:flex; flex-direction:column; gap:6px; min-width:240px}
+.sum-bar{display:flex; height:8px; border-radius:5px; overflow:hidden; background:var(--sunk); margin-bottom:12px}
+.sum-bar i{display:block; height:100%}
+.sum-grid{display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px 18px}
+.sum-cell{display:flex; flex-direction:column; gap:1px; cursor:pointer; border-radius:7px; padding:4px 6px; margin:-4px -6px}
+.sum-cell:hover{background:var(--sunk)}
+.sum-cell .k{font-size:12px; color:var(--muted); display:flex; align-items:center; gap:6px}
+.sum-cell .k::before{content:""; width:9px; height:9px; border-radius:3px; background:var(--dot)}
+.sum-cell .v{font-size:19px; font-weight:600}
+.sum-cell .s{font-size:12px; color:var(--muted)}
+.sum-foot{margin-top:10px; padding-top:9px; border-top:1px solid var(--line-soft); font-size:12.5px; color:var(--muted); display:flex; gap:6px 18px; flex-wrap:wrap}
+
+/* 工具条 */
+.bar{position:sticky; top:0; z-index:20; background:var(--ground); padding-block:12px 10px; display:flex; gap:10px; flex-wrap:wrap; align-items:center}
+.seg{display:inline-flex; background:var(--sunk); border:1px solid var(--line); border-radius:8px; padding:2px; max-width:100%; overflow-x:auto}
+.seg button{appearance:none; border:0; background:none; padding:4px 11px; border-radius:6px; cursor:pointer; font-size:13px; color:var(--muted); display:flex; gap:5px; align-items:baseline; white-space:nowrap; flex:none}
+.seg button[aria-pressed="true"]{background:var(--surface); color:var(--text); box-shadow:0 1px 2px rgba(0,0,0,.08); font-weight:600}
+.seg button .c{font-size:11px; color:var(--faint); font-family:var(--mono)}
+.search{flex:1 1 200px; min-width:0; appearance:none; font:inherit; font-size:13px; background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:6px 11px; color:var(--text)}
+.search:focus-visible,.date:focus-visible,select:focus-visible{outline:2px solid var(--focus); outline-offset:1px}
+.date,select{appearance:none; font:inherit; font-size:12.5px; background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:5px 8px; color:var(--text)}
+.chk{font-size:12.5px; color:var(--muted); display:flex; align-items:center; gap:5px; cursor:pointer; user-select:none}
+
+/* 订单卡片 */
+.list{display:flex; flex-direction:column; gap:12px; padding-bottom:24px}
+.order{background:var(--surface); border:1px solid var(--line); border-radius:10px; overflow:hidden}
+.ohead{display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 16px; background:var(--sunk); padding:9px 14px; font-size:13px}
+.ohead .d{font-weight:600}
+.ohead .no{color:var(--muted); font-size:12.5px}
+.ohead .shop{font-weight:500}
+.ohead .src{font-size:11px; color:var(--faint); border:1px solid var(--line); border-radius:4px; padding:0 5px}
+.ohead .st{margin-left:auto; font-size:12.5px; font-weight:500}
+.st-ok{color:var(--lab-ink)} .st-closed{color:var(--per-ink)} .st-other{color:var(--uns-ink)}
+.ofoot{display:flex; justify-content:flex-end; gap:16px; padding:6px 14px 9px; font-size:12.5px; color:var(--muted); border-top:1px solid var(--line-soft)}
+.ofoot b{color:var(--text); font-weight:600}
+
+.line{display:grid; grid-template-columns:76px minmax(0,1fr) 96px 92px 196px; gap:14px; padding:12px 14px; align-items:start;
+      border-top:1px solid var(--line-soft); position:relative}
+.line:first-of-type{border-top:0}
+.line.focus{background:color-mix(in srgb,var(--focus) 6%,transparent)}
+.line.focus::before{content:""; position:absolute; left:0; top:8px; bottom:8px; width:3px; border-radius:0 3px 3px 0; background:var(--focus)}
+.line.is-ref .title,.line.is-ref .price,.line.is-ref .share{text-decoration:line-through; text-decoration-color:var(--faint); color:var(--muted)}
+.thumb{width:76px; height:76px; border-radius:7px; background:var(--sunk); border:1px solid var(--line-soft); object-fit:cover; display:block}
+.thumb.ph{display:flex; align-items:center; justify-content:center; color:var(--faint); font-size:11px; text-align:center; line-height:1.3}
+.thumb.ph.err, .inv-table .inv-thumb.ph.err{color:#d0021b; font-weight:800; font-size:12px; border:2px solid #d0021b; background:#fff0f0; text-align:center; line-height:1.3}
+.title{font-size:13.5px; line-height:1.5; word-break:break-word}
+.title a{color:inherit; text-decoration:none}
+.title a:hover{text-decoration:underline}
+.sku{font-size:12.5px; color:var(--muted); margin-top:3px; word-break:break-word}
+.why{font-size:11.5px; color:var(--faint); margin-top:5px; display:flex; flex-wrap:wrap; gap:4px; align-items:center}
+.why .via{border:1px solid var(--line); border-radius:4px; padding:0 5px}
+.price{text-align:right; font-size:13px}
+.price .q{display:block; color:var(--faint); font-size:12px}
+.share{text-align:right; font-size:13px; font-weight:600}
+.share .l{display:block; font-weight:400; color:var(--faint); font-size:11.5px; font-family:system-ui,sans-serif}
+
+.cls{display:flex; flex-direction:column; gap:6px; align-items:stretch}
+.cls .pick{display:grid; grid-template-columns:1fr 1fr; background:var(--sunk); border:1px solid var(--line); border-radius:8px; padding:2px; gap:2px}
+.cls .pick button{appearance:none; border:0; background:none; padding:5px 0; border-radius:6px; cursor:pointer; font-size:13px; color:var(--muted)}
+.cls .pick button:hover{background:var(--surface)}
+.cls .pick button.on-lab{background:var(--lab); color:#fff; font-weight:600}
+.cls .pick button.on-per{background:var(--per); color:#fff; font-weight:600}
+.cls .pick button.sug-lab{background:var(--lab-wash); color:var(--lab-ink)}
+.cls .pick button.sug-per{background:var(--per-wash); color:var(--per-ink)}
+.cls .meta{display:flex; justify-content:space-between; align-items:center; gap:6px; font-size:11.5px}
+.pill{display:inline-block; padding:1px 8px; border-radius:10px; font-size:11.5px; white-space:nowrap}
+.p-lab{background:var(--lab-wash); color:var(--lab-ink)}
+.p-per{background:var(--per-wash); color:var(--per-ink)}
+.p-uns{background:var(--uns-wash); color:var(--uns-ink)}
+.p-ref{background:var(--ref-wash); color:var(--ref)}
+.linkbtn{appearance:none; border:0; background:none; padding:0; cursor:pointer; color:var(--muted); font-size:11.5px; text-decoration:underline; text-underline-offset:2px}
+.linkbtn:hover{color:var(--text)}
+
+/* 空状态 */
+.empty{background:var(--surface); border:1.5px dashed var(--line); border-radius:12px; padding:34px 28px; margin-block:6px 26px}
+.empty.drag{border-color:var(--lab); background:var(--lab-wash)}
+.empty h2{margin:0 0 6px; font-size:18px}
+.empty p{margin:0 0 18px; color:var(--muted); max-width:62ch}
+.steps{display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; margin-bottom:22px}
+.step{border-top:2px solid var(--line); padding-top:10px}
+.step b{display:block; margin-bottom:3px}
+.step span{color:var(--muted); font-size:13px}
+.step code{font-family:var(--mono); font-size:12px; background:var(--sunk); padding:0 4px; border-radius:3px}
+.empty .acts{display:flex; gap:10px; flex-wrap:wrap}
+
+.none{padding:30px; text-align:center; color:var(--faint); background:var(--surface); border:1px solid var(--line); border-radius:10px}
+
+/* 设置 */
+dialog{border:1px solid var(--line); border-radius:12px; padding:0; background:var(--surface); color:var(--text); width:min(760px,calc(100vw - 32px)); box-shadow:var(--shadow)}
+dialog::backdrop{background:rgba(0,0,0,.35)}
+.dlg{padding:18px 20px}
+.dlg h3{margin:0 0 4px; font-size:16px}
+.dlg p{margin:0 0 12px; color:var(--muted); font-size:13px}
+.dlg textarea{width:100%; min-height:320px; font-family:var(--mono); font-size:12px; line-height:1.5; background:var(--sunk); color:var(--text);
+              border:1px solid var(--line); border-radius:8px; padding:10px}
+.dlg .row{display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap; margin-top:12px}
+.dlg .err{color:var(--per-ink); font-size:12.5px; margin-right:auto; align-self:center}
+.dlg .msg{color:var(--muted); font-size:12.5px; margin-right:auto; align-self:center}
+.rules-grid{display:grid; grid-template-columns:1fr 1fr; gap:10px}
+.inv-set{display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:6px}
+.inv-set label{display:flex; flex-direction:column; gap:4px; font-size:12.5px; color:var(--muted)}
+.inv-set .wide{grid-column:1/-1}
+.inv-set input{font:inherit; font-size:13px; padding:6px 8px; border:1px solid var(--line); border-radius:6px; background:var(--sunk); color:var(--text)}
+.dlg .inv-set textarea{min-height:64px; font-family:inherit; font-size:12.5px}
+.inv-bar{display:flex; gap:8px; align-items:center; flex-wrap:wrap; padding:8px 0}
+.inv-note{color:var(--muted); font-size:12.5px}
+.inv-table{width:100%; border-collapse:collapse; background:var(--surface); border:1px solid var(--line); border-radius:10px; overflow:hidden; font-size:13px}
+.inv-table th{background:var(--sunk); color:var(--muted); font-weight:500; text-align:left; padding:8px 10px; font-size:12px}
+.inv-table td{padding:8px 10px; border-top:1px solid var(--line); vertical-align:top}
+.inv-table td.num:first-of-type, .inv-table td:nth-child(2){white-space:nowrap}
+.inv-table .st{display:inline-block; padding:1px 8px; border-radius:10px; font-size:12px; background:var(--sunk)}
+.inv-table .st-done,.inv-table .st-have{background:var(--lab-wash)}
+.inv-table .st-ready,.inv-table .st-replied{background:var(--uns-wash)}
+.inv-table .st-wrong{background:var(--per-wash)}
+.inv-table .detail{color:var(--faint); font-size:11.5px; margin-top:2px; word-break:break-all}
+.inv-table .inv-thumb{width:56px; height:56px; object-fit:cover; border-radius:6px; display:block; background:var(--sunk)}
+.inv-table .inv-thumb.ph{display:flex; align-items:center; justify-content:center; font-size:11px; color:var(--faint)}
+.dlg textarea.short{min-height:120px; max-height:260px}
+.inv-table .acts{display:flex; gap:6px; flex-wrap:wrap}
+.inv-table img.qr{width:120px; height:120px; object-fit:contain; border:1px solid var(--line); border-radius:6px; margin-top:4px}
+.rules-grid label{display:flex; flex-direction:column; gap:4px; font-size:12.5px; color:var(--muted)}
+.rules-grid .wide{grid-column:1/-1}
+body.is-ext .web-only, body:not(.is-ext) .ext-only{display:none}
+.dlg .rules-grid textarea{min-height:130px; font-family:inherit; font-size:12.5px}
+.sug{border:1px solid var(--line); border-radius:8px; padding:8px 10px; margin-bottom:12px; font-size:12.5px; background:var(--sunk)}
+.sug b{font-weight:600}
+.sug .it{display:flex; gap:8px; align-items:baseline; padding:3px 0}
+.sug .it span{flex:1; color:var(--muted)}
+.sug .it span b{color:var(--text)}
+.dlg ol{margin:0 0 12px; padding-left:20px; font-size:13px; line-height:1.7}
+.dlg ol code{font-family:var(--mono); font-size:12px; background:var(--sunk); padding:0 4px; border-radius:3px}
+
+.toast{position:fixed; left:50%; bottom:22px; transform:translateX(-50%); background:var(--text); color:var(--surface); padding:8px 14px; border-radius:8px;
+       font-size:13px; display:flex; gap:12px; align-items:center; z-index:50; box-shadow:var(--shadow); max-width:calc(100vw - 32px)}
+.toast button{appearance:none; border:0; background:none; color:inherit; text-decoration:underline; cursor:pointer; padding:0}
+
+.keys{font-size:12px; color:var(--faint); display:flex; gap:4px 14px; flex-wrap:wrap; padding-block:4px 0}
+.keys kbd{font-family:var(--mono); font-size:11px; border:1px solid var(--line); border-bottom-width:2px; border-radius:4px; padding:0 5px; color:var(--muted); background:var(--surface)}
+
+footer{padding-block:20px 36px; border-top:1px solid var(--line); margin-top:10px; font-size:12px; color:var(--faint); line-height:1.75}
+footer p{margin:0 0 4px; max-width:90ch}
+
+@media (max-width:860px){
+  .line{grid-template-columns:64px minmax(0,1fr) auto; gap:10px 12px}
+  .thumb{width:64px; height:64px}
+  .price{grid-column:2; grid-row:2; text-align:left; display:flex; gap:10px; align-items:baseline}
+  .price .q{display:inline}
+  .share{grid-column:3; grid-row:1; }
+  .cls{grid-column:1/-1}
+  .cls .pick{max-width:260px}
+  .sum-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .steps{grid-template-columns:1fr}
+  .bar{position:static}
+  .keys{display:none}
+  .seg button{padding:4px 9px}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important; animation:none!important}}
+.remind{border:1px solid var(--line); border-left:4px solid #1c6e8c; border-radius:8px; padding:10px 14px; margin:0 0 12px; background:var(--card, #fff); font-size:13px}
+.remind.warn{border-left-color:#d0021b}
+.remind.ok{border-left-color:#2e8b57}
+.remind ul{margin:6px 0 0; padding-left:18px}
+.remind li{margin:2px 0}
+.remind-late{margin-top:6px; color:#d0021b}
+.ask-list{max-height:55vh; overflow:auto; margin:8px 0}
+.ask-row{display:grid; grid-template-columns:auto 1fr; gap:2px 8px; padding:8px 0; border-bottom:1px solid var(--line-soft)}
+.ask-row .detail, .ask-row .ask-msg{grid-column:2; font-size:12px}
+.ask-row .ask-msg{color:var(--muted); background:var(--sunk); padding:4px 6px; border-radius:4px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand"><h1>订单分拣</h1><span>把网购订单分成实验室与个人</span><span class="tag-exp">实验版</span></div>
+    <button class="btn primary" id="btn-import">导入订单…</button>
+    <div class="menu">
+      <button class="btn" id="btn-export" aria-haspopup="true" aria-expanded="false">导出 ▾</button>
+      <div class="menu-pop" id="menu-export" hidden>
+        <button data-act="csv-lab">实验室物品清单 (CSV)<small>给报销用：按时间排序，含订单实付与估算</small></button>
+        <button data-act="csv-all">全部分拣结果 (CSV)</button>
+        <button data-act="csv-inv" class="ext-only">发票清单 (CSV)<small>发票页三类里的每一单和它的状态</small></button>
+        <button data-act="project">保存项目文件 (JSON)<small>订单 + 你的判断，下次拖进来接着做</small></button>
+      </div>
+    </div>
+    <button class="btn" id="btn-settings">设置</button>
+    <input type="file" id="file" accept=".xlsx,.csv,.json" multiple hidden>
+  </header>
+
+  <section id="empty" class="empty" hidden>
+    <h2>把订单文件拖到这里</h2>
+    <p>支持淘宝「导出订单」的 xlsx / csv，和抓取脚本保存的 JSON。文件只在这个浏览器页面里读取，不会上传到任何地方。</p>
+    <div class="steps">
+      <div class="step"><b>① 导出订单表</b><span>在淘宝「已买到的宝贝」点「导出订单」，得到 <code>订单数据.xlsx</code>，拖到这里。</span></div>
+      <div class="step"><b>② 之后跟着页面顶上的步骤走</b><span>上次报销到哪 → 补图片 → 判断待定 → 检查个人 → 检查实验室 → 开发票，每一步做完会告诉你下一步。</span></div>
+      <div class="step"><b>③ 只判断「是不是实验室的」</b><span>退款的商品插件自己排除；你只需要决定每件该不该报销。</span></div>
+    </div>
+    <div class="acts">
+      <button class="btn primary" id="btn-import2">选择文件…</button>
+      <button class="btn" id="btn-sample">先看看示例数据</button>
+    </div>
+  </section>
+
+  <div id="main" hidden>
+    <section class="remind" id="remind" hidden></section>
+    <section class="summary" id="summary"></section>
+    <div class="bar" id="bar">
+      <div class="seg" id="seg-cat" role="group" aria-label="按类别筛选"></div>
+      <input class="search" id="q" type="search" placeholder="搜索商品、店铺、订单号…" autocomplete="off">
+      <input class="date" id="d-from" type="date" aria-label="起始日期">
+      <input class="date" id="d-to" type="date" aria-label="结束日期">
+      <select id="sort" aria-label="排序"><option value="desc">新 → 旧</option><option value="asc">旧 → 新</option></select>
+      <label class="chk"><input type="checkbox" id="auto-next" checked> 判完跳到下一个待定</label>
+    </div>
+    <div class="inv-bar" id="inv-bar" hidden>
+      <button class="btn primary" id="inv-auto" title="依次：同步淘宝「全部发票」的开票状态 → 看卖家在旺旺里发来的发票 → 把开好的全部下载到「订单分拣-发票」">一键处理发票</button>
+      <button class="btn primary" id="inv-ask" title="逐家打开卖家的旺旺聊天，把要发票的消息（订单号、抬头、税号、邮箱）填进输入框；你核对后自己点「发送」，发完自动开下一家">给卖家发消息</button>
+      <button class="btn" id="inv-vip" title="打开淘宝官方客服，发「人工」转到人工客服，再对每一单发：你好，订单号…隔了…天要求开发票到现在还没开出，发票抬头：…，税号：…，麻烦官方客服帮我督促开票">找客服督促</button>
+      <button class="btn primary" id="inv-apply" title="打开淘宝「批量开票」页，自动勾好能在平台开票的实验室订单、核对抬头税号，停在确认页由你点「确认提交」">平台申请</button>
+      <span class="inv-note" id="inv-note"></span>
+      <details class="more">
+        <summary>更多</summary>
+        <div class="more-pop">
+          <button class="btn" id="inv-sync">只同步发票状态</button>
+          <button class="btn" id="inv-dl-all">只下载已开好的发票</button>
+          <button class="btn" id="inv-scan">扫描旺旺里卖家的发票回复</button>
+          <label class="btn" title="选你已经整理好的发票文件夹：插件读里面每张 PDF 的发票号码、日期、金额，对上的订单不再下载、也不找卖家">导入整理好的发票文件夹<input type="file" id="inv-have-dir" webkitdirectory multiple hidden></label>
+          <label class="btn" title="也可以导入 tools/index-invoices.py 做的索引，或已报销的订单号清单（JSON）">导入索引 / 清单<input type="file" id="inv-have" accept=".json" hidden></label>
+          <label class="btn" title="选下载好的发票文件夹（如「订单分拣-发票」）：复制一份按报销格式改名，放进新的报销文件夹，附汇总表和压缩包；原文件不动">整理成报销文件<input type="file" id="inv-pack-dir" webkitdirectory multiple hidden></label>
+          <label class="btn" title="选下载好的发票文件夹（如「订单分拣-发票」）：按 PDF 上的金额、开票日期核对每张票是不是那一单的（同店买过几次时常归错），再按发票号码找重复">核对下载的发票（金额 / 日期 / 重复）<input type="file" id="inv-check-dir" webkitdirectory multiple hidden></label>
+        </div>
+      </details>
+    </div>
+    <div class="keys">
+      <span><kbd>1</kbd> 实验室</span><span><kbd>2</kbd> 个人</span><span><kbd>0</kbd> 撤回为自动</span>
+<span><kbd>J</kbd><kbd>K</kbd> 下一件 / 上一件</span><span><kbd>/</kbd> 搜索</span>
+    </div>
+    <div class="list" id="list"></div>
+  </div>
+
+  <footer>
+    <p>本工具只在你的浏览器里处理数据：没有服务器、没有账号、没有任何上传功能。分拣结果保存在本机浏览器存储里，也可以导出为本地文件。</p>
+    <p>商品图片直接从淘宝图片服务器加载（与你打开淘宝网页时相同）。抓取脚本只在你已登录的淘宝页面内读取已显示的内容，并保存为本地文件。</p>
+    <p>发票：扩展在你已登录的淘宝页面上操作——读「全部发票」的开票记录和旺旺里卖家的回复（打开旺旺会话会让对方看到消息已读）、下载发票存进下载文件夹的「订单分拣-发票」。
+       在淘宝批量开票页停在确认页，由你点「确认提交」；给卖家发消息、找淘宝官方客服督促，都是你点了按钮才做，给卖家群发前会先列出清单让你确认。发票抬头和税号由你在设置里填写，只存在本机。</p>
+    <p>自动判断基于关键词，仅供参考；是否属于可报销的实验室物品，以你和报销规定为准。</p>
+  </footer>
+</div>
+
+<dialog id="dlg-settings">
+  <div class="dlg">
+    <p>标题、规格、店铺名里出现强词算 2 分、弱词算 1 分，一边至少 2 分且明显高过另一边才自动判，否则进「待定」。
+       词之间用空格、逗号或顿号隔开，不分大小写。改完点保存立即重新判断，你的手动判断不受影响。</p>
+    <h3>发票信息</h3>
+    <p>填你所在单位的全称和统一社会信用代码；只存在这台电脑的浏览器里。「同步发票状态」时用抬头核对已开的发票对不对；以后给卖家发消息要发票时也用这里的内容。</p>
+    <div class="inv-set">
+      <label>抬头（单位全称）<input id="inv-title" type="text" autocomplete="off"></label>
+      <label>税号（统一社会信用代码）<input id="inv-tax" type="text" autocomplete="off" spellcheck="false"><span class="err" id="inv-tax-err"></span></label>
+      <label class="wide" style="flex-direction:row;align-items:center;gap:8px"><input type="checkbox" id="auto-daily"> 每天自动处理一次发票（浏览器开着时；过了
+        <input id="auto-hour" type="number" min="0" max="23" step="1" style="width:4em"> 点、当天还没跑过就跑：同步开票状态、看卖家回复、下载开好的发票）</label>
+      <label>开票超过几天算太久（提醒条标红；找客服督促也用这个数）<input id="remind-days" type="number" min="1" max="60" step="1"></label>
+      <label>收发票的邮箱（卖家要邮箱时用；不填就不带）<input id="inv-email" type="email" autocomplete="off" spellcheck="false"></label>
+      <label class="wide">给卖家的消息模板（可用 {订单号} {日期} {金额} {抬头} {税号} {邮箱}；一家店几单时自动合成一条）<textarea id="inv-tpl" spellcheck="false"></textarea></label>
+    </div>
+    <h3 style="margin-top:14px">判断词表</h3>
+    <div id="suggest"></div>
+    <div class="rules-grid">
+      <label>实验室 · 强词<textarea id="r-lab-2" spellcheck="false"></textarea></label>
+      <label>实验室 · 弱词<textarea id="r-lab-1" spellcheck="false"></textarea></label>
+      <label>个人 · 强词<textarea id="r-personal-2" spellcheck="false"></textarea></label>
+      <label>个人 · 弱词<textarea id="r-personal-1" spellcheck="false"></textarea></label>
+      <label class="wide">模糊词（命中且证据不强时，一律交给你判）<textarea id="r-unsure" spellcheck="false"></textarea></label>
+    </div>
+    <div class="row">
+      <span class="err" id="rules-err"></span>
+      <button class="btn" id="rules-reset">恢复默认词表</button>
+      <button class="btn" id="data-clear">清除本机保存的全部数据</button>
+      <button class="btn" id="rules-cancel">取消</button>
+      <button class="btn primary" id="rules-save">保存</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="dlg-img">
+  <div class="dlg">
+    <h3>从淘宝订单页补商品图</h3>
+    <p id="img-cov"></p>
+    <ol class="ext-only">
+      <li>点下面「打开淘宝订单页」（要已经登录淘宝）</li>
+      <li>点淘宝页右下角的「开始补图片」：会自动翻页，找齐、或翻到比这些订单更早的页就停；出现滑块验证请手动完成后再点一次</li>
+      <li>补到的图片会自动出现在这里。只补图片和退款状态，不会新增订单表时间段里没有的订单</li>
+    </ol>
+    <ol class="web-only">
+      <li>点下面「复制抓取脚本」（脚本里带着缺图的订单号清单）。装了本工具的 Chrome 扩展就不用这么麻烦，见说明</li>
+      <li>在已登录的淘宝「已买到的宝贝」页按 <code>F12</code> → 控制台，粘贴后回车（第一次粘贴要先输入 <code>allow pasting</code>）</li>
+      <li>点右下角小面板的「自动翻页」：找齐清单、或翻到比清单更早的订单就会自己停；出现滑块验证请手动完成</li>
+      <li>点「保存 JSON」，把下载的文件拖回本页。只补图片和退款状态，不会新增订单表时间段里没有的订单</li>
+    </ol>
+    <p><label>订单表之前的订单也提取，提取到 <input type="date" id="img-older"> 为止</label><br>
+      <small>淘宝只能导出最近几个月的订单表；更早的订单从订单页上读来建单（和订单表一样能分拣、开发票）。<span id="img-older-note"></span></small></p>
+    <div class="row">
+      <span class="msg" id="img-msg"></span>
+      <button class="btn" id="img-close">关闭</button>
+      <button class="btn primary web-only" id="img-copy" autofocus>复制抓取脚本</button>
+      <button class="btn primary ext-only" id="img-open" autofocus>打开淘宝订单页</button>
+    </div>
+  </div>
+</dialog>
+
+
+<dialog id="dlg-pack">
+  <div class="dlg">
+    <h3>整理成报销文件</h3>
+    <p id="pack-note"></p>
+    <div class="inv-set">
+      <label>起始序号（默认接着已整理的发票往下编）<input id="pack-seq" type="number" min="1" step="1"></label>
+      <label>批次名称（文件夹名的开头）<input id="pack-name" type="text" placeholder="例如：第五批采购报销"></label>
+    </div>
+    <textarea id="pack-list" class="short" readonly spellcheck="false"></textarea>
+    <div class="row"><span class="msg">复制一份改名，原文件不动。</span><button class="btn" id="pack-cancel">取消</button><button class="btn primary" id="pack-go">确认，生成报销文件夹和压缩包</button></div>
+  </div>
+</dialog>
+
+<dialog id="dlg-ask">
+  <div class="dlg">
+    <h3>给卖家发消息要发票</h3>
+    <p id="ask-note"></p>
+    <div id="ask-list" class="ask-list"></div>
+    <div class="row"><span class="msg">不想发的店把勾去掉。</span>
+      <button class="btn" id="ask-cancel">取消</button>
+      <button class="btn" id="ask-manual">我自己逐家点发送</button>
+      <button class="btn primary" id="ask-auto">确认，自动发送</button></div>
+  </div>
+</dialog>
+
+<dialog id="dlg-dup">
+  <div class="dlg">
+    <h3>核对下载的发票</h3>
+    <p id="dup-note"></p>
+    <textarea id="dup-list" class="short" readonly spellcheck="false"></textarea>
+    <div class="row"><span class="msg">插件不能替你改名、删文件：归错单的已在插件里改过来，文件名请照这个清单自己处理。</span><button class="btn" id="dup-close">关闭</button></div>
+  </div>
+</dialog>
+
+<div class="toast" id="toast" hidden></div>
+
+<script src="js/xlsx-lite.js"></script>
+<script src="js/normalize.js"></script>
+<script src="js/classify.js"></script>
+<script src="js/invoice.js"></script>
+<script src="vendor/jsqr/jsQR.js"></script>
+<script src="js/sample.js"></script>
+<script src="scraper/taobao-scraper.js" data-no-run></script>
+<script src="js/zip.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

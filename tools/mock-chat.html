@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>模拟旺旺网页版（外层）</title>
+<!-- 仿照 market.m.taobao.com/app/im/chat/index.html：外层只有个壳，聊天界面在同源 iframe chat-core 里。
+     tools/e2e-invoice.py 把真实网址回应成这个文件和 mock-chat-core.html。数据全部虚构 -->
+<style>html,body{margin:0;height:100%}iframe{border:0;width:100%;height:100%;display:block}</style>
+</head>
+<body>
+<iframe title="聊天"></iframe>
+<script>// 真实页面把外层地址里的 ?&uid=… 原样带给 chat-core
+document.querySelector('iframe').src = 'https://market.m.taobao.com/app/im/chat-core/index.html?' + location.search;</script>
+</body>
+</html>

@@ -1,0 +1,116 @@
+{
+  "manifest_version": 3,
+  "name": "订单分拣（实验版）",
+  "version": "0.8.0",
+  "description": "把淘宝订单分成实验室与个人，补商品图片、退款状态，整理发票。全部在本机处理；对淘宝的操作只读，下载发票要你点了才做。",
+  "action": {
+    "default_title": "打开订单分拣"
+  },
+  "background": {
+    "service_worker": "extension/background.js"
+  },
+  "permissions": [
+    "storage",
+    "downloads",
+    "alarms"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://buyertrade.taobao.com/*",
+        "http://127.0.0.1/tools/mock-taobao.html*",
+        "http://localhost/tools/mock-taobao.html*"
+      ],
+      "js": [
+        "scraper/taobao-scraper.js",
+        "extension/taobao.js"
+      ]
+    },
+    {
+      "matches": [
+        "https://i.taobao.com/my_itaobao/invoice*"
+      ],
+      "js": [
+        "extension/invoice-main.js"
+      ],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://i.taobao.com/my_itaobao/invoice*"
+      ],
+      "js": [
+        "js/invoice.js",
+        "extension/panel.js",
+        "extension/invoice-list.js"
+      ]
+    },
+    {
+      "matches": [
+        "https://market.m.taobao.com/app/im/*"
+      ],
+      "all_frames": true,
+      "js": [
+        "js/invoice.js",
+        "extension/panel.js",
+        "extension/chat.js"
+      ]
+    },
+    {
+      "matches": [
+        "https://i.taobao.com/my_itaobao/*",
+        "http://127.0.0.1/tools/mock-batch.html*",
+        "http://localhost/tools/mock-batch.html*"
+      ],
+      "js": [
+        "extension/panel.js",
+        "extension/batch.js"
+      ]
+    },
+    {
+      "matches": [
+        "https://i.taobao.com/my_itaobao/*"
+      ],
+      "js": [
+        "extension/batch-main.js"
+      ],
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://*.chinatax.gov.cn/*",
+        "http://127.0.0.1/tools/mock-qr.html*"
+      ],
+      "js": [
+        "extension/panel.js",
+        "extension/qr.js"
+      ]
+    },
+    {
+      "matches": [
+        "https://trade.taobao.com/trade/detail/*",
+        "http://127.0.0.1/tools/mock-detail.html*"
+      ],
+      "js": [
+        "js/invoice.js",
+        "extension/detail.js"
+      ]
+    },
+    {
+      "matches": [
+        "https://ai.alimebot.taobao.com/*",
+        "http://127.0.0.1/tools/mock-alime.html*"
+      ],
+      "js": [
+        "extension/panel.js",
+        "extension/vip.js"
+      ]
+    }
+  ],
+  "host_permissions": [
+    "https://*.aliyuncs.com/*",
+    "https://invoice-ua.taobao.com/*",
+    "https://*.alicdn.com/*"
+  ]
+}
