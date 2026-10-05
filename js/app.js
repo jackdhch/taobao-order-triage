@@ -1180,7 +1180,9 @@
       const todo = [];
       for (const list of Object.values(X.dlDone || {})) for (const g of list) if (g.url && !done[g.file]) todo.push(g);
       if (!todo.length) return;
-      const orders = S.orders.map(o => ({ no: o.no, shop: o.shop, time: o.time, amount: o.pay }));
+      // 应报金额 = 实付 − 部分退款的退款金额
+      const ra = S.refundAmt || {};
+      const orders = S.orders.map(o => ({ no: o.no, shop: o.shop, time: o.time, amount: Math.round((o.pay - o.lines.reduce((a, l) => a + (ra[l.key] || 0), 0)) * 100) / 100 }));
       const have = new Map((S.haveIdx || []).map(x => [x.invNo, x]));
       const res = [];
       for (const g of todo) {
@@ -1190,21 +1192,22 @@
           const [c0] = I.checkFiles([Object.assign(r, { file: g.file })], orders);
           // 发票号和已整理（已报销）的一样：是那一单的票，不是这单的（2026-10-04 实测：一张票被「多一点」规则算到同店另一单，其实是以前已报销过的票）
           const c = have.has(r.invNo) ? Object.assign({}, c0, { kind: 'dup' }) : c0;
-          done[g.file] = { kind: c.kind, amount: c.amount, date: c.date, invNo: c.invNo, to: c.to || '', nos: c.nos || [], dup: have.has(r.invNo) ? have.get(r.invNo).file : '' };
+          done[g.file] = { kind: c.kind, amount: c.amount, date: c.date, invNo: c.invNo, to: c.to || '', nos: c.nos || [], short: c.short || 0, dup: have.has(r.invNo) ? have.get(r.invNo).file : '' };
           res.push(c);
         } catch (e) { done[g.file] = { kind: 'error', err: String(e.message || e) }; }    // 下载链接过期等：到「核对下载的发票」里手动核
       }
       persist();
       await applyFileCheck(res);
       const n = k => res.filter(c => k.includes(c.kind)).length;
-      const good = n(['ok', 'more', 'merged']), moved = n(['move']), gone = n(['old', 'dup']), bad = res.length - good - moved - gone;
+      const good = n(['ok', 'more', 'merged', 'less']), moved = n(['move']), gone = n(['old', 'dup']), bad = res.length - good - moved - gone;
       toast('读了 ' + todo.length + ' 张新下载的发票，按金额和开票日期核对：对得上 ' + good + ' 张'
         + (moved ? '，' + moved + ' 张归错了单、已挪到对的那单' : '') + (gone ? '，' + gone + ' 张不是这单的（以前的票或报销过的票），已从这单拿掉' : '')
         + (bad > 0 ? '，' + bad + ' 张要你看一下（发票栏里标着）' : ''), true);
       render();
     } finally { verifying = false; }
   }
-  const CHECK_NOTE = { ok: '✓ PDF 金额、日期对得上', more: '✓ 票面比实付多一点（按用券前的价开）', merged: '✓ 和同店几单合开',
+  const CHECK_NOTE = { ok: '✓ PDF 金额、日期对得上', more: '✓ 票面比实付多一点（按用券前的价开）', merged: '✓ 和同店几单合开', less: '✓ 票面比实付少不到 1 元',
+    short: '⚠ 票面比应报金额少了 1 元以上，请找卖家核对',
     move: '已挪到对的那单', old: '⚠ 开票日期比下单还早：是以前别的单的票', dup: '⚠ 和已整理（报销过）的发票是同一张，不是这单的', amount: '⚠ PDF 金额对不上', many: '⚠ 同店好几单都对得上，请你看',
     title: '⚠ 抬头不对', unread: '⚠ 读不出 PDF 里的金额', error: '（没能取回 PDF 核对）' };
   function rejectedOnly(o, st) {
@@ -1221,7 +1224,7 @@
     if (st.key !== 'done') return st;
     const got = (X.dlDone[o.no] || []).concat(S.invFiles[o.no] || []);
     const notes = got.map(g => (S.fileChecks || {})[g.file]).filter(Boolean)
-      .map(c => (CHECK_NOTE[c.kind] || '') + (c.amount != null && c.kind !== 'error' ? '（¥' + c.amount + '，' + (c.date || '日期没读到') + '）' : '') + (c.dup ? '；和已整理的 ' + c.dup + ' 是同一张' : ''));
+      .map(c => (CHECK_NOTE[c.kind] || '') + (c.kind === 'short' ? '（少了 ¥' + c.short + '）' : '') + (c.amount != null && c.kind !== 'error' ? '（¥' + c.amount + '，' + (c.date || '日期没读到') + '）' : '') + (c.dup ? '；和已整理的 ' + c.dup + ' 是同一张' : ''));
     return notes.length ? Object.assign({}, st, { detail: st.detail + ' · ' + notes.join('；') }) : st;
   }
 

@@ -242,10 +242,12 @@ assert.equal(I.parseInvoiceText('电子发票 发票号码： 开票日期： 1 
     f('100000000000000103', 12.5, '2026-04-28'),                   // 比下单早很多：以前的票
     f('100000000000000101', 99, '2026-07-02'),                     // 金额对不上
     f('100000000000000101', 23, '2026-07-02'),                     // 比实付多一点：按优惠前的价开
+    f('100000000000000101', 19.2, '2026-07-02'),                   // 比实付少 0.8：没关系
+    f('100000000000000101', 17.5, '2026-07-02'),                   // 比实付少 2.5：要提醒
     f('100000000000000101', 20, '2026-07-02', { titleOk: false }), // 抬头不对
     { file: 'random.pdf', amount: 20, date: '2026-07-02' },
   ], orders);
-  assert.deepEqual(r.map(x => x.kind), ['ok', 'ok', 'move', 'many', 'merged', 'old', 'amount', 'more', 'title', 'none']);
+  assert.deepEqual(r.map(x => x.kind), ['ok', 'ok', 'move', 'many', 'merged', 'old', 'amount', 'more', 'less', 'short', 'title', 'none']);
   assert.equal(r[2].to, '100000000000000102');
   assert.deepEqual(r[3].nos, ['100000000000000102', '100000000000000105']);
   assert.deepEqual(r[4].nos, ['100000000000000102', '100000000000000103']);
