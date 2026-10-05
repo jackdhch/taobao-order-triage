@@ -109,7 +109,7 @@ def run(p, tmp):
         images: [{ time: '2026-08-03 10:00:00', src: 'https://img.alicdn.com/mock/photo.png' }, { time: '2026-08-03 10:01:00', src: 'https://img.alicdn.com/mock/qr.png' }] } } } })""")
     app.reload(); app.wait_for_timeout(800); app.click('#seg-cat button[data-cat="invoice"]')
     outs = wait_until(app, lambda: (o := app.evaluate("[...document.querySelectorAll('[data-qr-out]')].map(e => e.textContent)")) and all(o) and len(o) == 2 and o, 15) or []
-    check(any('是二维码' in o and 'https://example.invalid/fapiao/mock-001' in o for o in outs), '二维码图读出了里面的地址，只显示不打开', outs)
+    check(any('二维码内容' in o and 'https://example.invalid/fapiao/mock-001' in o for o in outs), '二维码图读出了里面的地址，只显示不打开', outs)
     check(any(o.startswith('不是二维码') for o in outs), '商品照片判成「不是二维码」', outs)
     check(not [x for x in ctx.pages if 'example.invalid' in x.url], '没有自动打开二维码里的地址', [x.url for x in ctx.pages])
 

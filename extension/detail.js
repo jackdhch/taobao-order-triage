@@ -1,4 +1,6 @@
-// 订单详情页（trade.taobao.com/trade/detail/trade_order_detail.htm?biz_order_id=订单号）：
+// 订单详情页（trade.taobao.com/trade/detail/trade_order_detail.htm?biz_order_id=订单号）。天猫店的订单打开这个地址会被淘宝
+// 重定向到 trade.tmall.com/detail/orderDetail.htm?biz_order_id=订单号&forward_action=（2026-10-05 实测），manifest 两个地址都匹配；
+// 天猫页上同样有 span.ww-light[data-nick] 和 amos…uid= 链接，下面的读法通用。主页按标签页 id 关页面，重定向不影响。
 // 主页要联系某单的卖家、却不知道他的旺旺名时（旺旺名和店名常常对不上），打开这单的详情页，读旺旺图标上的名字
 // （[data-nick]，或 amos…getcid.aw?…uid=旺旺名；2026-10-04 实测）；顺便看每件商品是不是退款成功了
 // （订单状态还是「交易成功」、订单表里看不出来，2026-10-04 实测有一单就是这样）。

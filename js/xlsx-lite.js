@@ -22,7 +22,7 @@
     for (let i = buf.byteLength - 22; i >= Math.max(0, buf.byteLength - 65557); i--) {
       if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
     }
-    if (eocd < 0) throw new Error('这不是有效的 xlsx 文件（找不到 zip 目录）');
+    if (eocd < 0) throw new Error('不是有效的 xlsx 文件（未找到 zip 目录）');
     const count = dv.getUint16(eocd + 10, true);
     let p = dv.getUint32(eocd + 16, true);
     const dec = new TextDecoder();
@@ -89,7 +89,7 @@
     }
     const sheets = [...files.keys()].filter(k => /^xl\/worksheets\/sheet\d+\.xml$/.test(k))
       .sort((a, b) => parseInt(a.match(/\d+/)[0], 10) - parseInt(b.match(/\d+/)[0], 10));
-    if (!sheets.length) throw new Error('xlsx 里没有工作表');
+    if (!sheets.length) throw new Error('xlsx 中没有工作表');
     const xml = await entryText(files, sheets[0]);
     const rows = [];
     const rowRe = /<row\b[^>]*>([\s\S]*?)<\/row>/g;

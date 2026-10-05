@@ -15,10 +15,12 @@
   --uns:#A2680F; --uns-wash:#F7EDDA; --uns-ink:#86560C;
   --ref:#6E7479; --ref-wash:#E7E8E6;
   --link:#1A5FB4; --ww:#1677FF;
-  /* 发票状态五种颜色：有票 / 开好了待下载 / 在等别人 / 要你处理 / 不需要 */
+  /* 发票状态七种颜色：已取得 / 已开具待取得 / 已申请淘宝开票（蓝）/ 等待卖家回复（黄）/ 已由淘宝客服督促（青）/ 需处理 / 无需开票 */
   --ok-ink:#2F7D4F;   --ok-bg:#E4F3EA;
   --info-ink:#6B3FA0; --info-bg:#EFE7F8;
+  --plat-ink:#1F5FAD; --plat-bg:#E2ECFA;
   --wait-ink:#9A6A0B; --wait-bg:#FBF1DC;
+  --urge-ink:#0B7470; --urge-bg:#DCF2F0;
   --bad-ink:#B0382B;  --bad-bg:#FBE6E3;
   --off-ink:#6E7479;  --off-bg:#ECEDEB;
   --err:#D0021B; --err-bg:#FFF0F0;
@@ -39,7 +41,9 @@
     --link:#7DB3F5; --ww:#4A9DFF;
     --ok-ink:#86D3A5;   --ok-bg:#173426;
     --info-ink:#C9A9F0; --info-bg:#2D2140;
+    --plat-ink:#8DBBF5; --plat-bg:#182B45;
     --wait-ink:#E8BC62; --wait-bg:#392B11;
+    --urge-ink:#6DD3CF; --urge-bg:#113534;
     --bad-ink:#F29A8C;  --bad-bg:#3E1E19;
     --off-ink:#A3A9AD;  --off-bg:#2A2E30;
     --err:#F29A8C; --err-bg:#3E1E19;
@@ -58,7 +62,9 @@
   --link:#7DB3F5; --ww:#4A9DFF;
   --ok-ink:#86D3A5;   --ok-bg:#173426;
   --info-ink:#C9A9F0; --info-bg:#2D2140;
+  --plat-ink:#8DBBF5; --plat-bg:#182B45;
   --wait-ink:#E8BC62; --wait-bg:#392B11;
+  --urge-ink:#6DD3CF; --urge-bg:#113534;
   --bad-ink:#F29A8C;  --bad-bg:#3E1E19;
   --off-ink:#A3A9AD;  --off-bg:#2A2E30;
   --err:#F29A8C; --err-bg:#3E1E19;
@@ -246,10 +252,21 @@ kbd{font-family:var(--mono); font-size:11px; border:1px solid var(--line); borde
 .inv-table .inv-thumb.ph{display:flex; align-items:center; justify-content:center; font-size:11px; color:var(--faint)}
 .inv-table .acts{display:flex; gap:6px; flex-wrap:wrap}
 .inv-table img.qr{width:120px; height:120px; object-fit:contain; border:1px solid var(--line); border-radius:6px; margin-top:4px}
-.inv-table .st{display:inline-block; padding:1px 9px; border-radius:10px; font-size:12px; font-weight:500; white-space:nowrap}
+.inv-table .st{display:inline-block; padding:1px 9px; border-radius:10px; font-size:12px; font-weight:500; white-space:normal; max-width:100%}
 .tone-ok{background:var(--ok-bg); color:var(--ok-ink)}
 .tone-info{background:var(--info-bg); color:var(--info-ink)}
+.tone-plat{background:var(--plat-bg); color:var(--plat-ink)}
 .tone-wait{background:var(--wait-bg); color:var(--wait-ink)}
+.tone-urge{background:var(--urge-bg); color:var(--urge-ink)}
+/* 可点的状态标签：去这个状态对应的页面 */
+.inv-table button.st{appearance:none; border:0; font:inherit; font-size:12px; font-weight:500; cursor:pointer; text-align:left; white-space:normal; line-height:1.5}
+.inv-table button.st:hover{text-decoration:underline; text-underline-offset:2px}
+.inv-table button.st::after{content:" ›"; opacity:.7}
+/* 状态颜色图例 */
+.inv-legend{display:flex; flex-wrap:wrap; gap:4px 14px; font-size:12px; color:var(--muted); padding:0 0 12px; margin-top:-6px}
+.inv-legend span{display:inline-flex; align-items:center; gap:5px; white-space:nowrap}
+.inv-legend i{width:10px; height:10px; border-radius:3px; display:inline-block; border:1px solid currentColor}
+.res-row{grid-template-columns:1fr; font-size:13px}
 .tone-bad{background:var(--bad-bg); color:var(--bad-ink)}
 .tone-off{background:var(--off-bg); color:var(--off-ink)}
 
@@ -328,19 +345,19 @@ footer p{margin:0 0 4px; max-width:90ch}
 <body>
 <div class="wrap">
   <header class="top">
-    <div class="brand"><h1>订单分拣</h1><span>把网购订单分成实验室与个人</span><span class="tag-exp">实验版</span></div>
+    <div class="brand"><h1>订单分拣</h1><span>淘宝订单报销整理：实验室采购分拣、发票申请与归档</span><span class="tag-exp" title="功能仍在完善中">实验版</span></div>
     <details class="more" id="more" hidden>
-      <summary class="btn" title="不常用的操作">更多</summary>
+      <summary class="btn" title="其他操作：重新导入订单表、单项发票操作">更多</summary>
       <div class="more-pop">
-        <button id="btn-import" title="选择从淘宝导出的新订单表（xlsx 或 csv），已做的判断会保留">重新导入订单表</button>
+        <button id="btn-import" title="选择从淘宝导出的新订单表（xlsx 或 csv），已有判断保留">重新导入订单表</button>
         <div class="more-h ext-only">发票</div>
-        <button class="ext-only" id="inv-sync" title="打开淘宝「我的发票」，读取已开票、申请中、未申请的记录，更新每单的发票状态">同步开票状态</button>
-        <button class="ext-only" id="inv-scan" title="打开要过发票的卖家的旺旺聊天，读取卖家发来的发票文件、二维码和回复">读取卖家旺旺回复</button>
-        <button class="ext-only" id="inv-dl-all" title="把已开票待下载的发票、卖家发来的发票文件下载到下载文件夹的「订单分拣-发票」，按订单改名">下载已开好的发票</button>
-        <button class="ext-only" data-pick="inv-check-dir" title="选下载好的发票文件夹（如「订单分拣-发票」），按 PDF 上的金额、开票日期核对每张票是不是那一单的，并按发票号码找重复">核对下载的发票…</button>
+        <button class="ext-only" id="inv-sync" title="打开淘宝「我的发票」，读取已开具、申请中、未申请的记录，更新每单的发票状态">同步开票状态</button>
+        <button class="ext-only" id="inv-scan" title="打开需卖家回复的旺旺会话，读取卖家发送的发票文件、二维码、开票申请入口和回复">读取卖家旺旺回复</button>
+        <button class="ext-only" id="inv-dl-all" title="将已开具待下载的发票、卖家发送的发票文件下载到「订单分拣-发票」，按订单命名">下载已开具的发票</button>
+        <button class="ext-only" data-pick="inv-check-dir" title="选择已下载的发票文件夹（如「订单分拣-发票」），按 PDF 金额、开票日期核对归属，并按发票号码查找重复">核对已下载的发票…</button>
       </div>
     </details>
-    <button class="btn" id="btn-settings" title="发票抬头、税号、邮箱、消息模板、每天自动处理">设置</button>
+    <button class="btn" id="btn-settings" title="发票抬头、税号、邮箱、消息模板、每日自动处理">设置</button>
   </header>
 
   <!-- 选文件用的输入框：都藏起来，由按钮触发 -->
@@ -353,15 +370,15 @@ footer p{margin:0 0 4px; max-width:90ch}
 
   <section id="empty" class="empty" hidden>
     <h2>导入淘宝订单表</h2>
-    <p>在淘宝「已买到的宝贝」页点「导出订单」，把下载的 xlsx 拖到这里，或点下面的按钮选择。文件只在这个页面里读取，不会上传。</p>
+    <p>在淘宝「已买到的宝贝」页点击「导出订单」，将下载的 xlsx 拖到此处，或点击下方按钮选择。文件仅在本页读取，不上传。</p>
     <div class="steps">
-      <div class="step"><b>1　导入订单表</b><span>淘宝导出的 xlsx 或 csv。以后有新订单，重新导出一份再导入，已做的判断会保留。</span></div>
-      <div class="step"><b>2　按页面顶上的步骤做</b><span>上次报销到哪 → 补图片 → 判断待定 → 检查个人 → 检查实验室 → 开发票 → 整理成报销文件。</span></div>
-      <div class="step"><b>3　只判断是不是实验室的</b><span>退款的商品自动排除，只需要决定每件该不该报销。</span></div>
+      <div class="step"><b>1　导入订单表</b><span>淘宝导出的 xlsx 或 csv。有新订单时重新导出并导入，已有判断保留。</span></div>
+      <div class="step"><b>2　按顶部步骤依次处理</b><span>上次报销截止点 → 补充图片 → 判断待定 → 检查个人 → 检查实验室 → 开具发票 → 整理报销文件。</span></div>
+      <div class="step"><b>3　只需判断是否属于实验室</b><span>已退款商品自动排除，逐件确定是否报销即可。</span></div>
     </div>
     <div class="acts">
       <button class="btn primary" id="btn-import2" title="选择从淘宝导出的订单表（xlsx 或 csv）">导入订单表</button>
-      <button class="btn" id="btn-sample" title="载入 8 单虚构的示例订单，试试界面">先看看示例数据</button>
+      <button class="btn" id="btn-sample" title="载入 8 单虚构的示例订单，用于试用界面">载入示例数据</button>
     </div>
   </section>
 
@@ -370,23 +387,35 @@ footer p{margin:0 0 4px; max-width:90ch}
     <section class="summary" id="summary"></section>
     <div class="bar" id="bar">
       <div class="seg" id="seg-cat" role="group" aria-label="按类别查看"></div>
-      <input class="search" id="q" type="search" placeholder="搜索商品、店铺、订单号" autocomplete="off">
+      <input class="search" id="q" type="search" placeholder="搜索商品、店铺、订单号" autocomplete="off" title="按商品名称、店铺或订单号筛选（快捷键 /）">
       <input class="date" id="d-from" type="date" aria-label="起始日期" title="只看这一天及以后的订单">
       <input class="date" id="d-to" type="date" aria-label="结束日期" title="只看这一天及以前的订单">
       <select id="sort" aria-label="排序" title="订单排列顺序"><option value="desc">新 → 旧</option><option value="asc">旧 → 新</option></select>
-      <label class="chk" title="判断一件后自动跳到下一件待定的商品"><input type="checkbox" id="auto-next" checked> 判完跳到下一件</label>
+      <label class="chk" title="判断一件后自动跳到下一件待定商品"><input type="checkbox" id="auto-next" checked> 判断后跳到下一件</label>
     </div>
     <div class="inv-bar" id="inv-bar" hidden>
       <div class="inv-steps">
-        <span class="sn">1</span><button class="btn" id="inv-auto" title="依次：同步淘宝「我的发票」里的开票状态 → 打开要过发票的卖家的旺旺，读取回复 → 把开好的发票下载到下载文件夹的「订单分拣-发票」">检查开票情况</button>
+        <span class="sn">1</span><button class="btn" id="inv-auto" title="依次执行：同步淘宝「我的发票」中的开票状态 → 读取需卖家回复的旺旺会话 → 将已开具的发票下载到「订单分拣-发票」">检查开票情况</button>
         <span class="arr">→</span>
-        <span class="sn">2</span><button class="btn" id="inv-apply" title="打开淘宝「批量开票」页，勾好能在平台开票的订单，核对抬头和税号，停在确认页，由你点「确认提交」">申请平台开票</button>
+        <span class="sn">2</span><button class="btn" id="inv-apply" title="打开淘宝「批量开票」页，勾选可在平台开票的订单并核对抬头、税号，停在确认页，由用户点击「确认提交」">申请平台开票</button>
         <span class="arr">→</span>
-        <span class="sn">3</span><button class="btn" id="inv-ask" title="平台开不了的订单，按店铺合成一条消息（订单号、抬头、税号、邮箱），先列清单给你确认，再逐家在旺旺里发给卖家">给卖家发消息</button>
+        <span class="sn">3</span><button class="btn" id="inv-card" title="卖家在旺旺中发来「请填写发票申请」卡片的订单：先列清单确认，再逐单点击卡片上的「去申请」，在淘宝「开具发票」页核对订单号和抬头后提交申请">按卖家的开票入口申请</button>
         <span class="arr">→</span>
-        <span class="sn">4</span><button class="btn" id="inv-vip" title="打开淘宝官方客服，转到人工客服后，逐单发督促开票的消息（订单号、等了几天、抬头、税号）">找客服催开票</button>
+        <span class="sn">4</span><button class="btn" id="inv-ask" title="无法在平台开票的订单，按店铺合并为一条消息（订单号、抬头、税号、邮箱），先列清单确认，再逐家通过旺旺发送给卖家">向卖家索要发票</button>
+        <span class="arr">→</span>
+        <span class="sn">5</span><button class="btn" id="inv-vip" title="超过设定天数仍未开票的订单：先列清单确认，再打开淘宝官方客服，转接人工后逐单发送督促消息（订单号、等待天数、抬头、税号）">请淘宝客服督促</button>
       </div>
       <span class="inv-note" id="inv-note"></span>
+    </div>
+    <div class="inv-legend" id="inv-legend" hidden title="发票状态的颜色含义；带「›」的状态可点击，打开对应页面">
+      <span style="color:var(--ok-ink)"><i style="background:var(--ok-bg)"></i>已取得</span>
+      <span style="color:var(--info-ink)"><i style="background:var(--info-bg)"></i>已开具，待下载</span>
+      <span style="color:var(--plat-ink)"><i style="background:var(--plat-bg)"></i>已申请淘宝开票</span>
+      <span style="color:var(--wait-ink)"><i style="background:var(--wait-bg)"></i>等待卖家回复</span>
+      <span style="color:var(--urge-ink)"><i style="background:var(--urge-bg)"></i>已由淘宝客服督促</span>
+      <span style="color:var(--bad-ink)"><i style="background:var(--bad-bg)"></i>需处理</span>
+      <span style="color:var(--off-ink)"><i style="background:var(--off-bg)"></i>无需开票</span>
+      <span>点击带「›」的状态可打开对应页面</span>
     </div>
     <div class="keys" id="keys">
       <span><kbd>1</kbd> 实验室</span><span><kbd>2</kbd> 个人</span><span><kbd>0</kbd> 撤回为自动</span>
@@ -396,96 +425,107 @@ footer p{margin:0 0 4px; max-width:90ch}
   </div>
 
   <footer>
-    <p>本工具只在你的浏览器里处理数据：没有服务器、没有账号、没有任何上传功能。分拣结果保存在本机浏览器存储里。</p>
-    <p>商品图片直接从淘宝图片服务器加载（与你打开淘宝网页时相同）。抓取脚本只在你已登录的淘宝页面内读取已显示的内容，并保存为本地文件。</p>
-    <p>发票：扩展在你已登录的淘宝页面上操作——读「全部发票」的开票记录和旺旺里卖家的回复（打开旺旺会话会让对方看到消息已读）、下载发票存进下载文件夹的「订单分拣-发票」。
-       在淘宝批量开票页停在确认页，由你点「确认提交」；给卖家发消息、找淘宝官方客服催开票，都是你点了按钮才做，给卖家发消息前会先列出清单让你确认。发票抬头和税号由你在设置里填写，只存在本机。</p>
-    <p>自动判断基于关键词，仅供参考；是否属于可报销的实验室物品，以你和报销规定为准。</p>
+    <p>数据仅在本机浏览器中处理：无服务器、无账号、无任何上传功能。分拣结果保存在本机浏览器存储中。</p>
+    <p>商品图片直接从淘宝图片服务器加载（与访问淘宝网页相同）。抓取脚本仅在已登录的淘宝页面内读取已显示的内容，并保存为本地文件。</p>
+    <p>发票：扩展在已登录的淘宝页面上操作，读取「全部发票」中的开票记录和旺旺中卖家的回复（打开旺旺会话会使对方看到消息已读），并将发票下载到「订单分拣-发票」。
+       批量开票停在确认页，由用户点击「确认提交」；按卖家的开票入口申请、向卖家索要发票、请淘宝客服督促均在主页确认清单后执行。发票抬头和税号在设置中填写，仅保存在本机。</p>
+    <p>自动判断基于关键词，仅供参考；是否属于可报销的实验室物品，以报销规定为准。</p>
   </footer>
 </div>
 
 <dialog id="dlg-settings">
   <div class="dlg">
     <h3>设置</h3>
-    <p>只存在这台电脑的浏览器里。</p>
+    <p>设置仅保存在本机浏览器中。</p>
     <h4>发票信息</h4>
     <div class="inv-set">
-      <label>抬头（单位全称）<input id="inv-title" type="text" autocomplete="off"></label>
-      <label>税号（统一社会信用代码）<input id="inv-tax" type="text" autocomplete="off" spellcheck="false"><span class="err" id="inv-tax-err"></span></label>
-      <label>收发票的邮箱（卖家要邮箱时用，可不填）<input id="inv-email" type="email" autocomplete="off" spellcheck="false"></label>
-      <label>开票超过几天算太久（找客服催开票按这个数）<input id="remind-days" type="number" min="1" max="60" step="1"></label>
-      <label class="wide">给卖家的消息模板（可用 {订单号} {日期} {金额} {抬头} {税号} {邮箱}，一家店几单时自动合成一条）<textarea id="inv-tpl" spellcheck="false"></textarea></label>
+      <label>抬头（单位全称）<input id="inv-title" type="text" autocomplete="off" title="开票抬头，须与单位全称一致"></label>
+      <label>税号（统一社会信用代码）<input id="inv-tax" type="text" autocomplete="off" spellcheck="false" title="18 位统一社会信用代码，保存时校验"><span class="err" id="inv-tax-err"></span></label>
+      <label>接收发票的邮箱（卖家要求邮箱时使用，可留空）<input id="inv-email" type="email" autocomplete="off" spellcheck="false" title="填写后，索要发票的消息中附带此邮箱"></label>
+      <label>未开票超过几天需督促（「请淘宝客服督促」按此天数）<input id="remind-days" type="number" min="1" max="60" step="1" title="1～60 天，默认 7 天"></label>
+      <label class="wide">索要发票的消息模板（可用 {订单号} {日期} {金额} {抬头} {税号} {邮箱}；同一店铺多单时自动合并为一条）<textarea id="inv-tpl" spellcheck="false" title="向卖家索要发票时发送的消息"></textarea></label>
     </div>
-    <h4>每天自动处理</h4>
+    <h4>每日自动处理</h4>
     <div class="inv-set">
-      <label class="wide inline"><input type="checkbox" id="auto-daily"> 每天过了 <input id="auto-hour" type="number" min="0" max="23" step="1"> 点，自动检查一次开票情况（同步状态、读卖家回复、下载开好的发票；浏览器要开着）</label>
+      <label class="wide inline" title="浏览器保持开启时生效"><input type="checkbox" id="auto-daily"> 每天 <input id="auto-hour" type="number" min="0" max="23" step="1" title="0～23 点"> 点后自动检查一次开票情况（同步状态、读取卖家回复、下载已开具的发票；需保持浏览器开启）</label>
     </div>
     <div class="row">
       <span class="err" id="rules-err"></span>
-      <button class="btn" id="data-clear" title="删除这个浏览器里保存的订单、判断和发票记录">清除本机数据</button>
-      <button class="btn" id="rules-cancel">取消</button>
-      <button class="btn primary" id="rules-save">保存</button>
+      <button class="btn" id="data-clear" title="删除本浏览器中保存的订单、判断和发票记录">清除本机数据</button>
+      <button class="btn" id="rules-cancel" title="关闭设置，不保存修改">取消</button>
+      <button class="btn primary" id="rules-save" title="保存设置">保存</button>
     </div>
   </div>
 </dialog>
 
 <dialog id="dlg-img">
   <div class="dlg">
-    <h3>补商品图片</h3>
+    <h3>补充商品图片</h3>
     <p id="img-cov"></p>
     <ol class="ext-only">
-      <li>点下面「打开淘宝订单页」（要已经登录淘宝）</li>
-      <li>点淘宝页右下角的「开始补图片」：会自动翻页，找齐或翻到更早的订单就停；出现滑块验证请自己完成后再点一次</li>
-      <li>补到的图片会自动出现在这里。只补图片和退款状态，不会新增订单表时间段里没有的订单</li>
+      <li>点击下方「打开淘宝订单页」（需已登录淘宝）</li>
+      <li>点击淘宝页右下角「开始补图片」：自动翻页，找齐或翻到更早的订单时停止；如出现滑块验证，请手动完成后再次点击</li>
+      <li>补充的图片自动显示在主页。仅补充图片和退款状态，不新增订单表时间段内不存在的订单</li>
     </ol>
     <ol class="web-only">
-      <li>点下面「复制抓取脚本」（脚本里带着缺图的订单号清单）</li>
-      <li>在已登录的淘宝「已买到的宝贝」页按 <code>F12</code> → 控制台，粘贴后回车（第一次粘贴要先输入 <code>allow pasting</code>）</li>
-      <li>点右下角小面板的「自动翻页」：找齐或翻到更早的订单就会停；出现滑块验证请自己完成</li>
-      <li>点「保存 JSON」，把下载的文件拖回本页</li>
+      <li>点击下方「复制抓取脚本」（脚本中含缺图订单号清单）</li>
+      <li>在已登录的淘宝「已买到的宝贝」页按 <code>F12</code> → 控制台，粘贴后回车（首次粘贴需先输入 <code>allow pasting</code>）</li>
+      <li>点击右下角面板的「自动翻页」：找齐或翻到更早的订单时停止；如出现滑块验证，请手动完成</li>
+      <li>点击「保存 JSON」，将下载的文件拖回本页</li>
     </ol>
-    <p><label>订单表之前的订单也提取，提取到 <input type="date" id="img-older"> 为止</label><br>
-      <small>淘宝只能导出最近几个月的订单表；更早的订单从订单页上读来建单。<span id="img-older-note"></span></small></p>
+    <p><label>同时提取订单表之前的订单，截至 <input type="date" id="img-older" title="从订单页提取此日期及以后、订单表最早日期之前的订单"></label><br>
+      <small>淘宝仅能导出最近几个月的订单表；更早的订单从订单页读取后建单。<span id="img-older-note"></span></small></p>
     <div class="row">
       <span class="msg" id="img-msg"></span>
-      <button class="btn" id="img-close">关闭</button>
-      <button class="btn primary web-only" id="img-copy" autofocus>复制抓取脚本</button>
-      <button class="btn primary ext-only" id="img-open" autofocus>打开淘宝订单页</button>
+      <button class="btn" id="img-close" title="关闭窗口">关闭</button>
+      <button class="btn primary web-only" id="img-copy" autofocus title="复制带缺图清单的抓取脚本到剪贴板">复制抓取脚本</button>
+      <button class="btn primary ext-only" id="img-open" autofocus title="在新标签页打开淘宝「已买到的宝贝」">打开淘宝订单页</button>
     </div>
   </div>
 </dialog>
 
 <dialog id="dlg-pack">
   <div class="dlg">
-    <h3>整理成报销文件</h3>
+    <h3>整理报销文件</h3>
     <p id="pack-note"></p>
     <div class="inv-set">
-      <label>起始序号（默认接着已整理的发票往下编）<input id="pack-seq" type="number" min="1" step="1"></label>
-      <label>批次名称（文件夹名的开头）<input id="pack-name" type="text" placeholder="例如：第五批采购报销"></label>
+      <label>起始序号（默认接续已整理发票的最大序号）<input id="pack-seq" type="number" min="1" step="1" title="报销文件名开头的序号"></label>
+      <label>批次名称（文件夹名前缀）<input id="pack-name" type="text" placeholder="例如：第五批采购报销" title="生成的文件夹名为「批次名称_日期_合计金额」"></label>
     </div>
     <textarea id="pack-list" class="short" readonly spellcheck="false"></textarea>
-    <div class="row"><span class="msg">复制一份改名，原文件不动。</span><button class="btn" id="pack-cancel">取消</button><button class="btn primary" id="pack-go">生成报销文件夹和压缩包</button></div>
+    <div class="row"><span class="msg">复制并重命名，原文件不变。</span><button class="btn" id="pack-cancel" title="关闭窗口，不生成文件">取消</button><button class="btn primary" id="pack-go" title="将发票按上述文件名复制到「订单分拣-报销」，并生成汇总表和压缩包">生成报销文件夹和压缩包</button></div>
   </div>
 </dialog>
 
 <dialog id="dlg-ask">
   <div class="dlg">
-    <h3>给卖家发消息要发票</h3>
+    <h3>向卖家索要发票</h3>
     <p id="ask-note"></p>
     <div id="ask-list" class="ask-list"></div>
-    <div class="row"><span class="msg">不想发的店把勾去掉。</span>
-      <button class="btn" id="ask-cancel">取消</button>
-      <button class="btn" id="ask-manual" title="插件逐家打开聊天、填好消息，由你核对后自己点发送">我自己逐家点发送</button>
-      <button class="btn primary" id="ask-auto" title="插件逐家打开聊天，核对是这家店后自动发送">自动发送</button></div>
+    <div class="row"><span class="msg">取消勾选的店铺不发送。</span>
+      <button class="btn" id="ask-cancel" title="关闭窗口，不发送">取消</button>
+      <button class="btn" id="ask-manual" title="插件逐家打开会话并填入消息，由用户核对后手动点击发送">逐家手动发送</button>
+      <button class="btn primary" id="ask-auto" title="插件逐家打开会话，核对属于该店铺后自动发送">自动发送</button></div>
   </div>
 </dialog>
 
 <dialog id="dlg-dup">
   <div class="dlg">
-    <h3>核对下载的发票</h3>
+    <h3>核对已下载的发票</h3>
     <p id="dup-note"></p>
     <textarea id="dup-list" class="short" readonly spellcheck="false"></textarea>
-    <div class="row"><span class="msg">归错单的已在插件里改过来；文件名请按这个清单自己改或删除。</span><button class="btn" id="dup-close">关闭</button></div>
+    <div class="row"><span class="msg">归属有误的已在插件中更正；文件请按此清单自行重命名或删除。</span><button class="btn" id="dup-close" title="关闭窗口">关闭</button></div>
+  </div>
+</dialog>
+
+<dialog id="dlg-list">
+  <div class="dlg">
+    <h3 id="list-title"></h3>
+    <p id="list-note"></p>
+    <div id="list-rows" class="ask-list"></div>
+    <div class="row"><span class="msg" id="list-hint">取消勾选的订单不处理。</span>
+      <button class="btn" id="list-cancel" title="关闭窗口，不执行">取消</button>
+      <button class="btn primary" id="list-ok"></button></div>
   </div>
 </dialog>
 

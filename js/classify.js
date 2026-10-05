@@ -89,10 +89,10 @@
 
   function classify(line, order, ctx) {
     if (isSurcharge(line.title))
-      return { cat: 'unsure', via: 'surcharge', hits: { lab: [], personal: [], unsure: [] }, score: null, why: '补差价 / 邮费链接，看不出买的是什么，请你确认' };
+      return { cat: 'unsure', via: 'surcharge', hits: { lab: [], personal: [], unsure: [] }, score: null, why: '补差价 / 邮费链接，无法判断所购商品，需手动确认' };
     const nt = ctx.norm ? ctx.norm(line.title) : line.title;
     const tm = ctx.titleMemory && ctx.titleMemory.get(nt);
-    if (tm) return { cat: tm, via: 'title', hits: { lab: [], personal: [], unsure: [] }, score: null, why: '同一商品之前判过' };
+    if (tm) return { cat: tm, via: 'title', hits: { lab: [], personal: [], unsure: [] }, score: null, why: '同一商品已有判断' };
 
     const text = [line.title, line.sku, order.shop].join(' ');
     const { score, hits } = scoreText(text, ctx.compiled);
@@ -100,9 +100,9 @@
     const sm = ctx.shopMemory && ctx.shopMemory.get(order.shop);
     // 同一家店你手动判过实验室（且没判过个人）：这家店以后的东西默认实验室；全判个人的要 2 件以上才跟
     if (sm && sm.lab >= 1 && sm.personal === 0)
-      return { cat: 'lab', via: 'shop', hits, score, why: '这家店你判过 ' + sm.lab + ' 件实验室' };
+      return { cat: 'lab', via: 'shop', hits, score, why: '同店已判为实验室 ' + sm.lab + ' 件' };
     if (sm && sm.personal >= 2 && sm.lab === 0)
-      return { cat: 'personal', via: 'shop', hits, score, why: '这家店你判过 ' + sm.personal + ' 件个人' };
+      return { cat: 'personal', via: 'shop', hits, score, why: '同店已判为个人 ' + sm.personal + ' 件' };
 
     let cat = 'unsure';
     if (score.lab >= 2 && score.lab >= score.personal * 2 + 1) cat = 'lab';
@@ -113,9 +113,9 @@
       if (score[other] > 0 || score[cat] < 3) cat = 'unsure';
     }
     const why = cat === 'unsure'
-      ? (score.lab + score.personal === 0 ? '没有命中任何词'
-         : hits.unsure.length && !(score.lab && score.personal) ? '含模糊词「' + hits.unsure[0] + '」，需要你判断'
-         : '两边都有迹象，需要你判断')
+      ? (score.lab + score.personal === 0 ? '未命中关键词'
+         : hits.unsure.length && !(score.lab && score.personal) ? '含模糊词「' + hits.unsure[0] + '」，需手动判断'
+         : '同时命中实验室与个人关键词，需手动判断')
       : '命中：' + hits[cat].slice(0, 4).join('、');
     return { cat, via: 'rule', hits, score, why };
   }

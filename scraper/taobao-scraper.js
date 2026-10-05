@@ -263,7 +263,7 @@ function orderTriageScraper(want, opts) {
   const badImgs = () => { if (!W) return 0; const s = load(); return [...W.set].filter(no => s[no] && s[no].lines.some(l => l.imgBad)).length; };
 
   async function grab(quiet) {
-    if (needsVerify()) { if (!quiet) alert('页面出现了安全验证，请手动完成后再继续。'); return -1; }   // 自动翻页时由 auto 统一提示
+    if (needsVerify()) { if (!quiet) alert('页面出现安全验证，请手动完成后继续。'); return -1; }   // 自动翻页时由 auto 统一提示
     await scrollThrough();
     const blocks = pageOrders();
     seen += blocks.length;
@@ -343,7 +343,7 @@ function orderTriageScraper(want, opts) {
     try {
       const why = await walk(maxPages || (W && W.older ? 300 : 50), id);
       if (id !== runId) return;
-      if (why === 'verify') alert('页面出现了安全验证，请手动完成后再点「开始补图片」继续。');
+      if (why === 'verify') alert('页面出现安全验证，请手动完成后再次点击「开始补图片」。');
       else if (!seen) console.warn('[订单分拣] 翻过的页一单都没认出来 —— 可能是淘宝改版了，请把这句话和页面截图发给维护者');
       // 实测漏掉的都是用户自己删掉的订单（删掉的连按订单号都搜不到），所以不再换列表重翻
       else if (W && missing().length) {
@@ -357,7 +357,7 @@ function orderTriageScraper(want, opts) {
 
   function download() {
     const orders = Object.values(load());
-    if (!orders.length) { alert('还没有抓到任何订单'); return; }
+    if (!orders.length) { alert('尚未抓取到任何订单'); return; }
     const payload = { format: 'order-triage-scrape', version: 1, source: location.host,
                       scrapedAt: new Date().toISOString(), orders };
     const a = document.createElement('a');
@@ -368,7 +368,7 @@ function orderTriageScraper(want, opts) {
   }
 
   function clear() {
-    if (confirm('清空暂存的抓取数据？（已下载的 JSON 文件、分拣页里已补上的图片都不受影响）')) {
+    if (confirm('清空暂存的抓取数据？（已下载的 JSON 文件和分拣主页中已补充的图片不受影响）')) {
       if (ext) { mem = {}; opts.sync({}, true); } else localStorage.removeItem(KEY);
       render();
     }
@@ -387,30 +387,31 @@ function orderTriageScraper(want, opts) {
     const n = Object.keys(load()).length, left = missing().length, bad = badImgs();
     const leftImg = () => missing().filter(no => W && W.nos.has(no)).length;
     if (mini) {
-      panel.innerHTML = '<button data-ot="mini" style="font:inherit;font-weight:600;border:0;background:none;cursor:pointer;color:#1c6e8c;padding:0">订单分拣' + (running ? ' · 补图中…' : '') + ' ▴</button>';
+      panel.innerHTML = '<button data-ot="mini" title="展开面板" style="font:inherit;font-weight:600;border:0;background:none;cursor:pointer;color:#1c6e8c;padding:0">订单分拣' + (running ? ' · 补图中…' : '') + ' ▴</button>';
       return;
     }
     const status = !W ? '已暂存 <b style="color:#1c6e8c">' + n + '</b> 单'
       // 「还差」分开说：缺图的，和近期订单要回看退款的（图早就有了，只是退款可能还会变；2026-10-05 用户看到「清单还差 27 单」以为是缺图）
-      : left && leftImg() ? '已找到 ' + n + ' 单，清单还差 <b style="color:#1c6e8c">' + leftImg() + '</b> 单' + (left > leftImg() ? '；另有 ' + (left - leftImg()) + ' 单近期订单要回看退款' : '')
-      : left ? '图片都补齐了；还有 <b style="color:#1c6e8c">' + left + '</b> 单近期订单要回看退款状态（点「开始补图片」会顺便看）'
-      : bad ? '清单里的单都找到了，但 <b style="color:#d0021b">' + bad + ' 单有图片打不开</b>（淘宝那边的图坏了，主页上标了红色 ERROR，<b style="color:#d0021b">图片没补完</b>）'
-      : !W.imgN ? '订单表里的订单<b style="color:#1c6e8c">都已有图</b>'
-      : '清单 ' + W.set.size + ' 单<b style="color:#1c6e8c">全部找齐</b>' + (ext ? '，已送回分拣主页' : '，请保存 JSON');
+      : left && leftImg() ? '已找到 ' + n + ' 单，清单尚缺 <b style="color:#1c6e8c">' + leftImg() + '</b> 单' + (left > leftImg() ? '；另有 ' + (left - leftImg()) + ' 单近期订单需复查退款' : '')
+      : left ? '图片已补齐；另有 <b style="color:#1c6e8c">' + left + '</b> 单近期订单需复查退款状态（点击「开始补图片」时一并复查）'
+      : bad ? '清单中的订单均已找到，但 <b style="color:#d0021b">' + bad + ' 单图片无法加载</b>（淘宝图片已失效，主页已标红 ERROR，<b style="color:#d0021b">图片未补全</b>）'
+      : !W.imgN ? '订单表中的订单<b style="color:#1c6e8c">均已有图</b>'
+      : '清单 ' + W.set.size + ' 单<b style="color:#1c6e8c">已全部找到</b>' + (ext ? '，已送回分拣主页' : '，请保存 JSON');
     const older = W && W.older ? '<br>订单表之前（' + W.older.from + ' 起）：已提取 <b style="color:#1c6e8c">' + olderCount() + '</b> 单' : '';
-    const note = ext ? (W ? '找到的图片会自动出现在分拣主页，' : '分拣主页还没有订单表，会提取看到的全部订单，') : '数据';
+    const note = ext ? (W ? '找到的图片自动送回分拣主页，' : '分拣主页尚无订单表，将提取页面上的全部订单，') : '数据';
     // 扩展里只需要一个大按钮；控制台用法保留原来的四个按钮
     panel.innerHTML = '<div style="font-weight:600;margin-bottom:4px;display:flex;justify-content:space-between">订单分拣 · ' + (ext ? '补图片' : '抓取')
-      + '<button data-ot="mini" title="收起" style="font:inherit;border:0;background:none;cursor:pointer;color:#66727a;padding:0 2px">—</button></div>'
+      + '<button data-ot="mini" title="收起面板" style="font:inherit;border:0;background:none;cursor:pointer;color:#66727a;padding:0 2px">—</button></div>'
       + '<div style="color:#66727a;font-size:12px;margin-bottom:10px">' + status + older
       + (running ? ' · 自动翻页中…' : '') + '</div>'
-      + (ext ? btn('auto', running ? '停止' : '开始补图片', true, 'width:100%;padding:9px 0;font-weight:600') + '<div>'
+      + (ext ? btn('auto', running ? '停止' : '开始补图片', true, 'width:100%;padding:9px 0;font-weight:600', running ? '停止自动翻页' : '自动翻页，读取清单中订单的商品图片和退款情况') + '<div>'
              : '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">'
-             + btn('grab', '抓取本页') + btn('auto', running ? '停止' : '自动翻页') + btn('dl', '保存 JSON', true) + btn('clr', '清空'))
-      + '</div><div style="color:#8a949a;font-size:11px;margin-top:8px">' + note + '只在本机，不上传。</div>';
+             + btn('grab', '抓取本页', false, '', '读取本页显示的订单') + btn('auto', running ? '停止' : '自动翻页', false, '', running ? '停止自动翻页' : '自动翻页并逐页读取订单')
+             + btn('dl', '保存 JSON', true, '', '把暂存的抓取数据保存为 JSON 文件') + btn('clr', '清空', false, '', '清空暂存的抓取数据'))
+      + '</div><div style="color:#8a949a;font-size:11px;margin-top:8px">' + note + '仅保存在本机，不上传。</div>';
   }
-  function btn(id, label, primary, extra) {
-    return '<button data-ot="' + id + '" style="font:inherit;padding:6px 0;border-radius:6px;border:1px solid #cfd6d3;'
+  function btn(id, label, primary, extra, tip) {
+    return '<button data-ot="' + id + '" title="' + (tip || label) + '" style="font:inherit;padding:6px 0;border-radius:6px;border:1px solid #cfd6d3;'
       + 'background:' + (primary ? '#1c6e8c;color:#fff;border-color:#1c6e8c' : '#f5f6f4') + ';cursor:pointer;' + (extra || '') + '">' + label + '</button>';
   }
   panel.addEventListener('click', e => {

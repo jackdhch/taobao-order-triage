@@ -78,7 +78,7 @@
       const idx = mapHeader(rows[r]);
       if ('title' in idx && Object.keys(idx).length >= 3) return { r, idx };
     }
-    throw new Error('没找到表头：需要至少包含「商品名称/宝贝标题」和另外两列（订单号、实付金额等）');
+    throw new Error('未找到表头：至少需包含「商品名称/宝贝标题」及另外两列（订单号、实付金额等）');
   }
 
   function rowsToOrders(rows) {

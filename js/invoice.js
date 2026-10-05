@@ -3,7 +3,7 @@
  *
  *   - 税号（统一社会信用代码）校验：打错一位就会开出废票，填的时候就拦住
  *   - 认出发票文件：卖家在聊天里发的「dzfp_<20位发票号>_<抬头>_<开票时间>.pdf」这类
- *   - 分析和某个卖家的聊天：我们什么时候要过发票、之后对方发来了文件 / 图片（可能是二维码）/ 说发邮箱
+ *   - 分析和某个卖家的聊天：我们什么时候要过发票、之后对方发来了文件 / 图片（可能是二维码）/ 说发邮箱 / 开票申请卡片
  *   - 每单的发票状态：由「全部发票」页同步结果、聊天扫描结果、已下载记录合起来算
  *
  * 抬头、税号默认留空，由用户在「设置」里填；只存在本机。
@@ -55,9 +55,11 @@
   const ASK_RE = /发票|开票/;
   const EMAIL_RE = /邮箱|邮件|e-?mail|@[\w-]+\.\w+/i;
   /*
-   * msgs: [{ self: bool, time, text, file: { name, size }, img: src }]，从旧到新
-   * 返回 { asks: [{ time, text, nos }], files, images, email } —— asks 是我们要发票的消息（nos = 里面提到的订单号）；
-   * files/images/email 只收我们第一次要发票之后对方发来的。从没要过的会话，文件只收明显是发票的（别把产品资料当发票）
+   * msgs: [{ self: bool, time, text, file: { name, size }, img: src, card: { title, price } }]，从旧到新
+   * 返回 { asks: [{ time, text, nos }], files, images, email, cards } —— asks 是我们要发票的消息（nos = 里面提到的订单号）；
+   * files/images/email 只收我们第一次要发票之后对方发来的。从没要过的会话，文件只收明显是发票的（别把产品资料当发票）。
+   * cards：卖家（或客服）发来的「请填写发票申请」卡片，点卡片上的「去申请」就能让这单进入淘宝平台开票流程（2026-10-05 实测）；
+   *   卖家常常不等我们要就主动发，所以不看要没要过。卡片里没有订单号，只有商品标题和价格，归哪单见 chatForOrder
    */
   function chatAnalyze(msgs, opts) {
     const taxId = opts && opts.taxId ? String(opts.taxId).toUpperCase() : '';
@@ -69,18 +71,49 @@
     const after = msgs.filter(m => !m.self && (!since || m.time >= since));
     const files = after.filter(m => m.file && (since ? /\.(pdf|ofd|xml|zip)$/i.test(m.file.name) || parseInvoiceName(m.file.name) : parseInvoiceName(m.file.name)))
       .map(m => Object.assign({ time: m.time }, m.file, { parsed: parseInvoiceName(m.file.name) }));
-    const images = since ? after.filter(m => m.img).map(m => ({ time: m.time, src: m.img })) : [];
+    const images = since ? after.filter(m => m.img && !m.card).map(m => ({ time: m.time, src: m.img })) : [];
     const email = since ? after.filter(m => m.text && EMAIL_RE.test(m.text)).map(m => ({ time: m.time, text: m.text.slice(0, 80) })) : [];
-    return { asks, files, images, email };
+    const cards = msgs.filter(m => !m.self && m.card).map(m => ({ time: m.time, title: String(m.card.title || '').slice(0, 120), price: m.card.price || '' }));
+    return { asks, files, images, email, cards };
+  }
+
+  // 商品标题相似度 0~1（开票卡片上只有商品标题，可能被截断）：去掉空白和符号，一个包含另一个算 1，否则按相邻两字的重合比例
+  const normT = s => String(s || '').toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, '');
+  function titleScore(a, b) {
+    a = normT(a); b = normT(b);
+    if (!a || !b) return 0;
+    if (a.includes(b) || b.includes(a)) return 1;
+    const grams = x => { const m = new Map(); for (let i = 0; i < x.length - 1; i++) { const g = x.slice(i, i + 2); m.set(g, (m.get(g) || 0) + 1); } return m; };
+    const A = grams(a), B = grams(b);
+    let hit = 0, n = 0;
+    for (const [g, c] of A) { n += c; if (B.has(g)) hit += Math.min(c, B.get(g)); }
+    for (const c of B.values()) n += c;
+    return n ? 2 * hit / n : 0;
+  }
+  /*
+   * 开票卡片归哪一单：peers = 这家店还没解决的几单 [{ no, titles, time }]（卡片发来之前下的单才算）。
+   *   标题明显最像的那单 → sure；只有一单时归它（标题对不上标「请核对」）；分不清的列出候选，都标「请核对」。
+   * 归错了也不会申请错：申请页网址里带着订单号，extension/apply-card.js 只在它等于任务里的订单号时才提交
+   */
+  function cardOwner(k, peers) {
+    const d = String(k.time || '').slice(0, 10);
+    const ok = (peers || []).filter(p => !p.time || !d || String(p.time).slice(0, 10) <= d);
+    if (!ok.length) return { nos: [], sure: false };
+    const sc = ok.map(p => ({ no: p.no, s: Math.max(0, ...(p.titles || []).map(t => titleScore(k.title, t))) })).sort((x, y) => y.s - x.s);
+    if (sc[0].s >= 0.5 && (sc.length === 1 || sc[1].s < sc[0].s - 0.15)) return { nos: [sc[0].no], sure: true };
+    if (ok.length === 1) return { nos: [ok[0].no], sure: !k.title };
+    const near = sc.filter(x => x.s >= 0.5 && x.s >= sc[0].s - 0.15);
+    return { nos: (near.length ? near : sc).map(x => x.no), sure: false };
   }
 
   /*
    * 一家店可能有好几单要发票、共用一个会话：把对方的回复分到具体某一单上。
    *   - 我们的消息里写了这单的订单号：这条之后、下一次要发票之前对方发来的，算这单的
    *   - 消息里没写订单号（比如手打的「需要发票」）：这家店只有这一单要发票就算它的；有好几单就标 shared，交给用户核对
-   * 返回和 chatAnalyze 一样的结构，另加 shared（这些回复归哪单分不清）
+   *   - 开票卡片按商品标题归单（peers：这家店还没解决的几单 [{ no, titles, time }]，见 cardOwner）
+   * 返回和 chatAnalyze 一样的结构，另加 shared（这些回复归哪单分不清）；每张卡片带 shared（归属要核对）
    */
-  function chatForOrder(a, no, shopOrders, orderTime) {
+  function chatForOrder(a, no, shopOrders, orderTime, peers) {
     if (!a) return null;
     // 只看这单下单之后的要发票：同一家店以前别的单要过的，不算到这单头上
     const d0 = String(orderTime || '').slice(0, 10);
@@ -100,34 +133,59 @@
       myAsks = generic; shared = true;
     }
     const inSpan = m => spans.some(([s, e]) => m.time >= s && m.time < e);
-    return { asks: myAsks, files: (a.files || []).filter(inSpan), images: (a.images || []).filter(inSpan), email: (a.email || []).filter(inSpan), shared };
+    const ps = peers && peers.length ? peers : [{ no, titles: [], time: orderTime }];
+    const cards = (a.cards || []).filter(k => !d0 || String(k.time).slice(0, 10) >= d0).map(k => {
+      const own = cardOwner(k, ps);
+      return own.nos.includes(no) ? Object.assign({}, k, { shared: own.nos.length > 1 || !own.sure }) : null;
+    }).filter(Boolean);
+    return { asks: myAsks, files: (a.files || []).filter(inSpan), images: (a.images || []).filter(inSpan), email: (a.email || []).filter(inSpan), cards, shared };
   }
 
   /*
-   * 每单发票状态。ctx = { plat: 「全部发票」同步到的这一单（或 undefined）, chat: 这家店的聊天分析, got: 已下载/已挂上的文件, refunded }
-   *   key: have 已整理过（导入的发票索引里有）| done 已下载 | ready 已开票待下载 | applying 平台申请中 | apply 可平台申请 | ask 需找卖家 | asked 已要过、等回复
-   *        | replied 卖家已回（文件/二维码/邮箱） | wrong 抬头或类型不对 | none 不需要（退款/关闭）
+   * 每单发票状态。ctx = { plat: 「全部发票」同步到的这一单（或 undefined）, chat: 这家店的聊天分析, got: 已下载/已挂上的文件,
+   *                      have: 已整理的发票, cardApplied: 按卖家的开票入口提交申请的时间, refunded }
+   *   key: have 已整理 | done 已下载 | ready 已开票待下载 | paper 纸质发票 | wrong 抬头不符 | applying 已进入淘宝开票流程
+   *        | replied 卖家已回（文件/二维码/邮箱）| card 卖家发来开票申请卡片 | asked 已向卖家索要、等回复 | apply 可在淘宝平台申请
+   *        | ask 需向卖家索要 | none 无需开票（退款/关闭）
+   *   （app.js 另外加：check 疑似已整理、urged 已由淘宝客服督促）
    */
+  const LABEL = {
+    applying: '已申请淘宝开票，等待商家开具',
+    asked: '已向卖家索要发票，等待回复',
+    urged: '已由淘宝客服督促，等待开票',
+    card: '卖家发来开票申请入口',
+    ask: '需向卖家索要发票',
+    apply: '可在淘宝平台申请',
+  };
+  const SHARED = '（同店多单，请核对归属）';
   function status(ctx, want) {
     const p = ctx.plat, c = ctx.chat;
-    if (ctx.refunded) return { key: 'none', label: '不需要（已退款/关闭）' };
-    if (ctx.have) return { key: 'have', label: '已整理过', detail: '你的发票文件夹里已有：' + ctx.have.file };
+    if (ctx.refunded) return { key: 'none', label: '无需开票（已退款或关闭）' };
+    if (ctx.have) return { key: 'have', label: '已整理', detail: '已整理的发票中已有：' + ctx.have.file };
     if (ctx.got && ctx.got.length) return { key: 'done', label: '已下载', detail: ctx.got.map(g => g.file).join('、') };
     if (p && p.tab === 'issued') {
       const bad = want && want.title && p.title && !p.title.includes(want.title);
-      if (bad) return { key: 'wrong', label: '已开票，但抬头不对', detail: p.title + ' / ' + (p.type || '') };
+      if (bad) return { key: 'wrong', label: '已开票，抬头不符', detail: p.title + ' / ' + (p.type || '') };
       // 纸质发票页面上没有「下载到本地」，排进下载只会翻遍「已开具」也找不到；实物在卖家寄来的快递里
-      if (p.canDownload === false) return { key: 'paper', label: '已开纸质发票（不能下载）', detail: (p.type || '') + (p.date ? ' · ' + p.date : '') + '，实物在快递里' };
-      return { key: 'ready', label: '已开票·待下载', detail: (p.type || '') + (p.date ? ' · ' + p.date : '') };
+      if (p.canDownload === false) return { key: 'paper', label: '已开纸质发票（无电子文件）', detail: (p.type || '') + (p.date ? ' · ' + p.date : '') + '，随快递寄送' };
+      return { key: 'ready', label: '已开票，待下载', detail: (p.type || '') + (p.date ? ' · ' + p.date : '') };
     }
-    if (p && p.tab === 'applying') return { key: 'applying', label: '平台' + (p.progress || '申请中'), detail: p.date || '' };
-    const sh = c && c.shared ? '（这家店有几单都要发票，请核对是不是这单的）' : '';
-    if (c && c.files && c.files.length) return { key: 'replied', label: '卖家发来了文件' + sh, detail: c.files.map(f => f.name).join('、'), shared: !!sh };
-    if (c && c.images && c.images.length) return { key: 'replied', label: '卖家发来了图片（可能是二维码）' + sh, detail: c.images.length + ' 张', shared: !!sh };
-    if (c && c.email && c.email.length) return { key: 'replied', label: '卖家提到邮箱' + sh, detail: c.email[0].text, shared: !!sh };
-    if (c && c.asks && c.asks.length) return { key: 'asked', label: '已要过发票，等回复', detail: c.asks[c.asks.length - 1].time };
-    if ((p && p.tab === 'unapplied') || ctx.canApply) return { key: 'apply', label: '可平台申请' };
-    return { key: 'ask', label: '需找卖家' };
+    // 「全部发票 → 申请中」里的单：淘宝写的进度可能是「申请中」或「开票中」，对用户都是同一件事——等商家开出（用户 2026-10-05）。
+    // 进度原文、申请日期、商家剩余处理时间（同步时读得到才有）放在说明里
+    if (p && p.tab === 'applying') return { key: 'applying', label: LABEL.applying, detail: [p.progress, p.date ? '申请于 ' + p.date : '', p.remain].filter(Boolean).join(' · ') };
+    // 按卖家发来的开票卡片提交过申请（extension/apply-card.js 记下的）：下次同步「全部发票」时会出现在「申请中」
+    if (ctx.cardApplied) return { key: 'applying', label: LABEL.applying, detail: '已通过卖家的开票入口提交申请 · ' + new Date(ctx.cardApplied).toLocaleDateString('zh-CN') };
+    const sh = c && c.shared ? SHARED : '';
+    if (c && c.files && c.files.length) return { key: 'replied', label: '卖家已发送文件' + sh, detail: c.files.map(f => f.name).join('、'), shared: !!sh };
+    if (c && c.cards && c.cards.length) {
+      const s2 = c.cards.some(k => k.shared) ? SHARED : '';
+      return { key: 'card', label: LABEL.card + s2, detail: c.cards.map(k => String(k.time).slice(0, 16) + ' ' + k.title + (k.price ? ' ¥' + k.price : '')).join('；'), shared: !!s2 };
+    }
+    if (c && c.images && c.images.length) return { key: 'replied', label: '卖家已发送图片（可能为二维码）' + sh, detail: c.images.length + ' 张', shared: !!sh };
+    if (c && c.email && c.email.length) return { key: 'replied', label: '卖家要求提供邮箱' + sh, detail: c.email[0].text, shared: !!sh, email: true };
+    if (c && c.asks && c.asks.length) return { key: 'asked', label: LABEL.asked, detail: c.asks[c.asks.length - 1].time };
+    if ((p && p.tab === 'unapplied') || ctx.canApply) return { key: 'apply', label: LABEL.apply };
+    return { key: 'ask', label: LABEL.ask };
   }
 
   /*
@@ -278,9 +336,10 @@
       const seg = t.slice(prev, m.index), unit = money(m[1]), qty = +m[2];
       prev = m.index + m[0].length;
       let refundedQty = 0, refund = 0;
-      if (/退款成功/.test(seg)) {
+      // 「退货退款成功」也含「退款成功」；有的页面写「退款完成」「已退款」
+      if (/退款成功|退款完成|已退款/.test(seg)) {
         // refund：退了多少钱（没写金额的「退款成功」按整件全退，退款 = 单价 × 数量）
-        const a = /退款成功[^￥¥]{0,12}[￥¥]([\d,]+\.\d{2})/.exec(seg);
+        const a = /(?:退款成功|退款完成|已退款)[^￥¥]{0,12}[￥¥]([\d,]+\.\d{2})/.exec(seg);
         refund = a ? money(a[1]) : Math.round(unit * qty * 100) / 100;
         refundedQty = a && unit > 0 ? Math.max(0, Math.min(qty, Math.round(money(a[1]) / unit))) : qty;
       }
@@ -297,7 +356,7 @@
     return [String(o.time || '').slice(0, 10), o.amount != null ? String(o.amount) : '', clean(o.shop), o.no].filter(Boolean).join('_') + '.' + (ext || 'pdf');
   }
 
-  const api = { taxIdOk, DEFAULT_TITLE, DEFAULT_TAX, DEFAULT_TEMPLATE, renderMsg, parseInvoiceName, chatAnalyze, chatForOrder, status, findHave, matchHave, detailRefund, parseInvoiceText, saveName, checkFiles };
+  const api = { LABEL, titleScore, cardOwner, taxIdOk, DEFAULT_TITLE, DEFAULT_TAX, DEFAULT_TEMPLATE, renderMsg, parseInvoiceName, chatAnalyze, chatForOrder, status, findHave, matchHave, detailRefund, parseInvoiceText, saveName, checkFiles };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Invoice = api;
 })(typeof self !== 'undefined' ? self : this);

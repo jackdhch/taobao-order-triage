@@ -64,6 +64,24 @@ chrome.runtime.onMessage.addListener((m, sender, reply) => {
   return true;
 });
 
+// ── 插件自己开出来干活的标签页（workTabs，按 tab.id 记在 session 存储里）：活干完（或停下）后页面发 closeMe，只关这些页。
+// 用户自己点开的页面（点商品名、状态标签、旺旺图标）不记，也就不会被关；旺旺聊天页始终只复用一个，不算干活页（用户 2026-10-05：标签页太多）
+let workChain = Promise.resolve();
+const workTabs = fn => (workChain = workChain.then(async () => {
+  const { workTabs: ids = [] } = await chrome.storage.session.get('workTabs');
+  const next = fn(ids.slice());
+  if (next) await chrome.storage.session.set({ workTabs: next });
+  return ids;
+}));
+const trackTab = id => workTabs(ids => ids.includes(id) ? null : ids.concat(id));
+chrome.tabs.onRemoved.addListener(id => workTabs(ids => ids.includes(id) ? ids.filter(x => x !== id) : null));
+// 主页要开一个干活页（批量开票页、官方客服页、二维码发票页）：照常打开，并记成干活页
+chrome.runtime.onMessage.addListener((m, sender, reply) => {
+  if (!(m && m.type === 'openWorkTab' && /^https:\/\/[\w.-]+\.(taobao\.com|tmall\.com|chinatax\.gov\.cn(:\d+)?)\//.test(m.url || ''))) return;
+  chrome.tabs.create({ url: m.url, active: m.active !== false }).then(t => trackTab(t.id).then(() => reply(t.id)), e => reply(String(e)));
+  return true;
+});
+
 // 主页派活开的标签页：同一个网址上次派活开的那页先关掉（之前一次「一键处理」留下十几个「全部发票」页）。
 // 只关同网址的：别的页面可能还在干活；用户自己开的标签页不动
 let jobTabChain = Promise.resolve();
@@ -87,6 +105,8 @@ chrome.runtime.onMessage.addListener((m, sender, reply) => {
     const map = Object.assign({}, jobTabs && !Array.isArray(jobTabs) ? jobTabs : {});
     if (map[m.url] != null) { try { await chrome.tabs.remove(map[m.url]); } catch (e) { /* 用户已经关了 */ } }
     const t = await chrome.tabs.create({ url: m.url });
+    // 旺旺页（还没开着时新开的）不算干活页：它始终只留一个、反复复用，不关
+    if (!/^https:\/\/market\.m\.taobao\.com\/app\/im\//.test(m.url)) await trackTab(t.id);
     map[m.url] = t.id;
     await chrome.storage.local.set({ jobTabs: map });
   }).then(() => reply(true), e => reply(String(e)));
@@ -114,10 +134,16 @@ chrome.runtime.onMessage.addListener((m, sender, reply) => {
   return true;
 });
 
-// 税务局二维码发票页下完自己关掉（只关这个网站的页面）
+// 干活页做完自己关掉：插件开的干活页（workTabs）；税务局二维码发票页、按开票卡片打开的淘宝「开具发票 / 发票详情」页
+// （由旺旺页里的点击打开，不经过后台，按网址认；这两个脚本只在领到插件的活时才会发 closeMe）
 chrome.runtime.onMessage.addListener((m, sender, reply) => {
-  if (!(m && m.type === 'closeMe' && sender.tab && /^https:\/\/[\w.-]+\.chinatax\.gov\.cn(:\d+)?\//.test(sender.tab.url || sender.url || ''))) return;
-  chrome.tabs.remove(sender.tab.id).then(() => reply(true), e => reply(String(e)));
+  if (!(m && m.type === 'closeMe' && sender.tab)) return;
+  const url = sender.tab.url || sender.url || '';
+  workTabs(() => null).then(ids => {
+    const ok = ids.includes(sender.tab.id) || /^https:\/\/[\w.-]+\.chinatax\.gov\.cn(:\d+)?\//.test(url)
+      || /^https:\/\/invoice-ua\.taobao\.com\/e-invoice\//.test(url);
+    return ok ? chrome.tabs.remove(sender.tab.id).then(() => reply(true)) : reply(false);
+  }).catch(e => reply(String(e)));
   return true;
 });
 
@@ -126,7 +152,7 @@ function showBadge(p) {
   const n = p && p.n || 0;
   chrome.action.setBadgeText({ text: n ? String(n) : '' });
   chrome.action.setBadgeBackgroundColor({ color: p && p.late ? '#d0021b' : '#1c6e8c' });
-  chrome.action.setTitle({ title: n ? '订单分拣：还有 ' + n + ' 单没拿到发票' + (p.late ? '，其中 ' + p.late + ' 单等太久了' : '') : '打开订单分拣' });
+  chrome.action.setTitle({ title: n ? '订单分拣：' + n + ' 单尚未取得发票' + (p.late ? '，其中 ' + p.late + ' 单超过设定天数未开票' : '') : '打开订单分拣主页' });
 }
 chrome.storage.local.get('invPending').then(r => showBadge(r.invPending));
 chrome.storage.onChanged.addListener((ch, area) => { if (area === 'local' && ch.invPending) showBadge(ch.invPending.newValue); });

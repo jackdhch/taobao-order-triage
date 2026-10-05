@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>开具发票</title>
+<!-- 模拟淘宝「开具发票」页 invoice-ua.taobao.com/e-invoice/invoice-apply-online.html?orderId=…（旺旺开票卡片「去申请」打开的页面，
+     2026-10-05 用户示范）和提交后的「发票详情」页 invoice-detail-tm.html?orderId=…，同一个文件按网址区分。数据全部虚构。
+     - 默认抬头、税号打开约 2 秒后才加载出来；订单号末三位 208：抬头是别的单位；209：抬头一直加载不出来
+     - 「提交申请」（A.m-submit）和「确认提交」（DIV.m-submit）都只认完整点击（先按下再 click），只调 click() 没反应
+     - 「确认提交」后整页跳到发票详情页
+     进展通过测试注入的 window.mockReport(事件, 订单号, 时间) 报给测试（页面跳走、关掉后也查得到） -->
+<style>
+body{margin:0;font:14px system-ui,"Microsoft YaHei";color:#333;background:#f5f5f5}
+.box{background:#fff;margin:12px;padding:12px;border-radius:8px}
+.row{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f0f0f0}
+.m-submit{display:block;text-align:center;background:#ff5000;color:#fff;border-radius:20px;padding:10px;margin:12px;text-decoration:none;cursor:pointer}
+.mask{position:fixed;inset:0;background:rgba(0,0,0,.4);display:flex;align-items:flex-end}
+.sheet{background:#fff;width:100%;padding:12px;border-radius:12px 12px 0 0}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+(() => {
+  const no = new URL(location.href).searchParams.get('orderId') || '';
+  const report = (k, extra) => { try { window.mockReport && window.mockReport(k, no, Date.now(), extra || ''); } catch (e) { /* 测试外打开时没有 */ } };
+  const app = document.getElementById('app');
+  if (/invoice-detail/.test(location.pathname)) {
+    document.title = '发票详情';
+    app.innerHTML = '<div class="box"><b>开票中</b><div>商家还有8天57分37秒处理时间</div><div>订单号 ' + no + '</div></div>';
+    report('detail');
+    return;
+  }
+  report('open');
+  const TITLE = { '208': '某某虚构科技有限公司' }[no.slice(-3)] || '某大学';
+  app.innerHTML = '<div class="box"><div class="row"><span>发票类型</span><span>电子普通发票</span></div>'
+    + '<div class="row"><span>抬头类型</span><span>企业</span></div>'
+    + '<div class="row"><span>发票抬头</span><span id="t">加载中</span></div>'
+    + '<div class="row"><span>税号</span><span id="x"></span></div>'
+    + '<div class="row"><span>发票内容</span><span>商品明细</span></div></div>'
+    + '<a class="m-submit w-702" href="javascript:;">提交申请</a>';
+  if (no.slice(-3) !== '209') setTimeout(() => {          // 默认抬头约 2 秒后才出来
+    document.getElementById('t').textContent = TITLE;
+    document.getElementById('x').textContent = '121000009999999996';
+  }, 2000);
+  const full = (el, fn) => { let down = false; el.addEventListener('mousedown', () => { down = true; }); el.addEventListener('click', () => { if (down) fn(); down = false; }); };
+  full(document.querySelector('a.m-submit'), () => {
+    report('submit', document.getElementById('t').textContent);
+    const mask = document.createElement('div');
+    mask.className = 'mask';
+    mask.innerHTML = '<div class="sheet"><div>确认开具发票？抬头：' + document.getElementById('t').textContent + '</div><div class="m-submit w-702">确认提交</div></div>';
+    document.body.appendChild(mask);
+    full(mask.querySelector('div.m-submit'), () => {
+      report('confirm');
+      setTimeout(() => { location.href = 'https://invoice-ua.taobao.com/e-invoice/invoice-detail-tm.html?disableNav=YES&orderId=' + no; }, 500);
+    });
+  });
+})();
+</script>
+</body>
+</html>

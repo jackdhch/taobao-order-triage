@@ -15,7 +15,7 @@
     const j = (dlJobs || []).find(x => x.kind === 'qr' && x.invNo === invNo);
     if (!j) return;                                       // 不是插件打开的：不动，也不显示卡片
     const panel = window.otPanel('二维码发票', [], () => {});
-    panel.set('核对发票号 ' + invNo + '…');
+    panel.set('正在核对发票号 ' + invNo + '…');
     const btnOf = () => [...document.querySelectorAll('button')].find(b => /PDF\s*下载/.test(b.innerText));
     await window.otWaitFor(() => btnOf() && /价税合计/.test(document.body.innerText), 20000);
     const t = squash(document.body.innerText);
@@ -25,17 +25,18 @@
     const eq = (a, b) => a != null && Math.abs(a - b) < 0.005;
     // 金额：这一单 → 同店另一单 → 比这单实付多一点（不超过 3 成，平台常按用券前的价开）
     const target = eq(amt, j.amount) ? j : (j.alts || []).find(a => eq(amt, a.amount)) || (amt > j.amount && amt <= j.amount * 1.3 ? j : null);
-    const why = !btnOf() ? '页面上没找到「PDF下载」' : !buyerOk ? '购买方不是 ' + j.title : !taxOk ? '税号不是 ' + j.taxId
-      : !target ? '价税合计 ¥' + amt + '，和这家店要发票的订单都对不上' : '';
+    const why = !btnOf() ? '页面上未找到「PDF下载」' : !buyerOk ? '购买方不是 ' + j.title : !taxOk ? '税号不是 ' + j.taxId
+      : !target ? '价税合计 ¥' + amt + '，与该店铺待开票的订单均不符' : '';
     if (why) {
-      panel.set('未下载：' + why + '。请手动核对这张发票。');
+      panel.set('未下载：' + why + '。原因已送回分拣主页，本页 10 秒后关闭。');
       await chrome.storage.local.set({ qrFail: Object.assign((await chrome.storage.local.get('qrFail')).qrFail || {}, { [invNo]: { at: Date.now(), why, no: j.no } }) });
       await window.otSend({ type: 'jobsDone', ids: [j.id] });
+      window.otCloseLater(10000);
       return;
     }
     await window.otSend({ type: 'expectDownload', job: Object.assign({}, j, { no: target.no, saveAs: target.saveAs }) });
     btnOf().click();
-    panel.set('核对过：购买方、税号对，价税合计 ¥' + amt + '（订单 ' + target.no + '），已点「PDF下载」，存成 ' + target.saveAs);
+    panel.set('已核对购买方、税号和价税合计 ¥' + amt + '（订单 ' + target.no + '），已下载 PDF，保存为 ' + target.saveAs);
     await sleep(5000);
     await window.otSend({ type: 'jobsDone', ids: [j.id] });
     await window.otSend({ type: 'closeMe' });

@@ -37,7 +37,11 @@ manifest.json              Chrome 扩展说明（MV3）。项目根目录本身�
 extension/background.js    点扩展图标打开主页（chrome-extension://…/index.html）
 extension/taobao.js        淘宝订单页的内容脚本：读主页写的缺图清单 want，调抓取函数，结果写回 chrome.storage.local 的 scraped
 extension/invoice-list.js  「全部发票」页（i.taobao.com/my_itaobao/invoice）：同步三个标签的开票记录 → invSync；按 dlJobs 点「下载到本地」
-extension/chat.js          旺旺网页版（market.m.taobao.com/app/im，内容在 iframe chat-core）：扫描卖家回复 → chatScan；按 dlJobs 点「下载文件」
+extension/chat.js          旺旺网页版（market.m.taobao.com/app/im，内容在 iframe chat-core）：扫描卖家回复 → chatScan（开票卡片单独记 cards，不算图片）；
+                           按 dlJobs 点「下载文件」；按 cardRun 点开票卡片的「去申请」
+extension/chat-main.js     旺旺页自身环境（world MAIN）：包一层 window.open，记下页面要新开的开票申请页地址（被弹窗拦截时由后台打开）
+extension/apply-card.js    淘宝「开具发票」/「发票详情」页（invoice-ua.taobao.com/e-invoice/…）：按 cardJobs 核对订单号、抬头后提交，结果写 cardResult / cardApplied
+extension/detail.js        订单详情页（trade.taobao.com/trade/detail、天猫重定向后的 trade.tmall.com/detail）：读卖家旺旺名、逐件退款
 extension/panel.js         上面两个脚本共用的面板和「领主页排的活」（invJobs + invClaim_*）
 js/invoice.js              发票纯逻辑：税号校验、发票文件名、聊天分析、每单状态、下载文件名、从 PDF 文字认发票（parseInvoiceText）
 extension/invoice-main.js  跑在「全部发票」页自身环境（world MAIN）：扩展下载期间截下「下载到本地」造的阿里云发票链接
@@ -56,6 +60,7 @@ tools/mock-taobao.html     模拟订单页（数据虚构）：无参数 = 旧�
 tools/e2e-mock.py          离线端到端测试：加载扩展 → 导入虚构订单表 → 模拟页一键补图 → 逐单核对（不联网）
 tools/e2e-invoice.py       离线：全部发票同步、旺旺扫描、下载改名（含本机假阿里云 https）
 tools/e2e-extras.py        离线：选文件夹读发票 PDF、核对重复、二维码
+tools/e2e-apply.py         离线：平台批量申请、按卖家的开票入口申请（mock-invoice-apply.html）、干活页用完关掉
 tools/index-invoices.py    （可选）用 pdftotext/pypdf 给发票文件夹做索引；插件里已能直接选文件夹读，这个留给命令行用
 tools/fixtures/            测试用的虚构二维码图、商品图
 ```
@@ -78,6 +83,13 @@ tools/fixtures/            测试用的虚构二维码图、商品图
   manifest 里匹配了 `127.0.0.1/tools/mock-taobao.html`，模拟页会自动出面板
 - 测完清掉测试浏览器里的 `localStorage`（键名 `orderTriage.app.v1`、`orderTriage.scraped.v1`），不要把用户数据留在浏览器里
 - 操作用户真实的淘宝页面（Claude in Chrome）前必须先征得用户同意；遇到滑块/验证码停下让用户自己处理，不要尝试绕过
+
+## 界面约定（用户 2026-10-05）
+
+- 界面文字一律中文、正式、简洁，不用「你」「帮你」这类口语；每个按钮和可点元素都有 title 悬停说明
+- 发票状态的名称在 js/invoice.js 的 LABEL；颜色七种（app.js TONE + index.html 的 --*-ink/--*-bg 与 .inv-legend 图例）
+- 插件开的干活页按 tab.id 记在 background.js 的 workTabs，做完由页面发 closeMe 关掉；用户自己点开的页面不关；旺旺页只复用一个
+- 发给卖家的消息模板（js/invoice.js DEFAULT_TEMPLATE）、extension/vip.js 里发给客服的话术是用户定的，不要改
 
 ## 代码风格
 

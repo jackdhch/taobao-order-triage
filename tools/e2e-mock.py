@@ -146,7 +146,7 @@ def run(p, base, tmp):
     m = watch(ctx.new_page(), '模拟页')
     m.goto(base + 'tools/mock-taobao.html?v=new')
     m.wait_for_selector(PANEL)
-    check(f'清单还差 {len(table)} 单' in m.inner_text(PANEL), '面板拿到了主页的清单', m.inner_text(PANEL))
+    check(f'清单尚缺 {len(table)} 单' in m.inner_text(PANEL), '面板拿到了主页的清单', m.inner_text(PANEL))
     btns = m.evaluate("p => [...document.querySelector(p).querySelectorAll('button[data-ot]')].map(b => b.dataset.ot)", PANEL)
     check(sorted(btns) == ['auto', 'mini'], '淘宝页面板只有「开始补图片」和「收起」两个按钮', btns)
     get_scraped = lambda: app.evaluate('chrome.storage.local.get("scraped").then(r => r.scraped || {})')
@@ -177,7 +177,7 @@ def run(p, base, tmp):
     check(got == visible, f'列表里有的 {len(visible)} 单全找到（含刚打开时没渲染、要往下滚才出齐的），没存订单表以外的',
           f'多了 {sorted(got - visible)}，少了 {sorted(visible - got)}')
     left = hidden | {NEVER['no']}
-    check(f'清单还差 {len(left)} 单' in panel and f'已找到 {len(visible)} 单' in panel, f'面板最后显示还差 {len(left)} 单', panel)
+    check(f'清单尚缺 {len(left)} 单' in panel and f'已找到 {len(visible)} 单' in panel, f'面板最后显示还差 {len(left)} 单', panel)
     want = get_want()
     dead_nos = {o['no'] for o in findable if o['no'] in visible and any(it.get('imgSaved') == '' for it in o['items'])}
     check(want and set(want['nos']) == left | dead_nos and want['from'] == min(o['d'] for o in table if o['no'] in left | dead_nos),
@@ -226,8 +226,8 @@ def run(p, base, tmp):
     check(bool(only_dead), '剩下几单补上图后，清单里只剩图全坏的那单', get_want())
     m.wait_for_timeout(500)
     txt = m.inner_text(PANEL)
-    check('1 单有图片打不开' in txt and '图片没补完' in txt and '都已有图' not in txt,
-          '有图打不开时，淘宝页面板写明「图片没补完」，不说「都已有图」（用户 2026-10-03 要求）', txt.replace('\n', ' | '))
+    check('1 单图片无法加载' in txt and '图片未补全' in txt and '均已有图' not in txt,
+          '有图打不开时，淘宝页面板写明「图片未补全」，不说「均已有图」（用户 2026-10-03 要求）', txt.replace('\n', ' | '))
     # 那单后来换了能打开的图
     fix = {no: dict(rest[next(iter(rest))], no=no, lines=[{'title': it['t'], 'img': 'https://img.alicdn.com/imgextra/mock/filled.jpg'} for it in o['items']])
            for o in table for no in [o['no']] if no in dead_nos}
@@ -236,7 +236,7 @@ def run(p, base, tmp):
     check(bool(done), '图都补上后，主页写回空清单', get_want())
     m.wait_for_timeout(500)
     txt = m.inner_text(PANEL)
-    check('还没有订单表' not in txt and '都已有图' in txt, '清单为空时，淘宝页面板说「都已有图」，不改口成「没有订单表」', txt.replace('\n', ' | '))
+    check('尚无订单表' not in txt and '均已有图' in txt, '清单为空时，淘宝页面板说「均已有图」，不改口成「尚无订单表」', txt.replace('\n', ' | '))
     n_log = len(m.evaluate('window.__mock.log'))
     m.click(PANEL + ' button[data-ot="auto"]')
     m.wait_for_timeout(4000)

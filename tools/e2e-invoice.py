@@ -20,7 +20,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from playwright.sync_api import sync_playwright
 
@@ -32,6 +32,7 @@ MOCKS = [(INV_URL, 'mock-invoice.html'),
          ('https://market.m.taobao.com/app/im/chat/index.html', 'mock-chat.html'),
          ('https://market.m.taobao.com/app/im/chat-core/', 'mock-chat-core.html'),
          ('https://trade.taobao.com/trade/detail/', 'mock-detail.html'),               # 订单详情页：旺旺图标上有卖家旺旺名
+         ('https://trade.tmall.com/detail/', 'mock-detail.html'),                      # 天猫店的订单详情（淘宝详情页地址会重定向到这里）
          ('https://dppt.zhejiang.chinatax.gov.cn:8443/', 'mock-qr.html'),                # 税务局电子发票页（卖家发的二维码）
          ('https://ai.alimebot.taobao.com/', 'mock-alime.html')]                         # 淘宝官方客服（找 88VIP 人工客服督促）
 TITLE, TAX = '某大学', '121000009999999996'
@@ -54,9 +55,10 @@ O = {
 NO = {k: v[0] for k, v in O.items()}
 LAB = [k for k in O if k not in ('P', 'R')]         # 该出现在发票栏的
 # 各阶段每单的发票状态（主页发票栏「发票」列的文字）
-AFTER_SYNC = {'A': '已开票·待下载', 'B': '已开票，但抬头不对', 'C': '平台申请中', 'D': '可平台申请', 'E': '需找卖家',
-              'F': '需找卖家', 'G': '需找卖家', 'H': '需找卖家', 'I': '需找卖家'}
-AFTER_SCAN = dict(AFTER_SYNC, E='卖家发来了文件', F='卖家发来了图片（可能是二维码）', G='卖家提到邮箱', I='已要过发票，等回复')
+ASK = '需向卖家索要发票'
+AFTER_SYNC = {'A': '已开票，待下载', 'B': '已开票，抬头不符', 'C': '已申请淘宝开票，等待商家开具', 'D': '可在淘宝平台申请', 'E': ASK,
+              'F': ASK, 'G': ASK, 'H': ASK, 'I': ASK}
+AFTER_SCAN = dict(AFTER_SYNC, E='卖家已发送文件', F='卖家已发送图片（可能为二维码）', G='卖家要求提供邮箱', I='已向卖家索要发票，等待回复')
 # 该被点开的会话：发票栏里有订单的店（A 的店没聊过发票也算）；个人、已关闭、无关的店不该点
 # 旺旺只看还需要卖家回复的单（需找卖家 / 已要过 / 卖家回了还没下）：A 已开票、B 抬头不对、C 申请中、D 能平台申请的店都不打开，
 # 免得一大批店看到「已读」
@@ -159,6 +161,9 @@ def run(p, tmp):
         if url.startswith('https://consumerservice.taobao.com/online-help'):      # 官方客服入口：真实页面会跳到 alimebot
             return route.fulfill(status=200, content_type='text/html; charset=utf-8',
                                  body='<meta charset="utf-8"><script>location.replace("https://ai.alimebot.taobao.com/intl/index.htm?from=mock")</script>')
+        # 天猫店：淘宝订单详情页的地址会被重定向到 trade.tmall.com/detail/orderDetail.htm（2026-10-05 实测），A 单这样模拟
+        if url.startswith('https://trade.taobao.com/trade/detail/') and O['A'][0] in url:
+            return route.fulfill(status=302, headers={'Location': 'https://trade.tmall.com/detail/orderDetail.htm?biz_order_id=' + O['A'][0] + '&forward_action='})
         if url == 'https://img.alicdn.com/mock/qr-dppt-106.png':     # 能解码的二维码：税务局电子发票地址
             return route.fulfill(status=200, content_type='image/png', body=(TOOLS / 'fixtures' / 'qr-dppt-106.png').read_bytes())
         for prefix, f in MOCKS:
@@ -229,7 +234,7 @@ def run(p, tmp):
         check(not bad and not extra, msg, f'不对的：{bad}；不该出现的：{extra}' + ('（' + hint + '）' if bad.keys() == {'F'} and hint else ''))
         return rows
 
-    check_status({k: '需找卖家' for k in LAB}, '发票栏列出 9 单（没有牙膏、没有关闭的单），还没同步时都是「需找卖家」')
+    check_status({k: ASK for k in LAB}, '发票栏列出 9 单（没有牙膏、没有关闭的单），还没同步时都是「需向卖家索要发票」')
 
     print('\n[2] 同步发票状态（「全部发票」模拟页）')
     with ctx.expect_page() as pi:
@@ -242,6 +247,7 @@ def run(p, tmp):
     check(bool(sync), '点「同步发票状态」打开全部发票页，120 秒内写回 invSync')
     rows = (sync or {}).get('rows', {})
     log = inv.evaluate('window.__mock.log')
+    inv_clicks = inv.evaluate('window.__mock.clicks')      # 插件开的这一页同步完 3 秒就关，先存下来
     print('  模拟页渲染过的页：', log)
     check(log[:7] == ['issued:1', 'issued:2', 'issued:3', 'applying:1', 'applying:2', 'unapplied:1', 'unapplied:2'],
           '三个标签依次翻完；「已开具」第 3 页整页早于 2026-08-02 就停，不翻第 4 页', log)
@@ -254,7 +260,9 @@ def run(p, tmp):
     check(not bad, '逐单核对 invSync：标签、店名、金额、抬头、类型、日期（已开具取开票日期、申请中取分组头的申请时间）、进度、能否下载',
           '\n          '.join(bad))
     app.wait_for_timeout(500)
-    check_status(AFTER_SYNC, '同步后主页状态：A 已开票·待下载，B 抬头不对，C 平台申请中，D 可平台申请，其余需找卖家')
+    check_status(AFTER_SYNC, '同步后主页状态：A 已开票待下载，B 抬头不符，C 已申请淘宝开票，D 可在淘宝平台申请，其余需向卖家索要发票')
+    closed = wait_until(app, lambda: inv.is_closed(), 10)
+    check(bool(closed), '插件开的「全部发票」页同步完自己关掉了')
 
     print('\n[3] 扫描旺旺里的发票回复（旺旺模拟页，聊天在 iframe 里）')
     with ctx.expect_page() as pi:
@@ -286,9 +294,18 @@ def run(p, tmp):
           f'images={f.get("images")}（如果是 []：chat.js readMsgs 里 img 过滤条件 !i.closest(\'[class*="item-"]\') '
           f'会命中外层 .message-item-line，所有图片都被滤掉）')
     app.wait_for_timeout(500)
-    rows = check_status(AFTER_SCAN, '扫描后主页状态：E 卖家发来了文件，F 图片（二维码），G 提到邮箱，I 已要过等回复，H 仍需找卖家', F_HINT)
-    check(rows.get(NO['E'], {}).get('btns') == ['下载卖家发的文件（1 个）'] and rows.get(NO['A'], {}).get('btns') == ['下载发票'],
-          'A 有「下载发票」按钮，E 有「下载卖家发的文件（1 个）」按钮', {k: rows.get(NO[k], {}).get('btns') for k in 'AE'})
+    rows = check_status(AFTER_SCAN, '扫描后主页状态：E 卖家已发送文件，F 图片（二维码），G 要求提供邮箱，I 已向卖家索要等回复，H 仍需向卖家索要', F_HINT)
+    check(rows.get(NO['E'], {}).get('btns') == ['下载卖家文件（1 个）'] and rows.get(NO['A'], {}).get('btns') == ['下载发票'],
+          'A 有「下载发票」按钮，E 有「下载卖家文件（1 个）」按钮', {k: rows.get(NO[k], {}).get('btns') for k in 'AE'})
+    # 三种「等待」状态颜色各不相同，标签可点、悬停说明写着去哪
+    pill = lambda k: app.evaluate("no => { const tr = [...document.querySelectorAll('.inv-table tbody tr')].find(tr => tr.innerText.includes(no)); const s = tr && tr.querySelector('.st'); "
+                                  "return s ? { cls: s.className, tag: s.tagName, title: s.title, bg: getComputedStyle(s).backgroundColor } : {}; }", NO[k])
+    pc, pi = pill('C'), pill('I')
+    check('tone-plat' in pc.get('cls', '') and 'tone-wait' in pi.get('cls', '') and pc.get('bg') != pi.get('bg'),
+          '「已申请淘宝开票」蓝色、「已向卖家索要发票」黄色，颜色不同', (pc, pi))
+    check(pc.get('tag') == 'BUTTON' and '发票详情' in pc.get('title', '') and pi.get('tag') == 'BUTTON' and '旺旺' in pi.get('title', ''),
+          '两个状态标签都可点：申请中 → 发票详情页，已索要 → 旺旺聊天（悬停说明写明去处）', (pc.get('title'), pi.get('title')))
+    check(app.locator('#inv-legend:not([hidden])').count() == 1 and '已由淘宝客服督促' in app.inner_text('#inv-legend'), '发票栏顶上有颜色图例')
 
     by_url = [u for pg in ctx.pages if '/app/im/' in pg.url for fr in pg.frames if '/chat-core/' in fr.url for u in (fr.evaluate('window.__mock.byUrl || []'))]
     check('某某虚构碳纤维加工' in by_url or any('碳纤维' in k for k in (store('chatScan') or {}).get('convs', {})),
@@ -297,9 +314,8 @@ def run(p, tmp):
     check(g.get('byNick') == '某某虚构碳纤维加工' and g.get('matched') is True, '按旺旺名打开的会话：右侧「我的订单」里有这一单（matched）', {k: g.get(k) for k in ('byNick', 'matched', 'orders')})
 
     print('\n[4] 下载全部待下载的发票（先关掉前面的两个页面：新开的页面要自己领到活）')
-    inv_clicks = inv.evaluate('window.__mock.clicks')      # 关掉的页面就读不到了，先存下来
-    inv.close()
-    chat.close()
+    for pg in (inv, chat):
+        if not pg.is_closed(): pg.close()
     n_pages = len(pages)
     app.evaluate("document.querySelector('details.more').open = true")
     app.click('#inv-dl-all')
@@ -315,6 +331,8 @@ def run(p, tmp):
     dl = wait_until(app, both, 90) or store('dlDone') or {}
     new = pages[n_pages:]
     check(len(new) == 2 and '/app/im/chat/' in new[1].url and not store('chatAfter'), '平台票下完后，后台自动打开了旺旺页', [pg.url for pg in new])
+    closed = wait_until(app, lambda: new[0].is_closed(), 20)
+    check(bool(closed), '插件开的「全部发票」页下载完自己关掉了')
     miss = [k for k in 'AE' if NO[k] not in dl]
     check(not miss, '新开的两个页面都领到了下载活，A（平台）、E（聊天）都下载了', f'没下载的：{miss}（多半是上面 invJobs 里那份活被盖掉了）')
     if miss:
@@ -328,7 +346,7 @@ def run(p, tmp):
         dl = wait_until(app, both, 60) or store('dlDone') or {}
     if NO['A'] not in dl:                               # 排查用：浏览器下载记录和发票页面板
         print('  浏览器下载记录：', app.evaluate("chrome.downloads.search({orderBy: ['-startTime'], limit: 4}).then(a => a.map(d => [d.url.slice(0, 80), d.state, d.error, d.filename.split('/').pop()]))"))
-        ip = next((pg for pg in new if INV_URL in pg.url), None)
+        ip = next((pg for pg in new if INV_URL in pg.url and not pg.is_closed()), None)
         if ip: print('  发票页面板：', ip.evaluate("(document.querySelector('[data-otp-status]')||{}).textContent"), '| 页面记下的下载：', ip.evaluate('JSON.stringify(window.__mock.downloads)'))
     for k, frm in (('A', 'platform'), ('E', 'chat')):
         got = dl.get(NO[k], [])
@@ -383,6 +401,10 @@ def run(p, tmp):
     app.bring_to_front()
     toast = wait_until(app, lambda: (t := app.inner_text('#toast')) and ('下载' in t) and t, 20) or app.inner_text('#toast')
     check('下载' in toast, '③ 看完回复自动进入下载这一步', toast)
+    work = lambda: [pg.url[:70] for pg in ctx.pages if pg.url.startswith(INV_URL) or '/trade/detail/' in pg.url or 'tmall.com' in pg.url]
+    gone = wait_until(app, lambda: not work() and True, 40)
+    check(bool(gone), '一轮「检查开票情况」跑完：插件开的全部发票页、订单详情页都关了', work())
+    check(len([pg for pg in ctx.pages if '/app/im/' in pg.url]) <= 1, '旺旺聊天页只有一个', [pg.url[:70] for pg in ctx.pages if '/app/im/' in pg.url])
 
     print('\n[7] 杂项')
     all_clicks = [c for pg in ctx.pages if pg.url.startswith(INV_URL) for c in pg.evaluate('window.__mock.clicks')] + inv_clicks
@@ -430,20 +452,20 @@ def run(p, tmp):
     if fr:
         fr.page.wait_for_timeout(1500)
         check('点了发送' not in fr.evaluate('window.__mock.sent'), '插件没有替用户点「发送」', fr.evaluate('window.__mock.sent'))
-        check('请核对后自己点「发送」' in fr.inner_text('div[style*="2147483647"]'), '面板提示用户自己核对、点发送', fr.inner_text('div[style*="2147483647"]'))
+        check('请核对后手动点击「发送」' in fr.inner_text('div[style*="2147483647"]'), '面板提示用户自己核对、点发送', fr.inner_text('div[style*="2147483647"]'))
         fr.click('.send-btn')                                  # 用户点发送
     nxt = wait_until(app, lambda: filled('某某虚构轴承'), 20)
     check(bool(nxt) and NO['H'] in nxt[1], '发完自动打开第 2 家轴承（从没聊过，按旺旺名打开），消息也填好了', nxt and nxt[1])
     if nxt:
         nxt[0].click('div[style*="2147483647"] button[data-otp="skip"]')     # 这家用户不想发
-        done = wait_until(app, lambda: '都处理完了' in (t := nxt[0].inner_text('div[style*="2147483647"]')) and t, 10)
-        check(bool(done) and '发了 1 家' in done and '跳过 1 家' in done, '跳过第 2 家后结束：发了 1 家、跳过 1 家', done)
+        done = wait_until(app, lambda: '已处理完毕' in (t := nxt[0].inner_text('div[style*="2147483647"]')) and t, 10)
+        check(bool(done) and '发送 1 家' in done and '跳过 1 家' in done, '跳过第 2 家后结束：发送 1 家、跳过 1 家', done)
     sent = app.evaluate('chrome.storage.local.get("askSent").then(r => r.askSent || {})')
     check(set(sent) == {NO['G']}, '只把真发了的那单记成「已发消息」', sent)
     app.bring_to_front(); app.wait_for_timeout(800)
     rows = app.evaluate("() => Object.fromEntries([...document.querySelectorAll('.inv-table tbody tr')].map(r => [r.innerText.match(/\\d{19}/)?.[0], r.innerText.replace(/\\s+/g, ' ')]))")
-    check('已发消息要发票' in (rows.get(NO['G']) or '') and '需找卖家' in (rows.get(NO['H']) or ''),
-          '主页：发过的碳纤维加工变成「已发消息要发票，等回复」，跳过的轴承还是「需找卖家」', {k: rows.get(NO[k]) for k in 'GH'})
+    check('已向卖家索要发票，等待回复' in (rows.get(NO['G']) or '') and ASK in (rows.get(NO['H']) or ''),
+          '主页：发过的碳纤维加工变成「已向卖家索要发票，等待回复」，跳过的轴承还是「需向卖家索要发票」', {k: rows.get(NO[k]) for k in 'GH'})
 
     print('\n[8b] 消息填好后会话被切到别家：插件马上清掉输入框里的字并停下（2026-10-04 真实页面上消息出现在了别家）')
     skipped_txt = (core_of('某某虚构轴承') or app).evaluate('(document.querySelector(".editBox pre.edit[contenteditable=true]") || {}).innerText || ""')
@@ -460,7 +482,7 @@ def run(p, tmp):
         check('深沟球轴承 608' in pnl and '¥15' in pnl and fr.evaluate("document.querySelectorAll('div[style*=\"2147483647\"] img').length") >= 1,
               '卡片上显示这单的商品（标题、金额、商品图）', pnl)
         fr.click('.conversation-item:has-text("某某虚构零食铺") .name')
-        ok = wait_until(app, lambda: '为了不发错人' in fr.inner_text('div[style*="2147483647"]'), 10)
+        ok = wait_until(app, lambda: '为避免发错对象' in fr.inner_text('div[style*="2147483647"]'), 10)
         txt = fr.evaluate('document.querySelector(".editBox pre.edit[contenteditable=true]").innerText')
         check(bool(ok) and not txt.strip(), '切到零食铺后：输入框里的字清掉了，面板说停下了', {'输入框': txt, '面板': fr.inner_text('div[style*="2147483647"]')})
         check('点了发送' not in fr.evaluate('window.__mock.sent')[-3:], '没有发出去')
@@ -514,21 +536,26 @@ def run(p, tmp):
     txt = app.inner_text('#remind')
     pend = app.evaluate("chrome.storage.local.get('invPending').then(r => r.invPending)")
     n = pend and pend.get('n')
-    frac = re.search(r'发票（已拿到 / 应开）\s*(\d+)\s*/\s*(\d+)\s*单', txt)
-    check(bool(n) and bool(frac) and int(frac.group(2)) - int(frac.group(1)) == n and f'还差 {n} 单' in txt,
-          f'进度条：发票「已拿到 / 应开」两数相差 {n}，写着还差 {n} 单', txt[:300])
-    check('要你处理' in txt and '等待中' in txt and '待下载' in txt, '进度条按「要你处理 / 等待中 / 待下载」分开计数', txt[:300])
+    frac = re.search(r'发票（已取得 / 应开）\s*(\d+)\s*/\s*(\d+)\s*单', txt)
+    check(bool(n) and bool(frac) and int(frac.group(2)) - int(frac.group(1)) == n and f'尚缺 {n} 单' in txt,
+          f'进度条：发票「已取得 / 应开」两数相差 {n}，写着尚缺 {n} 单', txt[:300])
+    check('需处理' in txt and '等待中' in txt and '待下载' in txt, '进度条按「需处理 / 等待中 / 待下载」分开计数', txt[:300])
     badge = app.evaluate('chrome.action.getBadgeText({})')
     check(badge == str(n), f'插件图标上显示 {n}', badge)
     app.click('#remind [data-goto="invoice"]'); app.wait_for_timeout(500)
     check(app.locator('#inv-bar:not([hidden])').count() == 1, '点进度条上的发票跳到发票栏')
 
-    print('\n[12] 找淘宝官方人工客服督促：先发「人工」直到转人工，再一单一句督促；转人工之前一句督促的话都不发')
+    print('\n[12] 请淘宝官方人工客服督促：先发「人工」直到转人工，再一单一句督促；转人工之前一句督促的话都不发')
     label = app.inner_text('#inv-vip')
     n_vip = int(re.search(r'（(\d+) 单）', label).group(1)) if re.search(r'（(\d+) 单）', label) else 0
-    check(n_vip >= 1, '发票栏有「找客服督促（N 单）」，N 是超过 7 天还没开票的单', label)
+    check(n_vip >= 1, '发票栏有「请淘宝客服督促（N 单）」，N 是超过 7 天还没开票的单', label)
     expect = app.evaluate("chrome.storage.local.get('invPending').then(r => r.invPending)")
     app.click('#inv-vip')
+    # 对外发消息之前先列清单确认
+    app.wait_for_selector('#dlg-list[open]', timeout=10000)
+    lst = app.inner_text('#list-rows')
+    check(lst.count('订单号') == n_vip and not [pg for pg in ctx.pages if 'alimebot' in pg.url], f'督促前先弹出确认清单（{n_vip} 单），确认前没打开客服页', lst[:200])
+    app.click('#list-ok')
     core = lambda: next((pg for pg in ctx.pages if 'alimebot' in pg.url), None)
     done = wait_until(app, lambda: (pg := core()) and len([t for t in pg.evaluate('window.__mock.sent') if '督促' in t]) >= n_vip and pg, 60)
     pg = done or core()
@@ -542,7 +569,9 @@ def run(p, tmp):
     check(bool(sent), '插件记下了哪几单督促过', sent)
     app.bring_to_front(); app.wait_for_timeout(800)
     check('（0 单）' in app.inner_text('#inv-vip'), '督促过的 7 天内不再督促：按钮变成 0 单', app.inner_text('#inv-vip'))
-    check('找客服督促过' in app.inner_text('#list'), '发票栏里写着哪天找客服督促过')
+    check('已由淘宝客服督促，等待开票' in app.inner_text('#list'), '督促过的单状态变成「已由淘宝客服督促，等待开票」')
+    pu = app.evaluate("() => { const s = [...document.querySelectorAll('.inv-table .st')].find(s => s.textContent.includes('已由淘宝客服督促')); return s ? { cls: s.className, title: s.title } : {}; }")
+    check('tone-urge' in pu.get('cls', '') and '投诉' in pu.get('title', ''), '督促状态是单独的颜色（青色），点击打开淘宝投诉记录', pu)
     # 发完以后：客服问要不要投诉 → 插件回「OK」；客服发「提交投诉」卡片 → 插件点
     got = wait_until(app, lambda: (pg2 := core()) and pg2.evaluate('window.__mock.complained || 0') and pg2, 30)
     m = (got or core()).evaluate('window.__mock')
@@ -576,7 +605,7 @@ def run(p, tmp):
             ok_zip = z.testzip() is None and len(z.namelist()) == len(names) + 1 and any(n.endswith('汇总.csv') for n in z.namelist())
     check(ok_zip, '同名压缩包能正常打开，里面也是这些文件', zp and zp.name)
     csv_txt = (folder[0] / '汇总.csv').read_text(encoding='utf-8-sig') if folder else ''
-    check('合计' in csv_txt and '还没有发票的实验室订单' in csv_txt, '汇总表里有合计，最后列出还没有发票的实验室订单', csv_txt[:120])
+    check('合计' in csv_txt and '尚无发票的实验室订单' in csv_txt, '汇总表里有合计，最后列出尚无发票的实验室订单', csv_txt[:120])
     check(sorted(x.name for x in src.iterdir()) == before, '原来的「订单分拣-发票」文件夹一个文件都没变')
 
     print('\n[14] 每天自动处理：后台到点打开主页（带 #auto），主页自己点「检查开票情况」')
@@ -585,6 +614,21 @@ def run(p, tmp):
     t = wait_until(app, lambda: re.search('每天自动处理|检查开票情况', app.inner_text('#toast')) and app.inner_text('#toast'), 15)
     check(bool(t), '打开 #auto 的主页后自动开始检查开票情况', app.inner_text('#toast'))
     check('#auto' not in app.url, '跑过以后地址里的 #auto 去掉了（刷新不会再跑一次）', app.url)
+
+    print('\n[15] 天猫店：点旺旺图标时不知道旺旺名，订单详情页被重定向到 trade.tmall.com，照样读到旺旺名、打开聊天页（不是订单页）')
+    app.evaluate('''no => { const S = JSON.parse(localStorage.getItem('orderTriage.app.v1')); const o = S.orders.find(o => o.no === no); delete o.nick;
+                         localStorage.setItem('orderTriage.app.v1', JSON.stringify(S)); }''', NO['A'])
+    app.evaluate('() => chrome.storage.local.get("scraped").then(r => { const s = r.scraped || {}; for (const k in s) if (s[k].nick && k.endsWith("101")) delete s[k].nick; return chrome.storage.local.set({ scraped: s }); })')
+    app.goto(f'chrome-extension://{eid}/index.html'); app.wait_for_timeout(1500)
+    app.click('#seg-cat button[data-cat="all"]'); app.wait_for_timeout(500)
+    n0 = len(pages)
+    app.click(f'article.order:has-text("{NO["A"]}") button[data-ww]')
+    chat_pg = wait_until(app, lambda: next((pg for pg in ctx.pages if '/app/im/chat/' in pg.url and 'cntaobao某某虚构卖家' in unquote(pg.url)), None), 40)
+    tm = [pg for pg in pages[n0:] if 'tmall.com' in pg.url or '/trade/detail/' in pg.url]
+    check(bool(chat_pg), '打开的是和卖家的旺旺聊天页（uid=cntaobao某某虚构卖家），不是订单页', [pg.url[:90] for pg in pages[n0:]])
+    check(any('trade.tmall.com/detail/' in pg.url for pg in tm) and all(pg.is_closed() for pg in tm), '重定向到天猫的订单详情页读完旺旺名就关掉了', [pg.url[:90] for pg in tm])
+    nick = app.evaluate("no => (JSON.parse(localStorage.getItem('orderTriage.app.v1')).orders.find(o => o.no === no) || {}).nick", NO['A'])
+    check(nick == '某某虚构卖家', '旺旺名记下了', nick)
     ctx.close()
 
 

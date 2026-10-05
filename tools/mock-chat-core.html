@@ -6,7 +6,10 @@
 <!-- 仿照旺旺网页版 iframe 里的聊天界面（2026-09 实测的选择器），会话、消息、订单号全部虚构。
      打开会话只显示最近 4 条；消息列表滚到顶（收到 scroll 事件）0.5 秒后再往前补 4 条。
      window.__mock：opened 每次点开的会话；sent 对输入框的任何输入、对「发送」的任何点击（测试断言它为空）；
-                    downloads 点过的文件下载 -->
+                    downloads 点过的文件下载；cardClicks 开票卡片上「去申请」被完整点击的订单号。
+     开票卡片照 2026-10-05 真实页面的结构：div.im-template-msg.dx-msg-wrap > div.tpl-wrapper[data-tpl-id] > 一堆 view-name 的 div，
+     卡片里有一张背景大图和一张透明图（不能当成卖家发的图片）；「去申请」是 div.dx-event-node，只认完整点击（按下 → click），
+     点了用 window.open 新开淘宝「开具发票」页（网址里带订单号，卡片上没有） -->
 <style>
 body{margin:0;font:13px system-ui,"Microsoft YaHei";display:flex;height:100vh;color:#333}
 .ww_conversation_list{width:220px;border-right:1px solid #eee;overflow:auto}
@@ -37,6 +40,11 @@ body{margin:0;font:13px system-ui,"Microsoft YaHei";display:flex;height:100vh;co
   // 二维码样子的小图（内联，不发网络请求）
   const QR = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 7 7" shape-rendering="crispEdges">'
     + '<rect width="7" height="7" fill="#fff"/><path d="M0 0h3v3H0zM4 0h3v3H4zM0 4h3v3H0zM4 4h1v1H4zM6 6h1v1H6zM5 5h1v1H5z" fill="#000"/></svg>');
+  // 透明小图、卡片背景图（内联，不发网络请求）
+  const CLEAR = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
+  const BG = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="240" height="150"><rect width="240" height="150" fill="#fff4e8"/></svg>');
+  const APPLY = no => 'https://invoice-ua.taobao.com/e-invoice/invoice-apply-online.html?disableNav=YES%2CYES&orderId=' + no
+    + '&source=apply&canEditInvoiceKind=true&channel=card&sellerId=10000001&ORDER_TITLE_INFO=';
   const me = (time, text) => ({ self: true, time, text });
   const he = (time, text) => ({ self: false, time, text });
   // list：会话列表里显示的名字（长店名会被截断成「…」）；name：点开后顶部显示的全名；orders：右侧「我的订单」
@@ -74,12 +82,21 @@ body{margin:0;font:13px system-ui,"Microsoft YaHei";display:flex;height:100vh;co
       me('2026-08-19 09:15:00', '邮箱是 someone@example.com')] },
     // 从没聊过的店：只能按旺旺名打开（发消息那一步用）
     { hidden: true, name: '某某虚构轴承', orders: ['5190000000000000108'], msgs: [] },
+    // 开票卡片（tools/e2e-apply.py 用）：会话名是卖家旺旺名，很久没聊过、不在左侧列表里，按旺旺名打开。
+    // nick207：先要过发票、卖家回了一张开票卡片（卡片价格 ¥139.00，比实付少，按标题对单）；nick208、nick209：卖家主动发的卡片
+    { hidden: true, name: 'nick207', orders: ['5190000000000000207'], msgs: [
+      me('2026-08-22 10:00:00', '您好，订单 5190000000000000207 需要开电子普通发票：抬头 某大学，税号 121000009999999996'),
+      Object.assign(he('2026-08-22 10:05:00'), { invCard: { title: '杜邦线 母对母 40P 20cm', price: '139', no: '5190000000000000207' } })] },
+    { hidden: true, name: 'nick208', orders: ['5190000000000000208'], msgs: [
+      Object.assign(he('2026-08-23 11:00:00'), { invCard: { title: '硅胶线 20AWG 黑色', price: '58', no: '5190000000000000208' } })] },
+    { hidden: true, name: 'nick209', orders: ['5190000000000000209'], msgs: [
+      Object.assign(he('2026-08-24 12:00:00'), { invCard: { title: '深沟球轴承 6900ZZ', price: '22', no: '5190000000000000209' } })] },
     // 个人卖家：会话名是卖家自己的旺旺名，和店名「某某虚构焊接耗材」对不上（真实页面上很常见）
     { name: '某某虚构焊工小王', orders: ['5190000000000000109'], msgs: [
       me('2026-09-11 08:00:00', '你好，订单需要开发票，抬头某大学，税号121000009999999996')] },
   ];
   // 打开过的会话跨页面跳转记下来（插件按旺旺名逐个打开时整页会重新加载）
-  const mock = window.__mock = { opened: JSON.parse(sessionStorage.getItem('mockOpened') || '[]'), sent: [], downloads: [], data: CONVS };
+  const mock = window.__mock = { opened: JSON.parse(sessionStorage.getItem('mockOpened') || '[]'), sent: [], downloads: [], cardClicks: [], data: CONVS };
   const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   let cur = null, shown = 0, loading = false;
 
@@ -89,6 +106,14 @@ body{margin:0;font:13px system-ui,"Microsoft YaHei";display:flex;height:100vh;co
       + '<div class="file-size">' + m.file.size + '</div><a class="download-file" href="javascript:;">下载文件</a></div>';
     else if (m.img) c = '<img src="' + m.img + '" width="160" height="160" alt="">';
     else if (m.card) c = '<div class="item-card"><img src="' + QR + '" width="100" height="100" alt=""><div class="item-title">' + esc(m.card) + '</div></div>';
+    else if (m.invCard) c = '<div class="im-template-msg dx-msg-wrap"><div class="tpl-wrapper" data-tpl-id="4278793723922.PNM"><div view-name="FrameLayoutNG" style="position:relative;width:240px">'
+      + '<div view-name="ImageView" style="position:absolute;inset:0"><img src="' + BG + '" width="240" height="150" alt=""><img src="' + CLEAR + '" width="240" height="150" alt="" style="position:absolute;left:0;top:0"></div>'
+      + '<div view-name="LinearLayout" style="position:relative;padding:8px">'
+      + '<div view-name="TextView">请填写发票申请</div><div view-name="TextView">' + esc(m.invCard.title) + '</div>'
+      + '<div view-name="LinearLayout"><span>¥ </span><span>' + m.invCard.price + '</span><span> .00</span></div>'
+      + '<div view-name="TextView">共1件商品</div><div view-name="TextView">如您有发票需求，根据实际情况进行申请</div>'
+      + '<div class="dx-event-node" data-card-no="' + m.invCard.no + '" style="display:inline-block;border:1px solid #f50;padding:2px 10px;cursor:pointer">去申请</div>'
+      + '</div></div></div></div>';
     else c = '<pre class="edit">' + esc(m.text) + '</pre>';
     return '<div class="message-item-line"><div class="message-item' + (m.self ? ' self' : '') + '">'
       + '<div class="nick">' + (m.self ? '我' : esc(cur.name)) + '</div><div class="time">' + m.time + '</div>'
@@ -131,7 +156,12 @@ body{margin:0;font:13px system-ui,"Microsoft YaHei";display:flex;height:100vh;co
       const c = cur;
       setTimeout(() => { if (cur !== c) return; loading = false; shown = Math.min(shown + 4, c.msgs.length); renderMsgs(true); }, 500);
     });
+    // 开票卡片的「去申请」：只认完整点击（先按下再 click），和真实页面一样新开申请页
+    let downOn = null;
+    v.addEventListener('mousedown', e => { downOn = e.target.closest('.dx-event-node'); });
     v.addEventListener('click', e => {
+      const go = e.target.closest('.dx-event-node');
+      if (go) { if (downOn === go) { mock.cardClicks.push(go.dataset.cardNo); if (window.mockReport) window.mockReport('cardClick', go.dataset.cardNo, Date.now(), ''); window.open(APPLY(go.dataset.cardNo), '_blank'); } downOn = null; return; }
       const a = e.target.closest('a.download-file');
       if (!a) return;
       e.preventDefault();

@@ -136,7 +136,11 @@ assert.equal(I.status({ plat: { tab: 'issued', title: '企业-某大学', type: 
 assert.equal(I.status({ plat: { tab: 'issued', title: '个人' } }, want).key, 'wrong');
 assert.equal(I.status({ plat: { tab: 'issued', title: '企业-某大学', type: '普通发票-纸质', canDownload: false } }, want).key, 'paper');
 assert.equal(I.status({ plat: { tab: 'issued', title: '企业-某大学' }, got: [{ file: 'a.pdf' }] }, want).key, 'done');
-assert.equal(I.status({ plat: { tab: 'applying', progress: '开票中' } }, want).label, '平台开票中');
+// 「申请中」「开票中」合并成一种状态，进度原文、商家剩余处理时间放在说明里
+assert.equal(I.status({ plat: { tab: 'applying', progress: '开票中' } }, want).label, '已申请淘宝开票，等待商家开具');
+assert.equal(I.status({ plat: { tab: 'applying', progress: '申请中' } }, want).label, '已申请淘宝开票，等待商家开具');
+assert.ok(I.status({ plat: { tab: 'applying', progress: '开票中', date: '2026-10-01', remain: '商家还有8天57分37秒处理时间' } }, want).detail.includes('商家还有8天57分37秒处理时间'));
+assert.equal(I.status({ chat: I.chatAnalyze(chat.slice(0, 3).filter(m => m.self)) }, want).label, '已向卖家索要发票，等待回复');
 assert.equal(I.status({ chat: an }, want).key, 'replied');
 assert.equal(I.status({ chat: I.chatAnalyze(chat.slice(0, 3).filter(m => m.self)) }, want).key, 'asked');
 assert.equal(I.status({ plat: { tab: 'unapplied' } }, want).key, 'apply');
@@ -284,4 +288,43 @@ assert.equal(I.parseInvoiceText('电子发票 发票号码： 开票日期： 1 
   const two = I.renderMsg('', Object.assign({ orders: [{ no: '1', date: '2026-07-01', amount: 3.5 }, { no: '2', date: '2026-07-20', amount: 10 }], email: 'a@b.cn' }, v));
   assert.ok(two.startsWith('您好，订单 1（26.7.1，¥3.5）、2（26.7.20，¥10）需要开') && two.includes('邮箱 a@b.cn，内容'), two);
 }
-console.log('自检通过：读表（xml:space）、合并规则、日期格式、先抓后导表、关键词建议、发票逻辑、已整理发票去重、读发票 PDF 文字、补差价待定、同店默认实验室、下载发票按金额日期对单、给卖家的消息、详情页退款、zip 打包');
+// 开票卡片：卖家发来的「请填写发票申请」卡片单独记，不算图片；按商品标题归单；优先于「已向卖家索要」；提交过申请就算已进入淘宝开票流程
+{
+  const msgs = [
+    { self: true, time: '2026-09-01 10:00:00', text: '您好，需要开发票' },
+    { self: false, time: '2026-09-02 09:00:00', img: 'https://img.alicdn.com/bg.png', card: { title: '虚构 不锈钢镊子 防静电 尖头', price: '139.00' } },
+  ];
+  const a = I.chatAnalyze(msgs);
+  assert.equal(a.images.length, 0);                                                   // 卡片里的背景图不算卖家发来的图片
+  assert.deepEqual(a.cards, [{ time: '2026-09-02 09:00:00', title: '虚构 不锈钢镊子 防静电 尖头', price: '139.00' }]);
+  const peers = [{ no: '1', time: '2026-08-20', titles: ['虚构 不锈钢镊子 防静电 尖头 ESD-15'] }, { no: '2', time: '2026-08-25', titles: ['虚构 热风枪 858D'] }];
+  assert.equal(I.chatForOrder(a, '1', 2, '2026-08-20', peers).cards.length, 1);
+  assert.equal(I.chatForOrder(a, '1', 2, '2026-08-20', peers).cards[0].shared, false);
+  assert.equal(I.chatForOrder(a, '2', 2, '2026-08-25', peers).cards.length, 0);      // 标题对不上的那单不算
+  const st = I.status({ chat: I.chatForOrder(a, '1', 2, '2026-08-20', peers) }, want);
+  assert.equal(st.key, 'card');
+  assert.equal(st.label, '卖家发来开票申请入口');
+  // 两单标题都不像：都标「请核对」
+  const vague = [{ no: '1', time: '2026-08-20', titles: ['虚构 万用表'] }, { no: '2', time: '2026-08-25', titles: ['虚构 电烙铁'] }];
+  assert.equal(I.chatForOrder(a, '1', 2, '2026-08-20', vague).cards[0].shared, true);
+  assert.equal(I.status({ chat: I.chatForOrder(a, '1', 2, '2026-08-20', vague) }, want).shared, true);
+  // 卡片比下单还早：不是这单的
+  assert.equal(I.chatForOrder(a, '3', 1, '2026-09-10', [{ no: '3', time: '2026-09-10', titles: ['虚构 不锈钢镊子'] }]).cards.length, 0);
+  assert.equal(I.status({ chat: I.chatForOrder(a, '1', 2, '2026-08-20', peers), cardApplied: Date.now() }, want).key, 'applying');
+  assert.ok(I.titleScore('虚构 不锈钢镊子 防静电…', '虚构不锈钢镊子防静电尖头ESD-15') >= 0.8);
+}
+// 订单详情页上「退款完成」「已退款」也认（「退货退款成功」本身就含「退款成功」）
+assert.equal(I.detailRefund('某商品 退货退款成功 ￥12.25 x1 实付款 ￥12.25').refunded, true);
+assert.equal(I.detailRefund('某商品 退款完成 ￥12.25 x1').refunded, true);
+// manifest：天猫店的订单详情会被重定向到 trade.tmall.com，详情页脚本也要在那里运行；开票申请页、旺旺页里记新窗口地址的脚本
+{
+  const mf = JSON.parse(fs.readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
+  const scriptsFor = url => mf.content_scripts.filter(c => c.matches.some(m => new RegExp('^' + m.replace(/[.?+^$()|[\]{}\\]/g, '\\$&').replace(/\*/g, '.*') + '$').test(url))).flatMap(c => c.js);
+  assert.ok(scriptsFor('https://trade.tmall.com/detail/orderDetail.htm?biz_order_id=5190000000000000101&forward_action=').includes('extension/detail.js'));
+  assert.ok(scriptsFor('https://trade.taobao.com/trade/detail/trade_order_detail.htm?biz_order_id=5190000000000000101').includes('extension/detail.js'));
+  assert.ok(scriptsFor('https://invoice-ua.taobao.com/e-invoice/invoice-apply-online.html?disableNav=YES%2CYES&orderId=1&channel=card').includes('extension/apply-card.js'));
+  assert.ok(scriptsFor('https://invoice-ua.taobao.com/e-invoice/invoice-detail-tm.html?disableNav=YES&orderId=1').includes('extension/apply-card.js'));
+  assert.ok(scriptsFor('https://market.m.taobao.com/app/im/chat-core/index.html').includes('extension/chat-main.js'));
+  assert.equal(mf.version, '0.11.0');
+}
+console.log('自检通过：读表（xml:space）、合并规则、日期格式、先抓后导表、关键词建议、发票逻辑、已整理发票去重、读发票 PDF 文字、补差价待定、同店默认实验室、下载发票按金额日期对单、给卖家的消息、详情页退款、zip 打包、开票卡片、manifest 匹配');

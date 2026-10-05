@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
   "name": "订单分拣（实验版）",
-  "version": "0.10.0",
-  "description": "把淘宝订单分成实验室与个人，补商品图片、退款状态，整理发票。全部在本机处理；对淘宝的操作只读，下载发票要你点了才做。",
+  "version": "0.11.0",
+  "description": "淘宝订单报销整理：实验室采购分拣、发票申请与归档。数据仅在本机处理；对淘宝的提交、发送操作均需在主页确认后执行。",
   "action": {
-    "default_title": "打开订单分拣"
+    "default_title": "打开订单分拣主页"
   },
   "background": {
     "service_worker": "extension/background.js"
@@ -59,6 +59,27 @@
     },
     {
       "matches": [
+        "https://market.m.taobao.com/app/im/*"
+      ],
+      "all_frames": true,
+      "js": [
+        "extension/chat-main.js"
+      ],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://invoice-ua.taobao.com/e-invoice/invoice-apply-online.html*",
+        "https://invoice-ua.taobao.com/e-invoice/invoice-detail-tm.html*"
+      ],
+      "js": [
+        "extension/panel.js",
+        "extension/apply-card.js"
+      ]
+    },
+    {
+      "matches": [
         "https://i.taobao.com/my_itaobao/*",
         "http://127.0.0.1/tools/mock-batch.html*",
         "http://localhost/tools/mock-batch.html*"
@@ -90,6 +111,7 @@
     {
       "matches": [
         "https://trade.taobao.com/trade/detail/*",
+        "https://trade.tmall.com/detail/*",
         "http://127.0.0.1/tools/mock-detail.html*"
       ],
       "js": [

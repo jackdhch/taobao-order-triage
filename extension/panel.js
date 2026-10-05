@@ -1,15 +1,16 @@
 // 发票页、旺旺页共用的右下角小面板（补图的面板在 scraper 里，那个还要给控制台用法用，不共用）
 // opts.top：放在右上角（旺旺页右下角是「发送」按钮，卡片不能盖住它，2026-10-03 测出来的）
+// buttons：[[id, 文字, 悬停说明], …]
 window.otPanel = function (title, buttons, onClick, opts) {
   const el = document.createElement('div');
   el.setAttribute('style', 'position:fixed;right:16px;' + (opts && opts.top ? 'top:72px' : 'bottom:16px') + ';z-index:2147483647;background:#fff;color:#1f2a2e;'
     + 'border:1px solid #cfd6d3;border-radius:10px;box-shadow:0 8px 28px rgba(0,0,0,.18);padding:12px 14px;'
     + 'font:13px/1.5 system-ui,"PingFang SC","Microsoft YaHei",sans-serif;width:240px');
   el.innerHTML = '<div data-otp-full><div style="font-weight:600;margin-bottom:4px;display:flex;justify-content:space-between">订单分拣 · ' + title
-    + '<button data-otp-mini title="收起" style="font:inherit;border:0;background:none;cursor:pointer;color:#66727a;padding:0 2px">—</button></div>'
+    + '<button data-otp-mini title="收起面板" style="font:inherit;border:0;background:none;cursor:pointer;color:#66727a;padding:0 2px">—</button></div>'
     + '<div data-otp-status style="color:#66727a;font-size:12px;margin-bottom:10px"></div>'
-    + '<div data-otp-btns style="display:grid;gap:6px"></div><div style="color:#8a949a;font-size:11px;margin-top:8px">只读取页面内容，结果只存在本机扩展里，不上传。</div></div>'
-    + '<button data-otp-mini hidden style="font:inherit;font-weight:600;border:0;background:none;cursor:pointer;color:#1c6e8c;padding:0">订单分拣 ▴</button>';
+    + '<div data-otp-btns style="display:grid;gap:6px"></div><div style="color:#8a949a;font-size:11px;margin-top:8px">数据仅保存在本机扩展中，不上传。</div></div>'
+    + '<button data-otp-mini hidden title="展开面板" style="font:inherit;font-weight:600;border:0;background:none;cursor:pointer;color:#1c6e8c;padding:0">订单分拣 ▴</button>';
   document.body.appendChild(el);
   // 收起成一个小条：卡片会挡住淘宝页右下角的按钮（用户 2026-10-03）
   const full = el.querySelector('[data-otp-full]'), pill = el.querySelector('button[hidden][data-otp-mini]');
@@ -25,8 +26,8 @@ window.otPanel = function (title, buttons, onClick, opts) {
   });
   const st = el.querySelector('[data-otp-status]'), btns = el.querySelector('[data-otp-btns]');
   const setButtons = list => {
-    btns.innerHTML = list.map(([id, label]) =>
-      '<button data-otp="' + id + '" style="font:inherit;padding:7px 0;border-radius:6px;border:1px solid #1c6e8c;background:#1c6e8c;color:#fff;cursor:pointer">' + label + '</button>').join('');
+    btns.innerHTML = list.map(([id, label, tip]) =>
+      '<button data-otp="' + id + '" title="' + String(tip || label).replace(/"/g, '&quot;') + '" style="font:inherit;padding:7px 0;border-radius:6px;border:1px solid #1c6e8c;background:#1c6e8c;color:#fff;cursor:pointer">' + label + '</button>').join('');
   };
   setButtons(buttons);
   const det = document.createElement('div');
@@ -89,7 +90,7 @@ window.otSend = function (m, ms) {
 window.otTakeJob = function (kinds, run) {
   const me = Math.random().toString(36).slice(2);
   const take = async jobs => {
-    if (document.visibilityState !== 'visible') return;
+    if (document.visibilityState !== 'visible' || window.__otClosing) return;      // 马上要关的页面不再领活
     for (const kind of kinds) {
       const at = jobs && jobs[kind];
       if (!at || Date.now() - at > 120000) continue;
@@ -117,6 +118,12 @@ window.otRetryBlank = async function (kind) {
   await chrome.storage.local.remove('invClaim_' + kind);
   location.reload();
   return true;
+};
+
+// 插件开的干活页做完了：ms 毫秒后请后台关掉本页（后台只关自己开的干活页，用户自己打开的不关）；从现在起本页不再领新活
+window.otCloseLater = function (ms) {
+  window.__otClosing = true;
+  setTimeout(() => window.otSend({ type: 'closeMe' }).catch(() => {}), ms || 0);
 };
 
 // 页面是前端慢慢渲染出来的：等 ok() 成立（最多 ms 毫秒）
