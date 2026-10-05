@@ -63,6 +63,7 @@ tools/e2e-extras.py        离线：选文件夹读发票 PDF、核对重复、�
 tools/e2e-apply.py         离线：平台批量申请、按卖家的开票入口申请（mock-invoice-apply.html）、干活页用完关掉
 tools/index-invoices.py    （可选）用 pdftotext/pypdf 给发票文件夹做索引；插件里已能直接选文件夹读，这个留给命令行用
 tools/fixtures/            测试用的虚构二维码图、商品图
+tools/screenshots.py       生成 README 截图到 docs/screenshots/：示例数据 + 虚构开票记录（抬头「示例大学」），全新临时浏览器配置、不联网
 ```
 
 浏览器和 Node 共用同一份 js 模块（文件末尾按 `module.exports` / 全局变量两种方式导出）。
@@ -81,6 +82,7 @@ tools/fixtures/            测试用的虚构二维码图、商品图
   网页版（「补图片 → 复制抓取脚本」生成 `(orderTriageScraper 源码)({nos, from})`，index.html 用 `<script data-no-run>` 只取函数不运行）
 - 扩展测试：Playwright 的 Chromium 用 `launch_persistent_context(channel='chromium', args=['--load-extension=项目根目录'])`；
   manifest 里匹配了 `127.0.0.1/tools/mock-taobao.html`，模拟页会自动出面板
+- README 截图：界面改动较大时 `env -u TMPDIR python3 tools/screenshots.py` 重新生成（要 Pillow），生成后逐张看图，确认没有真实订单、店铺、抬头税号
 - 测完清掉测试浏览器里的 `localStorage`（键名 `orderTriage.app.v1`、`orderTriage.scraped.v1`），不要把用户数据留在浏览器里
 - 操作用户真实的淘宝页面（Claude in Chrome）前必须先征得用户同意；遇到滑块/验证码停下让用户自己处理，不要尝试绕过
 
