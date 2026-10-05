@@ -742,6 +742,17 @@
     persist(); derive(); render();
     toast('已撤销');
   }
+  // 快捷键 R：手动标记 / 取消退款。插件读不到退款的单（订单表仍写「交易成功」、订单列表上又找不到这单）由用户自己标
+  function toggleRefund(key) {
+    const x = derived.byKey.get(key);
+    if (!x) return;
+    const prev = S.refunds[key];
+    const cur = prev === true || (prev === undefined && N.refundState(x.l, x.o) === 'refunded');
+    S.refunds[key] = !cur;
+    undoStack.push({ type: 'ref', key, prev });
+    persist(); derive(); render();
+    toast((cur ? '已取消退款标记' : '已标记为退款') + '：' + x.l.title.slice(0, 18), true);
+  }
   // 一件买了几个、只退了其中几个：订单列表上只写「退款成功」看不出数量，用户说留下几个（0 = 全退了）
   function setKeep(key) {
     const x = derived.byKey.get(key);
@@ -1763,6 +1774,7 @@
       else if (k === '/') { e.preventDefault(); $('q').focus(); }
       else if (view.focus && (k === '1' || k === 'l')) setDecision(view.focus, 'lab');
       else if (view.focus && (k === '2' || k === 'p')) setDecision(view.focus, 'personal');
+      else if (view.focus && k === 'r') toggleRefund(view.focus);
       else if (view.focus && (k === '0' || e.key === 'Backspace')) { e.preventDefault(); setDecision(view.focus, 'auto', { stay: true }); }
     });
   }
