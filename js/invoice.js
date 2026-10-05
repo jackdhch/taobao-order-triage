@@ -273,12 +273,14 @@
     while ((m = re.exec(t))) {
       const seg = t.slice(prev, m.index), unit = money(m[1]), qty = +m[2];
       prev = m.index + m[0].length;
-      let refundedQty = 0;
+      let refundedQty = 0, refund = 0;
       if (/退款成功/.test(seg)) {
+        // refund：退了多少钱（没写金额的「退款成功」按整件全退，退款 = 单价 × 数量）
         const a = /退款成功[^￥¥]{0,12}[￥¥]([\d,]+\.\d{2})/.exec(seg);
+        refund = a ? money(a[1]) : Math.round(unit * qty * 100) / 100;
         refundedQty = a && unit > 0 ? Math.max(0, Math.min(qty, Math.round(money(a[1]) / unit))) : qty;
       }
-      lines.push({ unit, qty, refundedQty });
+      lines.push({ unit, qty, refundedQty, refund });
     }
     const items = lines.length;
     return { items, refundedItems: lines.filter(l => l.refundedQty > 0).length,

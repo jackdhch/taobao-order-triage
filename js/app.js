@@ -34,6 +34,7 @@
     // 已经有图也让淘宝页回来看看，不然之后的退款永远进不来；更早的不自动回看，要改就按 R 手动标
     const recent = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
     const live = table.filter(o => { const st = o.statusLive || o.status || '';
+      if (derived && !o.lines.some(l => { const x = derived.byKey.get(l.key); return x && effCat(x) !== 'personal'; })) return false;   // 个人用品不回看
       return !/交易关闭/.test(st) && (!/交易成功/.test(st) || (o.time || '').slice(0, 10) >= recent || o.lines.some(l => N.refundState(l, o) === 'refunding')); });
     // 要找卖家、却还不知道卖家旺旺名的单（之前补图时还没记旺旺名）：让淘宝页回去看一眼，补上旺旺名
     const noNick = derived ? invOrders().filter(x => !x.o.nick && ['ask', 'asked', 'replied'].includes(invStatus(x).key)).map(x => x.o) : [];
@@ -148,8 +149,14 @@
         const keep = S.partial && S.partial[l.key];
         let ref = mr === true ? 'refunded' : mr === false ? '' : N.refundState(l, o);
         let share = shares[i];
-        if (keep != null && ref === 'refunded' && l.qty > 1) { ref = ''; share = Math.round(share * keep / l.qty * 100) / 100; }
-        rows.push({ o, l, share, r, ref, past, keep: keep != null && !ref ? keep : null, refManual: mr !== undefined, auto: plain.get(l.id).cat });
+        // 用户 2026-10-05 的规则：「退款成功」要看退了多少钱——退款 ≥ 实付才算退掉；少于实付是部分退款，照样要开票，金额 = 实付 − 退款
+        // （退款金额来自订单详情页，见 inspectOrders；用户手动标过的以手动为准）
+        const ra = mr === undefined && S.refundAmt ? S.refundAmt[l.key] : null;
+        if (ra != null) {
+          if (ra + 0.005 < share) { ref = ''; share = Math.round((share - ra) * 100) / 100; }
+          else ref = 'refunded';
+        } else if (keep != null && ref === 'refunded' && l.qty > 1) { ref = ''; share = Math.round(share * keep / l.qty * 100) / 100; }
+        rows.push({ o, l, share, r, ref, past, keep: keep != null && !ref && ra == null ? keep : null, refAmt: ra != null && !ref ? ra : null, refManual: mr !== undefined, auto: plain.get(l.id).cat });
       });
     }
     const ignored = new Set(S.prefs.ignored || []);
@@ -491,6 +498,7 @@
     const refPill = x.ref === 'refunded' ? '<span class="pill p-ref">已退款</span>'
                   : x.ref === 'refunding' ? '<span class="pill p-ref">退款中</span>'
                   : x.ref === 'closed' ? '<span class="pill p-ref">交易关闭</span>'
+                  : x.refAmt != null ? '<span class="pill p-ref">部分退款：退了 ' + yuan(x.refAmt) + '，按 ' + yuan(x.share) + ' 报</span>'
                   : x.keep != null ? '<span class="pill p-ref">退了 ' + (x.l.qty - x.keep) + ' 个，留下 ' + x.keep + ' 个</span>' : '';
     return '<div class="line' + (x.ref ? ' is-ref' : '') + (view.focus === l.key ? ' focus' : '') + '" data-key="' + esc(l.key) + '">'
       + img
@@ -700,10 +708,13 @@
 
   // ── 发票 ──
   // 要报销的订单：至少有一件判成实验室且没退款。发票按整单开，金额用本单实付
+  // 要开发票的：实验室的、没退掉的、上次报销之后的；还要「交易成功」（用户 2026-10-05：右上角写交易成功的才报销，没确认收货的先不算），
+  // 补图时在订单列表里找不到的（多半是删进回收站了，没有交易争议）也不要发票
+  const doneDeal = o => /交易成功|交易完成/.test(o.statusLive || o.status || '');
   function invOrders() {
-    const by = new Map();
+    const by = new Map(), gone = new Set(X.goneNos || []);
     for (const x of derived.rows) {
-      if (effCat(x) !== 'lab' || x.ref || x.past) continue;
+      if (effCat(x) !== 'lab' || x.ref || x.past || !doneDeal(x.o) || gone.has(x.o.no)) continue;
       const g = by.get(x.o.no) || { o: x.o, lines: [] };
       g.lines.push(x.l); by.set(x.o.no, g);
     }
@@ -1047,7 +1058,7 @@
     const p = packPlan(seq0);
     $('pack-note').textContent = '找到 ' + p.rows.length + ' 张发票（' + p.rows.reduce((a, r) => a + r.xs.length, 0) + ' 单），合计 ' + yuan(p.total)
       + (p.miss.length ? '；还有 ' + p.miss.length + ' 单实验室订单没有发票文件，会列在汇总表最后' : '') + '。确认后存进下载文件夹的「订单分拣-报销」。';
-    $('pack-list').value = p.rows.map(r => r.name + '    ← ' + r.f.name + (r.warn ? '    ⚠ ' + r.warn : '')).join('\n') + (p.miss.length ? '\n\n还没有发票：\n' + p.miss.map(m => '  ' + (m.x.o.time || '').slice(0, 10) + ' ' + m.x.o.shop + ' ¥' + m.x.o.pay + ' ' + m.x.o.no + '（' + m.st.label + '）').join('\n') : '');
+    $('pack-list').value = p.rows.map(r => (r.amount > 200 ? '［低值品］' : '') + r.name + '    ← ' + r.f.name + (r.warn ? '    ⚠ ' + r.warn : '')).join('\n') + (p.miss.length ? '\n\n还没有发票：\n' + p.miss.map(m => '  ' + (m.x.o.time || '').slice(0, 10) + ' ' + m.x.o.shop + ' ¥' + m.x.o.pay + ' ' + m.x.o.no + '（' + m.st.label + '）').join('\n') : '');
     $('pack-go').disabled = !p.rows.length;
     return p;
   }
@@ -1080,9 +1091,9 @@
     const batch = ($('pack-name').value.trim() || '报销').replace(/[\\/:*?"<>|]+/g, '');
     const dir = batch + '_' + td + '_' + p.total.toFixed(2);
     const cell = v => { const s = String(v == null ? '' : v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
-    const lines = [['序号', '报销文件名', '原文件名', '下单日期', '店铺', '商品', '数量', '实付', '发票金额', '开票日期', '订单号', '备注'].join(',')];
+    const lines = [['序号', '报销文件名', '原文件名', '下单日期', '店铺', '商品', '数量', '实付', '发票金额', '开票日期', '订单号', '备注', '类别'].join(',')];
     for (const r of p.rows) for (const x of r.xs)
-      lines.push([r.seq, r.name, r.f.name, (x.o.time || '').slice(0, 10), x.o.shop, x.lines.map(l => l.title).join('；'), x.lines.reduce((a, l) => a + (l.qty || 1), 0), x.o.pay, r.amount.toFixed(2), r.date, x.o.no, r.warn || ''].map(cell).join(','));
+      lines.push([r.seq, r.name, r.f.name, (x.o.time || '').slice(0, 10), x.o.shop, x.lines.map(l => l.title).join('；'), x.lines.reduce((a, l) => a + (l.qty || 1), 0), x.o.pay, r.amount.toFixed(2), r.date, x.o.no, r.warn || '', r.amount > 200 ? '低值品（超过200元）' : ''].map(cell).join(','));
     lines.push(['合计', '', '', '', '', '', '', '', p.total.toFixed(2)].map(cell).join(','));
     if (p.miss.length) {
       lines.push('', '还没有发票的实验室订单');
@@ -1092,7 +1103,8 @@
     $('pack-go').disabled = true;
     toast('正在整理：' + p.rows.length + ' 张发票…');
     const entries = [];
-    for (const r of p.rows) entries.push({ name: dir + '/' + r.name, data: new Uint8Array(await r.f.arrayBuffer()) });
+    // 单张发票超过 200 元算低值品，单独放一个文件夹（用户 2026-10-05）
+    for (const r of p.rows) entries.push({ name: dir + '/' + (r.amount > 200 ? '低值品（单张超过200元）/' : '') + r.name, data: new Uint8Array(await r.f.arrayBuffer()) });
     entries.push({ name: dir + '/汇总.csv', data: csv });
     // 要写明文件类型：不写的话浏览器按内容猜，可能把 .pdf 存成 .txt（2026-10-05 测试里出现过）
     const mime = n => /\.pdf$/i.test(n) ? 'application/pdf' : /\.csv$/i.test(n) ? 'text/csv' : /\.xml$/i.test(n) ? 'application/xml' : 'application/octet-stream';
@@ -1233,12 +1245,12 @@
           o.lines.forEach(l => { S.refunds[l.key] = true; l.refund = l.refund || '退款成功'; });
           refunded++;
         } else if (d.lines && d.lines.length === o.lines.length) {
-          // 一件买了几个只退了几个：按退款金额算出留下几个（详情页上的商品顺序和订单里一样）
+          // 部分退款：记下每件退了多少钱（详情页上的商品顺序和订单里一样），报销金额 = 实付 − 退款
           d.lines.forEach((dl, i) => {
             const l = o.lines[i];
-            if (dl.refundedQty > 0 && dl.refundedQty < dl.qty) {
+            if (dl.refund > 0) {
               l.refund = l.refund || '退款成功';
-              (S.partial = S.partial || {})[l.key] = dl.qty - dl.refundedQty;
+              (S.refundAmt = S.refundAmt || {})[l.key] = dl.refund;
               partial++;
             }
           });
@@ -1250,7 +1262,7 @@
     await chrome.storage.local.remove('nickWant');
     persist(); derive(); render();
     if (refunded || partial) toast((refunded ? refunded + ' 单在订单详情页上是整单退款成功的，已标成退款，不再要发票' : '')
-      + (refunded && partial ? '；' : '') + (partial ? partial + ' 件是买了几个只退了一部分，按退款金额算好了留下几个' : ''));
+      + (refunded && partial ? '；' : '') + (partial ? partial + ' 件是部分退款，记下了退款金额，报销按实付减退款算' : ''));
     return refunded;
   }
   const resolveNicks = os => inspectOrders(os.filter(o => !o.nick));
@@ -1302,8 +1314,8 @@
     // 要看卖家回复、却不知道卖家旺旺名的，先去订单详情页把旺旺名找出来（不然旺旺里找不到会话）
     const miss = invOrders().filter(x => !x.o.nick && ['ask', 'asked', 'replied'].includes(invStatus(x).key)).map(x => x.o);
     if (miss.length) await resolveNicks(miss);
-    const part = [...new Set(derived.rows.filter(x => !x.past && x.ref === 'refunded' && x.l.qty > 1 && (S.partial || {})[x.l.key] == null
-      && (S.decisions[x.l.key] || x.r.cat) === 'lab').map(x => x.o))];
+    const part = [...new Set(derived.rows.filter(x => !x.past && N.refundState(x.l, x.o) === 'refunded' && S.refunds[x.l.key] === undefined
+      && (S.refundAmt || {})[x.l.key] == null && (S.decisions[x.l.key] || x.r.cat) === 'lab').map(x => x.o))];
     if (part.length) await inspectOrders(part);
     chain = 'sync';
     invJob('sync', INV_URL);
@@ -1592,8 +1604,8 @@
     chrome.storage.local.get(['scraped', 'olderDone']).then(r => { mergeFromExt(r.scraped); olderFinished(r.olderDone); });
     chrome.storage.local.set({ want: wantList() });
     // 读回同步结果后再写一次 invWant：刚打开时还没读回来，所有单都算「需找卖家」，旺旺要看的店会多出一大堆
-    chrome.storage.local.get(['invSync', 'chatScan', 'dlDone', 'askSent', 'vipSent']).then(r => {
-      Object.assign(X, r, { dlDone: r.dlDone || {}, askSent: r.askSent || {}, vipSent: r.vipSent || {} });
+    chrome.storage.local.get(['invSync', 'chatScan', 'dlDone', 'askSent', 'vipSent', 'goneNos']).then(r => {
+      Object.assign(X, r, { dlDone: r.dlDone || {}, askSent: r.askSent || {}, vipSent: r.vipSent || {}, goneNos: r.goneNos || [] });
       derive();                                       // 「已开过发票」会影响分类，读回来要重算
       chrome.storage.local.set({ invWant: invWant() });
       render();
@@ -1609,7 +1621,7 @@
     chrome.storage.onChanged.addListener((ch, area) => {
       if (area !== 'local') return;
       let hit = false;
-      for (const k of ['invSync', 'chatScan', 'dlDone', 'askSent', 'vipSent']) if (ch[k]) { X[k] = ch[k].newValue || (['dlDone', 'askSent', 'vipSent'].includes(k) ? {} : null); hit = true; }
+      for (const k of ['invSync', 'chatScan', 'dlDone', 'askSent', 'vipSent', 'goneNos']) if (ch[k]) { X[k] = ch[k].newValue || (['dlDone', 'askSent', 'vipSent'].includes(k) ? {} : k === 'goneNos' ? [] : null); hit = true; }
       if (ch.applyResult && ch.applyResult.newValue) onApplyResult(ch.applyResult.newValue);
       if (ch.dlDone) verifyDownloads();
       if (hit && S.orders.length) {

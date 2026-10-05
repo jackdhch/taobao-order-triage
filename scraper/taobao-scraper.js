@@ -346,7 +346,11 @@ function orderTriageScraper(want, opts) {
       if (why === 'verify') alert('页面出现了安全验证，请手动完成后再点「开始补图片」继续。');
       else if (!seen) console.warn('[订单分拣] 翻过的页一单都没认出来 —— 可能是淘宝改版了，请把这句话和页面截图发给维护者');
       // 实测漏掉的都是用户自己删掉的订单（删掉的连按订单号都搜不到），所以不再换列表重翻
-      else if (W && missing().length) console.log('[订单分拣] 翻完了，还差 ' + missing().length + ' 单没在订单列表里出现（多半是已删除的订单）：', missing());
+      else if (W && missing().length) {
+        console.log('[订单分拣] 翻完了，还差 ' + missing().length + ' 单没在订单列表里出现（多半是已删除的订单）：', missing());
+        // 翻完整个列表都没出现的：用户删进回收站的订单（没有交易争议），主页不再为它要发票
+        if (why !== 'verify' && opts.gone) opts.gone(missing().filter(no => !W.refresh.has(no)));
+      }
       if (W && W.older && seen && (why === 'past' || why === 'end') && opts.olderDone) await opts.olderDone(W.older.from);
     } finally { if (id === runId) { running = false; render(); } }
   }

@@ -253,13 +253,15 @@ assert.equal(I.parseInvoiceText('电子发票 发票号码： 开票日期： 1 
 // 订单详情页判断退款（照真实页面文字的排列，内容虚构）
 {
   const one = '虚构热缩管 套装 黑色 内径10mm[不带胶] 退货宝 7天无理由退货 加入购物车售后成功 退款成功 平台支持退款 ￥9.90 ￥10.00 x1 付款详情 商品总价 ￥10.00 运费 ￥0.00 实付款 ￥9.90';
-  assert.deepEqual(I.detailRefund(one), { items: 1, refundedItems: 1, refunded: true, lines: [{ unit: 9.9, qty: 1, refundedQty: 1 }] });
+  assert.deepEqual(I.detailRefund(one), { items: 1, refundedItems: 1, refunded: true, lines: [{ unit: 9.9, qty: 1, refundedQty: 1, refund: 9.9 }] });
   const two = '商品A 退款成功 ￥10.00 x1 商品B 申请售后 ￥5.00 ￥6.00 x2 实付款 ￥20.00';
-  assert.deepEqual(I.detailRefund(two), { items: 2, refundedItems: 1, refunded: false, lines: [{ unit: 10, qty: 1, refundedQty: 1 }, { unit: 5, qty: 2, refundedQty: 0 }] });
+  assert.deepEqual(I.detailRefund(two), { items: 2, refundedItems: 1, refunded: false, lines: [{ unit: 10, qty: 1, refundedQty: 1, refund: 10 }, { unit: 5, qty: 2, refundedQty: 0, refund: 0 }] });
   // 部分退款（照真实页面文字的排列，内容虚构：买 3 个退 2 个）
   const km = '虚构舵机 黑色 退货宝 极速退款 7天无理由退货 加入购物车申请售后 退款成功 支付宝¥20.00 ￥10.00 ￥10.50 x3 付款详情 商品总价 ￥31.50';
-  assert.deepEqual(I.detailRefund(km), { items: 1, refundedItems: 1, refunded: false, lines: [{ unit: 10, qty: 3, refundedQty: 2 }] });
+  assert.deepEqual(I.detailRefund(km), { items: 1, refundedItems: 1, refunded: false, lines: [{ unit: 10, qty: 3, refundedQty: 2, refund: 20 }] });
   assert.equal(I.detailRefund('交易成功 ￥22.00 x1').refunded, false);
+  // 部分退款（虚构）：实付 20、退了 2 元（价保之类）→ 不算退掉，退款金额 2
+  assert.deepEqual(I.detailRefund('某商品 申请售后 退款成功 支付宝¥2.00 ￥20.00 ￥22.00 x1 付款详情').lines, [{ unit: 20, qty: 1, refundedQty: 0, refund: 2 }]);
 }
 // zip：CRC32 对得上标准值；打出来的包结构对（文件数、中文名用 UTF-8 标志）
 {

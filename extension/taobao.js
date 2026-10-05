@@ -7,6 +7,7 @@ chrome.storage.local.get(['want', 'scraped']).then(({ want, scraped }) => {
     sync: (m, replace) => replace ? chrome.storage.local.set({ scraped: m })
       : chrome.runtime.sendMessage({ type: 'scrapedMerge', m }),
     olderDone: from => chrome.storage.local.set({ olderDone: { from, at: Date.now() } }),
+    gone: nos => chrome.storage.local.set({ goneNos: nos }),
   });
 });
 chrome.storage.onChanged.addListener(ch => {
