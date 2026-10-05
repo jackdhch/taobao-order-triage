@@ -161,8 +161,9 @@
   function status(ctx, want) {
     const p = ctx.plat, c = ctx.chat;
     if (ctx.refunded) return { key: 'none', label: '无需开票（已退款或关闭）' };
-    if (ctx.have) return { key: 'have', label: '已整理', detail: '已整理的发票中已有：' + ctx.have.file };
-    if (ctx.got && ctx.got.length) return { key: 'done', label: '已下载', detail: ctx.got.map(g => g.file).join('、') };
+    // files：说明里要列出的文件名（主页逐个单行显示、放不下用省略号，悬停看全名；不从名字中间折断）
+    if (ctx.have) return { key: 'have', label: '已整理', detail: '已整理的发票中已有：' + ctx.have.file, files: [ctx.have.file] };
+    if (ctx.got && ctx.got.length) return { key: 'done', label: '已下载', detail: ctx.got.map(g => g.file).join('、'), files: ctx.got.map(g => g.file) };
     if (p && p.tab === 'issued') {
       const bad = want && want.title && p.title && !p.title.includes(want.title);
       if (bad) return { key: 'wrong', label: '已开票，抬头不符', detail: p.title + ' / ' + (p.type || '') };
@@ -176,7 +177,7 @@
     // 按卖家发来的开票卡片提交过申请（extension/apply-card.js 记下的）：下次同步「全部发票」时会出现在「申请中」
     if (ctx.cardApplied) return { key: 'applying', label: LABEL.applying, detail: '已通过卖家的开票入口提交申请 · ' + new Date(ctx.cardApplied).toLocaleDateString('zh-CN') };
     const sh = c && c.shared ? SHARED : '';
-    if (c && c.files && c.files.length) return { key: 'replied', label: '卖家已发送文件' + sh, detail: c.files.map(f => f.name).join('、'), shared: !!sh };
+    if (c && c.files && c.files.length) return { key: 'replied', label: '卖家已发送文件' + sh, detail: c.files.map(f => f.name).join('、'), files: c.files.map(f => f.name), shared: !!sh };
     if (c && c.cards && c.cards.length) {
       const s2 = c.cards.some(k => k.shared) ? SHARED : '';
       return { key: 'card', label: LABEL.card + s2, detail: c.cards.map(k => String(k.time).slice(0, 16) + ' ' + k.title + (k.price ? ' ¥' + k.price : '')).join('；'), shared: !!s2 };

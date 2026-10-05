@@ -51,7 +51,7 @@ js/xlsx-lite.js            零依赖 xlsx/csv 读取（DecompressionStream 解 z
 js/normalize.js            列名别名 → 统一订单结构；一单多件续行合并；抓取数据按订单号合并；退款判断
 js/classify.js             关键词打分 + 同店铺/同商品记忆；classifyAll 两遍扫描（补邮费链接跟随店铺）；suggest 根据手动判断推荐增删词
 js/app.js                  界面、状态（localStorage）、导入订单表、键盘操作。界面是一条线的 8 步（flowSteps），顶上进度条（renderDash），
-                           不常用的收在顶栏「更多」；不提供导出、不提供改词表（用户 2026-10-05 要求去掉多余的自由度）
+                           不常用的收在顶栏「更多」；不提供导出（「备份数据」除外）、不提供改词表（用户 2026-10-05 要求去掉多余的自由度）
 js/sample.js               虚构示例数据（给没有数据的人试用）
 scraper/taobao-scraper.js  在淘宝「已买到的宝贝」页控制台运行：按文字特征定位订单块，抓图片/逐件退款，可自动翻页，存本地 JSON
 tools/eval.mjs             node 评估分类效果：node tools/eval.mjs [订单表] [labels.json]
@@ -89,7 +89,9 @@ tools/screenshots.py       生成 README 截图到 docs/screenshots/：示例数
 ## 界面约定（用户 2026-10-05）
 
 - 界面文字一律中文、正式、简洁，不用「你」「帮你」这类口语；每个按钮和可点元素都有 title 悬停说明
-- 发票状态的名称在 js/invoice.js 的 LABEL；颜色七种（app.js TONE + index.html 的 --*-ink/--*-bg 与 .inv-legend 图例）
+- 发票状态的名称在 js/invoice.js 的 LABEL；颜色七种（app.js TONE + index.html 的 --*-ink/--*-bg），进度区小圆点和 .inv-legend 图例用实心色块 --*-sw；
+  灰色「无需开票」在发票栏不出现，图例里没有它
+- 备份 / 恢复在顶栏「更多」（app.js backupData / restoreData，文件格式见那里的注释）；恢复时丢掉的临时键列在 BACKUP_SKIP，新增「进行中的任务」类存储键时要加进去
 - 插件开的干活页按 tab.id 记在 background.js 的 workTabs，做完由页面发 closeMe 关掉；用户自己点开的页面不关；旺旺页只复用一个
 - 发给卖家的消息模板（js/invoice.js DEFAULT_TEMPLATE）、extension/vip.js 里发给客服的话术是用户定的，不要改
 

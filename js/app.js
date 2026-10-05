@@ -8,6 +8,7 @@
   const TAOBAO = 'https://buyertrade.taobao.com/trade/itemlist/list_bought_items.htm';
   const $ = id => document.getElementById(id);
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const pad2 = n => String(n).padStart(2, '0');
   const yuan = n => n == null ? '—' : '¥' + n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   // ── 状态 ──
@@ -21,8 +22,10 @@
   const view = { cat: 'unsure', q: '', from: '', to: '', focus: null, step: null };   // 打开先看「待定」：要你动手的在这里
   let derived = null;           // 每次数据/判断变化后重算
   let undoStack = [];
+  let restoring = false;        // 正在从备份恢复：页面马上刷新，期间不再写存储，免得旧数据盖掉刚恢复的
 
   function persist() {
+    if (restoring) return;
     try { localStorage.setItem(STORE, JSON.stringify(S)); }
     catch (e) { toast('本机存储写入失败，可能是浏览器存储空间不足'); }
     if (EXT) chrome.storage.local.set({ want: wantList() });
@@ -165,7 +168,7 @@
       });
     }
     derived = { rows, byKey: new Map(rows.map(x => [x.l.key, x])) };
-    if (EXT) chrome.storage.local.set({ invWant: invWant() });      // 判断一变，要报销的订单就跟着变
+    if (EXT && !restoring) chrome.storage.local.set({ invWant: invWant() });      // 判断一变，要报销的订单就跟着变
   }
 
   const effCat = x => x.r.cat;                         // lab / personal / unsure
@@ -405,7 +408,8 @@
       const t = invTone(x.o, st);
       if (WAIT_TONES.includes(t)) tone.wait++; else if (t in tone) tone[t]++;
     }
-    const dot = (t, label, v) => '<span><i style="background:var(--' + t + '-ink)"></i>' + label + ' <b class="num">' + v + '</b></span>';
+    // 圆点用实心色块色（--*-sw），与发票栏图例一致：需处理红、等待中黄、待下载紫
+    const dot = (t, label, v) => '<span><i style="background:var(--' + t + '-sw)"></i>' + label + ' <b class="num">' + v + '</b></span>';
     el.className = 'dash';
     el.innerHTML = sortCell
       + cell('invoice', '发票（已取得 / 应开）', got + ' <small>/ ' + total + ' 单</small>',
@@ -423,7 +427,8 @@
     const has = S.orders.length > 0;
     $('empty').hidden = has;
     $('main').hidden = !has;
-    $('more').hidden = !has;
+    // 「更多」一直在：没有数据时也要能从备份恢复；只是要有数据才有意义的几项先藏起来
+    for (const el of document.querySelectorAll('#more .need-data')) el.hidden = !has;
     if (!has) return;
     renderDash();
     renderSummary();
@@ -462,17 +467,21 @@
     }
     const since = sinceInfo(), times = S.orders.map(o => (o.time || '').slice(0, 10)).filter(Boolean).sort();
     const ic = EXT ? invCounts() : null;
-    const sinceText = since.mode === 'auto' ? '截至 ' + since.date + '（自动识别）' : since.mode === 'date' ? '截至 ' + since.date + '（手动指定）'
-      : since.mode === 'none' ? '从第一单开始' : '未设置';
+    // 步骤格里的第二行要短（八步排一行）：识别方式只放在悬停说明和下方的详细说明里；同一年的日期范围后一个日期省掉年份
+    const sinceText = since.mode === 'auto' || since.mode === 'date' ? '截至 ' + since.date : since.mode === 'none' ? '从第一单开始' : '未设置';
+    const sinceTip = since.mode === 'auto' ? '，自动识别' : since.mode === 'date' ? '，手动指定' : '';
+    const t0 = times[0] || '', t1 = times[times.length - 1] || '';
+    const range = t0 === t1 ? t0 : t0.slice(0, 4) === t1.slice(0, 4) ? t0 + ' 至 ' + t1.slice(5) : t0 + ' 至 ' + t1;
     const sinceNote = since.mode === 'auto' ? '自动识别：上次报销截至 ' + since.date + ' ' + (since.shop || '') + ' 的订单，此前 ' + past + ' 件不再判断。'
       : since.mode === 'date' ? since.date + ' 及以前的 ' + past + ' 件不再判断。' : since.mode === 'none' ? '订单表中的全部订单均需判断。' : '';
     const pack = EXT ? packState() : null;
     return [
       { id: 'import', title: '导入订单表', done: S.orders.length > 0,
-        text: S.orders.length ? S.orders.length + ' 单 · ' + times[0] + ' 至 ' + times[times.length - 1] : '未导入',
+        text: S.orders.length ? S.orders.length + ' 单 · ' + range : '未导入',
+        tip: S.orders.length ? S.orders.length + ' 单，' + t0 + ' 至 ' + t1 : '',
         help: '在淘宝「已买到的宝贝」页点击「导出订单」，导入下载的 xlsx。有新订单时重新导入，已有判断保留。',
         acts: pb('data-flow="import"', '导入订单表', '选择从淘宝导出的订单表（xlsx 或 csv）') },
-      { id: 'since', title: '上次报销截止点', done: ['auto', 'date', 'none'].includes(since.mode), text: sinceText,
+      { id: 'since', title: '上次报销截止点', done: ['auto', 'date', 'none'].includes(since.mode), text: sinceText, tip: sinceText + sinceTip,
         help: sinceNote + '截止订单及更早的订单不再判断。可导入已整理的发票文件夹自动识别，或手动指定日期。',
         acts: pb('data-flow="have-dir"', '导入已整理的发票文件夹', '选择以往整理好的发票文件夹：读取每张 PDF 的号码、日期、金额，识别已报销的订单', since.mode === 'unknown')
           + '<label class="flow-date">或手动指定：截至 <input type="date" data-flow="since-date" title="上次报销截止的日期，此日及以前的订单不再判断" value="' + (since.mode === 'date' ? since.date : '') + '"></label>'
@@ -518,7 +527,7 @@
     const show = sel >= 0 ? sel : (cur >= 0 ? cur : steps.length - 1);
     const d = steps[show];
     $('summary').innerHTML = '<ol class="flow">' + steps.map((x, i) =>
-        '<li class="' + (x.done ? 'is-done' : i === cur ? 'is-cur' : '') + (i === show ? ' is-sel' : '') + '" data-step="' + i + '" role="button" tabindex="0" title="第 ' + (i + 1) + ' 步：' + x.title + '">'
+        '<li class="' + (x.done ? 'is-done' : i === cur ? 'is-cur' : '') + (i === show ? ' is-sel' : '') + '" data-step="' + i + '" role="button" tabindex="0" title="第 ' + (i + 1) + ' 步：' + x.title + '（' + esc(x.tip || x.text) + '）">'
         + '<span class="flow-h"><span class="flow-n">' + (x.done ? '✓' : i + 1) + '</span><span class="flow-t">' + x.title + '</span></span>'
         + '<span class="flow-s">' + esc(x.text) + '</span></li>').join('') + '</ol>'
       + '<div class="flow-detail"><div class="fd-text"><div class="fd-title">第 ' + (show + 1) + ' 步　' + d.title
@@ -842,7 +851,7 @@
     if (/\.json$/i.test(name)) {
       const d = JSON.parse(new TextDecoder().decode(buf));
       if (d && d.format === 'order-triage-project') {
-        if (S.orders.length && !confirm('载入项目文件将替换当前全部订单和判断，是否继续？')) return name + '：已取消';
+        if (S.orders.length && !confirm('载入项目文件将替换当前全部订单和判断，是否继续？\n\n建议先备份数据（更多 → 备份数据）。')) return name + '：已取消';
         S = Object.assign({ orders: [], decisions: {}, refunds: {}, rules: null, prefs: S.prefs, invoice: S.invoice, invFiles: {}, haveIdx: S.haveIdx || [] }, d.state);
         return name + '：已载入项目（' + S.orders.length + ' 单）';
       }
@@ -1016,6 +1025,7 @@
   }
   // 发票状态的颜色（图例在发票栏顶上，见 index.html .inv-legend）：
   //   ok 绿 已取得 / info 紫 已开具待取得 / plat 蓝 已进入淘宝开票流程 / wait 黄 等待卖家回复 / urge 青 已由淘宝客服督促 / bad 红 需处理 / off 灰 无需开票
+  //   off 只给退款的单用，invOrders 已排除退款商品，发票栏里实际不出现，所以图例里没有它
   const TONE = { have: 'ok', done: 'ok', ready: 'info', paper: 'info', replied: 'info', applying: 'plat', asked: 'wait', urged: 'urge',
                  card: 'bad', apply: 'bad', ask: 'bad', wrong: 'bad', check: 'bad', none: 'off' };
   const WAIT_TONES = ['plat', 'wait', 'urge'];
@@ -1057,6 +1067,13 @@
     else if (kind === 'complaint') openUrl(complaintUrl(o));
     else if (kind === 'batch') openUrl(BATCH_URL);
   }
+  // 状态下面的说明：文件名逐个单行（放不下用省略号，悬停看全名）；有悬停详情的（督促过的）只显示一行要点
+  function stDetail(s) {
+    const one = (t, tip) => '<div class="detail one" title="' + esc(tip || t) + '">' + esc(t) + '</div>';
+    if (s.files && s.files.length) return s.files.map(f => one(f)).join('') + (s.checks ? '<div class="detail">' + esc(s.checks) + '</div>' : '');
+    if (s.tip) return one(s.detail, s.tip);
+    return s.detail ? '<div class="detail">' + esc(s.detail) + '</div>' : '';
+  }
   const invOpen = { todo: true, ready: true, done: false };      // 已下载的默认收起
   function renderInvoice() {
     if (!EXT) {
@@ -1084,7 +1101,7 @@
     if (!list.length) { $('list').innerHTML = '<div class="none">没有需报销的实验室订单</div>'; return; }
     // 几张表列宽一样，上下对得齐；订单号 19 位一行放下
     const HEAD = '<div class="tbl-wrap"><table class="inv-table"><colgroup><col style="width:72px"><col style="width:104px"><col style="width:200px"><col>'
-      + '<col style="width:92px"><col style="width:230px"><col style="width:190px"></colgroup><thead><tr><th></th><th>下单日期</th><th>店铺 / 订单号</th><th>实验室商品</th><th style="text-align:right">实付</th><th>发票</th><th>操作</th></tr></thead><tbody>';
+      + '<col style="width:92px"><col style="width:250px"><col style="width:180px"></colgroup><thead><tr><th></th><th>下单日期</th><th>店铺 / 订单号</th><th>实验室商品</th><th style="text-align:right">实付</th><th>发票</th><th>操作</th></tr></thead><tbody>';
     const rowHtml = x => {
         const o = x.o, s = st.get(o.no), c = chatOf(o);
         const acts = [];
@@ -1101,8 +1118,7 @@
           + '<td class="who"><div class="shop">' + esc(o.shop || '未知店铺') + wwBtn(o) + '</div><div class="detail ono">' + esc(o.no) + '</div></td>'
           + '<td>' + detailA(o.no, esc(t.length > 26 ? t.slice(0, 26) + '…' : t)) + (x.lines.length > 1 ? ' 等 ' + x.lines.length + ' 件' : '') + '</td>'
           + '<td class="amt num">' + yuan(o.pay) + '</td>'
-          + '<td class="st-cell">' + stPill(o, s)
-          + (s.detail ? '<div class="detail">' + esc(s.detail) + '</div>' : '') + imgs + '</td>'
+          + '<td class="st-cell">' + stPill(o, s) + stDetail(s) + imgs + '</td>'
           + '<td><div class="acts">' + acts.join('') + '</div></td></tr>';
     };
     const SECT = [['todo', '未开票'], ['ready', '已开票，待下载'], ['done', '已下载']];
@@ -1447,12 +1463,18 @@
   }
   // 找淘宝客服督促过（vipSent）、还在等的单（已进入淘宝开票流程 / 已向卖家索要）：单独一个状态「已由淘宝客服督促」（用户 2026-10-05）。
   // base 记着原来在等谁，提醒和「请淘宝客服督促」按原来的等待时间算；别的还没到手的状态只在说明里注明督促过
+  const URGED_BASE = { applying: '已申请淘宝开票', asked: '已向卖家索要发票' };
   function withVip(o, st) {
     const t = (X.vipSent || {})[o.no];
     if (!t || INV_GROUP[st.key] === 'done' || INV_GROUP[st.key] === 'ready') return st;
     const note = new Date(t).toLocaleDateString('zh-CN') + ' 已请淘宝客服督促';
-    if (st.key === 'applying' || st.key === 'asked')
-      return { key: 'urged', base: st.key, label: I.LABEL.urged, detail: note + (st.detail ? ' · 原状态：' + st.label + '（' + st.detail + '）' : ' · 原状态：' + st.label), since: st.detail };
+    // 说明只留一行要点（「10-05 已督促 · 原状态：已向卖家索要发票」），原状态的进度原文等细节放进悬停说明
+    if (st.key === 'applying' || st.key === 'asked') {
+      const d = new Date(t), md = pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+      return { key: 'urged', base: st.key, label: I.LABEL.urged, since: st.detail,
+               detail: md + ' 已督促 · 原状态：' + URGED_BASE[st.key],
+               tip: note + ' · 原状态：' + st.label + (st.detail ? '（' + st.detail + '）' : '') };
+    }
     return Object.assign({}, st, { detail: (st.detail ? st.detail + ' · ' : '') + note });
   }
   function withCheck(o, st) {
@@ -1460,7 +1482,7 @@
     const got = (X.dlDone[o.no] || []).concat(S.invFiles[o.no] || []);
     const notes = got.map(g => (S.fileChecks || {})[g.file]).filter(Boolean)
       .map(c => (CHECK_NOTE[c.kind] || '') + (c.kind === 'short' ? '（少 ¥' + c.short + '）' : '') + (c.amount != null && c.kind !== 'error' ? '（¥' + c.amount + '，' + (c.date || '日期未读取') + '）' : '') + (c.dup ? '；与已整理的 ' + c.dup + ' 为同一张' : ''));
-    return notes.length ? Object.assign({}, st, { detail: st.detail + ' · ' + notes.join('；') }) : st;
+    return notes.length ? Object.assign({}, st, { detail: st.detail + ' · ' + notes.join('；'), checks: notes.join('；') }) : st;
   }
 
   // 打开每一单的订单详情页（extension/detail.js）：读旺旺图标上的卖家旺旺名，并看商品是不是已经退款成功了。
@@ -1652,6 +1674,88 @@
     $('dlg-settings').close(); toast('设置已保存');
   }
 
+  // ── 备份数据 / 从备份恢复（用户 2026-10-05）：全部数据只在本机浏览器里，删掉扩展或清浏览器数据就没了 ──
+  // 备份文件：{ app: 'orderTriage', kind: 'backup', format: 1, version, at, localStorage: { 'orderTriage.*': 原样字符串 }, storage: chrome.storage.local 全部 }
+  // 格式有不兼容的改动时 format 加一；旧插件见到不认识的 format 就拒绝，不去猜
+  const VERSION = EXT ? chrome.runtime.getManifest().version : '0.12.0';     // 网页版读不到 manifest，selftest 核对两处一致
+  const BACKUP_FORMAT = 1;
+  // 恢复时丢掉的扩展存储键：进行中的任务、页面领活记录、标签页编号这类临时状态。恢复回去的话，开着的淘宝页一读到就会接着干活
+  // （重新提交开票申请、给卖家发消息、找客服督促、下载），标签页编号也早已失效。
+  //   applyJob 平台批量开票任务（extension/batch.js）      applyResult 批量开票的一次性结果通知
+  //   cardJobs / cardRun 按开票入口申请的任务（chat.js、apply-card.js）
+  //   chatQueue 旺旺页的扫描 / 发消息 / 下载进度（chat.js） chatAfter 平台票下完后接着开旺旺页下载的信号（background.js）
+  //   dlJobs 待下载的发票（invoice-list.js、chat.js）      invJobs 主页派给淘宝页的活   invClaim_* 页面领活记录（panel.js）
+  //   otReload_* 空白页自动刷新记录（panel.js）            jobTabs 派活开的标签页编号（background.js）
+  //   nickWant 待读卖家旺旺名的订单（detail.js）           vipJob 请淘宝客服督促的任务（vip.js）
+  //   olderDone 「订单表之前的订单已提取完」的一次性信号  autoLast 每日自动处理上次运行的日期（恢复时记成今天，免得一恢复就自动开始）
+  const BACKUP_SKIP = ['applyJob', 'applyResult', 'cardJobs', 'cardRun', 'chatQueue', 'chatAfter', 'dlJobs', 'invJobs', 'jobTabs', 'nickWant', 'vipJob', 'olderDone', 'autoLast'];
+  const skipKey = k => BACKUP_SKIP.includes(k) || /^(invClaim_|otReload_)/.test(k);
+  const OWN_LS = k => /^orderTriage\./.test(k);
+  const stampOf = d => d.getFullYear() + pad2(d.getMonth() + 1) + pad2(d.getDate()) + '-' + pad2(d.getHours()) + pad2(d.getMinutes());
+  const newerVer = (a, b) => { const x = String(a).split('.').map(Number), y = String(b).split('.').map(Number);
+    for (let i = 0; i < Math.max(x.length, y.length); i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0);
+    return false; };
+  async function backupData() {
+    const ls = {};
+    for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (OWN_LS(k)) ls[k] = localStorage.getItem(k); }
+    const now = new Date();
+    const b = { app: 'orderTriage', kind: 'backup', format: BACKUP_FORMAT, version: VERSION, at: now.toISOString(), localStorage: ls,
+                storage: EXT ? await chrome.storage.local.get(null) : {} };
+    const name = '订单分拣-备份-' + stampOf(now) + '.json';
+    const blob = new Blob([JSON.stringify(b)], { type: 'application/json' });
+    if (EXT) await saveBlob(blob, '订单分拣-备份/' + name);
+    else {
+      const a = document.createElement('a'), url = URL.createObjectURL(blob);
+      a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    }
+    toast('已备份 ' + S.orders.length + ' 单、' + Object.keys(S.decisions || {}).length + ' 条判断：' + (EXT ? '下载文件夹「订单分拣-备份」中的 ' : '下载文件夹中的 ') + name);
+  }
+  // 校验通过返回 { b, orders, decisions }，否则抛出给用户看的原因
+  function readBackup(text) {
+    let b;
+    try { b = JSON.parse(text); } catch (e) { throw new Error('文件不是有效的 JSON'); }
+    if (!b || b.app !== 'orderTriage' || b.kind !== 'backup') throw new Error('不是订单分拣的备份文件');
+    if (b.format !== BACKUP_FORMAT) throw new Error('备份文件格式（' + b.format + '）无法识别，本插件仅支持格式 ' + BACKUP_FORMAT + '，请升级插件后再恢复');
+    const ls = b.localStorage, st = b.storage == null ? {} : b.storage;
+    if (!ls || typeof ls !== 'object' || Array.isArray(ls) || Object.entries(ls).some(([k, v]) => !OWN_LS(k) || typeof v !== 'string'))
+      throw new Error('备份文件中的主页数据不完整');
+    if (typeof st !== 'object' || Array.isArray(st)) throw new Error('备份文件中的扩展数据不完整');
+    let d = null;
+    if (ls[STORE] != null) { try { d = JSON.parse(ls[STORE]); } catch (e) { /* 下面报错 */ } if (!d || !Array.isArray(d.orders)) throw new Error('备份文件中的订单数据已损坏'); }
+    return { b: Object.assign({}, b, { storage: st }), orders: d ? d.orders.length : 0, decisions: d ? Object.keys(d.decisions || {}).length : 0 };
+  }
+  async function restoreData(file) {
+    let r;
+    try { r = readBackup(await file.text()); }
+    catch (e) { alert('无法从备份恢复：' + e.message + '。当前数据未改动。'); return; }
+    const { b } = r, at = new Date(b.at);
+    const lines = ['将用备份覆盖当前全部数据（订单、判断、设置、开票与下载记录），当前数据无法找回。', '',
+      '备份时间：' + (isNaN(at) ? '未知' : at.toLocaleString('zh-CN', { hour12: false })),
+      '插件版本：' + (b.version || '未知') + (newerVer(b.version, VERSION) ? '（新于当前版本 ' + VERSION + '，部分数据可能无法识别）' : ''),
+      '订单：' + r.orders + ' 单', '判断：' + r.decisions + ' 条'];
+    if (!EXT && Object.keys(b.storage).length) lines.push('', '网页版仅恢复订单、判断和设置；开票与下载记录需在扩展中恢复。');
+    if (S.orders.length) lines.push('', '如需保留当前数据，请先取消，用「更多 → 备份数据」备份。');
+    lines.push('', '进行中的任务（申请、发消息、下载等）不恢复。确认恢复？');
+    if (!confirm(lines.join('\n'))) return;
+    restoring = true;
+    try {
+      for (const k of Object.keys(localStorage).filter(OWN_LS)) localStorage.removeItem(k);
+      for (const [k, v] of Object.entries(b.localStorage)) localStorage.setItem(k, v);
+      if (EXT) {
+        const keep = Object.fromEntries(Object.entries(b.storage).filter(([k]) => !skipKey(k)));
+        keep.autoLast = new Date().toDateString();
+        await chrome.storage.local.clear();
+        await chrome.storage.local.set(keep);
+      }
+    } catch (e) {
+      restoring = false;
+      alert('恢复时写入失败：' + e.message + '。请重新选择备份文件恢复。');
+      return;
+    }
+    location.reload();
+  }
+
   // ── 事件 ──
   function bind() {
     $('btn-import').onclick = $('btn-import2').onclick = () => $('file').click();
@@ -1702,8 +1806,10 @@
     $('btn-settings').onclick = openSettings;
     $('rules-save').onclick = saveSettings;
     $('rules-cancel').onclick = () => $('dlg-settings').close();
+    $('data-backup').onclick = () => backupData().catch(e => toast('备份出错：' + e.message));
+    $('backup-file').onchange = e => { const f = e.target.files[0]; e.target.value = ''; if (f) restoreData(f).catch(err => alert('恢复出错：' + err.message)); };
     $('data-clear').onclick = () => {
-      if (!confirm('清除本浏览器中保存的全部订单、判断和发票记录？下载文件夹中的发票不受影响。')) return;
+      if (!confirm('清除本浏览器中保存的全部订单、判断和发票记录？下载文件夹中的发票不受影响。\n\n清除后无法找回，建议先备份数据（更多 → 备份数据）。')) return;
       try { localStorage.removeItem(STORE); } catch (e) { /* 忽略 */ }
       if (EXT) chrome.storage.local.clear();
       S = { orders: [], decisions: {}, refunds: {}, rules: null, prefs: S.prefs, invoice: { title: I.DEFAULT_TITLE, taxId: I.DEFAULT_TAX, template: '', email: '' }, invFiles: {}, haveIdx: [] };
@@ -1783,7 +1889,7 @@
   if (EXT) {
     document.body.classList.add('is-ext');
     chrome.storage.onChanged.addListener((ch, area) => {
-      if (area !== 'local') return;
+      if (area !== 'local' || restoring) return;
       if (ch.scraped) mergeFromExt(ch.scraped.newValue);
       if (ch.olderDone) olderFinished(ch.olderDone.newValue);
     });
@@ -1805,7 +1911,7 @@
       }
     });
     chrome.storage.onChanged.addListener((ch, area) => {
-      if (area !== 'local') return;
+      if (area !== 'local' || restoring) return;
       let hit = false;
       for (const k of XKEYS) if (ch[k]) { X[k] = ch[k].newValue || XEMPTY(k); hit = true; }
       if (ch.applyResult && ch.applyResult.newValue) onApplyResult(ch.applyResult.newValue);

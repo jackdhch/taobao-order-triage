@@ -23,6 +23,8 @@
   --urge-ink:#0B7470; --urge-bg:#DCF2F0;
   --bad-ink:#B0382B;  --bad-bg:#FBE6E3;
   --off-ink:#6E7479;  --off-bg:#ECEDEB;
+  /* 实心色块（进度区小圆点、图例）：比文字色更饱和，几种颜色并排时容易分清 */
+  --ok-sw:#2E9D5B; --info-sw:#8250C8; --plat-sw:#2F6FD0; --wait-sw:#E0A400; --urge-sw:#12A19A; --bad-sw:#D63A2B;
   --err:#D0021B; --err-bg:#FFF0F0;
   --focus:#1C6E8C;
   --shadow:0 1px 2px rgba(29,38,41,.05),0 4px 16px -8px rgba(29,38,41,.14);
@@ -46,6 +48,7 @@
     --urge-ink:#6DD3CF; --urge-bg:#113534;
     --bad-ink:#F29A8C;  --bad-bg:#3E1E19;
     --off-ink:#A3A9AD;  --off-bg:#2A2E30;
+    --ok-sw:#4CC27E; --info-sw:#B48CF0; --plat-sw:#5B9BF0; --wait-sw:#F2C230; --urge-sw:#3CC9C2; --bad-sw:#F0604E;
     --err:#F29A8C; --err-bg:#3E1E19;
     --focus:#5FB2D0;
     --shadow:0 1px 2px rgba(0,0,0,.3),0 4px 16px -8px rgba(0,0,0,.6);
@@ -67,6 +70,7 @@
   --urge-ink:#6DD3CF; --urge-bg:#113534;
   --bad-ink:#F29A8C;  --bad-bg:#3E1E19;
   --off-ink:#A3A9AD;  --off-bg:#2A2E30;
+  --ok-sw:#4CC27E; --info-sw:#B48CF0; --plat-sw:#5B9BF0; --wait-sw:#F2C230; --urge-sw:#3CC9C2; --bad-sw:#F0604E;
   --err:#F29A8C; --err-bg:#3E1E19;
   --focus:#5FB2D0;
   --shadow:0 1px 2px rgba(0,0,0,.3),0 4px 16px -8px rgba(0,0,0,.6);
@@ -137,14 +141,15 @@ details.more > summary::after{content:"▾"; font-size:10px; color:var(--muted)}
 
 /* 一条线的步骤 */
 .summary{background:var(--surface); border:1px solid var(--line); border-radius:var(--r); padding:12px 14px; box-shadow:var(--shadow)}
-.flow{list-style:none; margin:0 0 10px; padding:0; display:grid; grid-template-columns:repeat(8,minmax(0,1fr)); gap:6px}
-.flow li{display:flex; flex-direction:column; gap:2px; padding:7px 9px 8px; border-radius:8px; cursor:pointer; background:var(--sunk); border:1px solid transparent; min-width:0}
+/* 八步按内容分配宽度（等分时「上次报销截止点」和日期范围在 1200px 下会折行）；标题不折行，放不下时只让第二行文字换行 */
+.flow{list-style:none; margin:0 0 10px; padding:0; display:flex; gap:5px}
+.flow li{flex:1 1 auto; display:flex; flex-direction:column; gap:2px; padding:7px 8px 8px; border-radius:8px; cursor:pointer; background:var(--sunk); border:1px solid transparent}
 .flow li:hover{border-color:var(--line)}
-.flow-h{display:flex; align-items:flex-start; gap:6px; min-width:0}
+.flow-h{display:flex; align-items:center; gap:6px}
 .flow-n{flex:none; width:20px; height:20px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center; font-size:11.5px; font-weight:600;
         background:var(--surface); color:var(--muted); border:1px solid var(--line)}
-.flow-t{font-weight:600; font-size:13px; line-height:1.35}
-.flow-s{font-size:11.5px; color:var(--muted); line-height:1.4; overflow-wrap:anywhere}
+.flow-t{font-weight:600; font-size:13px; line-height:1.35; white-space:nowrap}
+.flow-s{font-size:11.5px; color:var(--muted); line-height:1.4}
 .flow li.is-done .flow-n{background:var(--ok-bg); color:var(--ok-ink); border-color:transparent}
 .flow li.is-done .flow-t{color:var(--muted)}
 .flow li.is-cur{background:var(--uns-wash)}
@@ -248,6 +253,7 @@ kbd{font-family:var(--mono); font-size:11px; border:1px solid var(--line); borde
 .inv-table .shop{display:flex; align-items:center; gap:4px; overflow-wrap:anywhere}
 .inv-table .ono{font-family:var(--mono); font-variant-numeric:tabular-nums; white-space:nowrap; color:var(--muted); font-size:12px; margin-top:2px}
 .inv-table .detail{color:var(--faint); font-size:11.5px; margin-top:3px; overflow-wrap:anywhere}
+.inv-table .detail.one{white-space:nowrap; overflow:hidden; text-overflow:ellipsis; overflow-wrap:normal}
 .inv-table .inv-thumb{width:52px; height:52px; object-fit:cover; border-radius:6px; display:block; background:var(--sunk)}
 .inv-table .inv-thumb.ph{display:flex; align-items:center; justify-content:center; font-size:11px; color:var(--faint)}
 .inv-table .acts{display:flex; gap:6px; flex-wrap:wrap}
@@ -264,8 +270,9 @@ kbd{font-family:var(--mono); font-size:11px; border:1px solid var(--line); borde
 .inv-table button.st::after{content:" ›"; opacity:.7}
 /* 状态颜色图例 */
 .inv-legend{display:flex; flex-wrap:wrap; gap:4px 14px; font-size:12px; color:var(--muted); padding:0 0 12px; margin-top:-6px}
-.inv-legend span{display:inline-flex; align-items:center; gap:5px; white-space:nowrap}
-.inv-legend i{width:10px; height:10px; border-radius:3px; display:inline-block; border:1px solid currentColor}
+.inv-legend span{display:inline-flex; align-items:center; gap:5px; white-space:nowrap; color:var(--text)}
+.inv-legend span:last-child{color:var(--muted)}
+.inv-legend i{width:11px; height:11px; border-radius:3px; display:inline-block}
 .res-row{grid-template-columns:1fr; font-size:13px}
 .tone-bad{background:var(--bad-bg); color:var(--bad-ink)}
 .tone-off{background:var(--off-bg); color:var(--off-ink)}
@@ -319,8 +326,10 @@ body.is-ext .web-only, body:not(.is-ext) .ext-only{display:none!important}
 footer{padding-block:20px 36px; border-top:1px solid var(--line); margin-top:10px; font-size:12px; color:var(--faint); line-height:1.75}
 footer p{margin:0 0 4px; max-width:90ch}
 
+@media (max-width:1080px){
+  .flow{display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:6px}
+}
 @media (max-width:1000px){
-  .flow{grid-template-columns:repeat(4,minmax(0,1fr))}
   .dash{grid-template-columns:repeat(2,minmax(0,1fr))}
   .dc:nth-child(3){border-left:0}
   .dc:nth-child(n+3){border-top:1px solid var(--line-soft)}
@@ -346,15 +355,18 @@ footer p{margin:0 0 4px; max-width:90ch}
 <div class="wrap">
   <header class="top">
     <div class="brand"><h1>订单分拣</h1><span>淘宝订单报销整理：实验室采购分拣、发票申请与归档</span><span class="tag-exp" title="功能仍在完善中">实验版</span></div>
-    <details class="more" id="more" hidden>
-      <summary class="btn" title="其他操作：重新导入订单表、单项发票操作">更多</summary>
+    <details class="more" id="more">
+      <summary class="btn" title="其他操作：重新导入订单表、单项发票操作、备份与恢复数据">更多</summary>
       <div class="more-pop">
-        <button id="btn-import" title="选择从淘宝导出的新订单表（xlsx 或 csv），已有判断保留">重新导入订单表</button>
-        <div class="more-h ext-only">发票</div>
-        <button class="ext-only" id="inv-sync" title="打开淘宝「我的发票」，读取已开具、申请中、未申请的记录，更新每单的发票状态">同步开票状态</button>
-        <button class="ext-only" id="inv-scan" title="打开需卖家回复的旺旺会话，读取卖家发送的发票文件、二维码、开票申请入口和回复">读取卖家旺旺回复</button>
-        <button class="ext-only" id="inv-dl-all" title="将已开具待下载的发票、卖家发送的发票文件下载到「订单分拣-发票」，按订单命名">下载已开具的发票</button>
-        <button class="ext-only" data-pick="inv-check-dir" title="选择已下载的发票文件夹（如「订单分拣-发票」），按 PDF 金额、开票日期核对归属，并按发票号码查找重复">核对已下载的发票…</button>
+        <button class="need-data" id="btn-import" title="选择从淘宝导出的新订单表（xlsx 或 csv），已有判断保留">重新导入订单表</button>
+        <div class="more-h ext-only need-data">发票</div>
+        <button class="ext-only need-data" id="inv-sync" title="打开淘宝「我的发票」，读取已开具、申请中、未申请的记录，更新每单的发票状态">同步开票状态</button>
+        <button class="ext-only need-data" id="inv-scan" title="打开需卖家回复的旺旺会话，读取卖家发送的发票文件、二维码、开票申请入口和回复">读取卖家旺旺回复</button>
+        <button class="ext-only need-data" id="inv-dl-all" title="将已开具待下载的发票、卖家发送的发票文件下载到「订单分拣-发票」，按订单命名">下载已开具的发票</button>
+        <button class="ext-only need-data" data-pick="inv-check-dir" title="选择已下载的发票文件夹（如「订单分拣-发票」），按 PDF 金额、开票日期核对归属，并按发票号码查找重复">核对已下载的发票…</button>
+        <div class="more-h need-data">数据</div>
+        <button class="need-data" id="data-backup" title="全部数据（订单、判断、设置、开票与下载记录）仅保存在本浏览器中，删除扩展或清除浏览器数据后无法找回。点击将其保存为一个 JSON 文件，存入下载文件夹（扩展中为「订单分拣-备份」子文件夹）">备份数据</button>
+        <button data-pick="backup-file" title="选择以前备份的 JSON 文件，核对后用其覆盖当前全部数据；进行中的任务（申请、发消息、下载等）不恢复">从备份恢复…</button>
       </div>
     </details>
     <button class="btn" id="btn-settings" title="发票抬头、税号、邮箱、消息模板、每日自动处理">设置</button>
@@ -366,6 +378,7 @@ footer p{margin:0 0 4px; max-width:90ch}
     <input type="file" id="inv-have-dir" webkitdirectory multiple>
     <input type="file" id="inv-check-dir" webkitdirectory multiple>
     <input type="file" id="inv-pack-dir" webkitdirectory multiple>
+    <input type="file" id="backup-file" accept=".json,application/json">
   </div>
 
   <section id="empty" class="empty" hidden>
@@ -408,13 +421,12 @@ footer p{margin:0 0 4px; max-width:90ch}
       <span class="inv-note" id="inv-note"></span>
     </div>
     <div class="inv-legend" id="inv-legend" hidden title="发票状态的颜色含义；带「›」的状态可点击，打开对应页面">
-      <span style="color:var(--ok-ink)"><i style="background:var(--ok-bg)"></i>已取得</span>
-      <span style="color:var(--info-ink)"><i style="background:var(--info-bg)"></i>已开具，待下载</span>
-      <span style="color:var(--plat-ink)"><i style="background:var(--plat-bg)"></i>已申请淘宝开票</span>
-      <span style="color:var(--wait-ink)"><i style="background:var(--wait-bg)"></i>等待卖家回复</span>
-      <span style="color:var(--urge-ink)"><i style="background:var(--urge-bg)"></i>已由淘宝客服督促</span>
-      <span style="color:var(--bad-ink)"><i style="background:var(--bad-bg)"></i>需处理</span>
-      <span style="color:var(--off-ink)"><i style="background:var(--off-bg)"></i>无需开票</span>
+      <span><i style="background:var(--ok-sw)"></i>已取得</span>
+      <span><i style="background:var(--info-sw)"></i>已开具，待下载</span>
+      <span><i style="background:var(--plat-sw)"></i>已申请淘宝开票</span>
+      <span><i style="background:var(--wait-sw)"></i>等待卖家回复</span>
+      <span><i style="background:var(--urge-sw)"></i>已由淘宝客服督促</span>
+      <span><i style="background:var(--bad-sw)"></i>需处理</span>
       <span>点击带「›」的状态可打开对应页面</span>
     </div>
     <div class="keys" id="keys">

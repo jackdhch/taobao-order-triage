@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""离线测试（数据全部虚构，不联网）：选文件夹导入已整理的发票、核对下载的发票有没有重复、读卖家图片里的二维码；插件里没有 AI 功能（用户 2026-10-04 要求删掉）。
+"""离线测试（数据全部虚构，不联网）：选文件夹导入已整理的发票、核对下载的发票有没有重复、读卖家图片里的二维码；插件里没有 AI 功能（用户 2026-10-04 要求删掉）；
+备份数据 → 清除 → 从备份恢复（进行中的任务不恢复）。
 
 用法：env -u TMPDIR python3 tools/e2e-extras.py
 
@@ -64,7 +65,13 @@ def run(p, tmp):
         w.writerow(['订单号', '订单提交时间', '订单状态', '店铺名称', '商品名称', '型号款式', '商品数量', '商品金额', '实付金额'])
         w.writerows(ORDERS)
 
-    ctx = p.chromium.launch_persistent_context(str(tmp / 'profile'), channel='chromium', headless=True, args=[
+    # 下载只能落在临时目录（「备份数据」会下载一个 JSON）：配置里指定下载文件夹，HOME 也指过去
+    dl_dir = tmp / '浏览器下载'
+    (tmp / 'profile' / 'Default').mkdir(parents=True)
+    (tmp / 'profile' / 'Default' / 'Preferences').write_text(json.dumps(
+        {'download': {'default_directory': str(dl_dir), 'prompt_for_download': False, 'directory_upgrade': True}}), encoding='utf-8')
+    ctx = p.chromium.launch_persistent_context(str(tmp / 'profile'), channel='chromium', headless=True, accept_downloads=True,
+                                               env=dict(os.environ, HOME=str(tmp / 'home')), args=[
         '--disable-extensions-except=' + str(ROOT), '--load-extension=' + str(ROOT), '--no-proxy-server', '--host-resolver-rules=MAP * ~NOTFOUND'])
     sent, blocked, errors = [], [], []
 
@@ -81,6 +88,8 @@ def run(p, tmp):
     app = ctx.new_page()
     app.on('pageerror', lambda e: errors.append(str(e)))
     cons = []; app.on('console', lambda c: cons.append(c.type + ' ' + c.text[:200]))
+    # accept_downloads 会让 Playwright 接管下载（存成随机名）；换回 Chrome 自己的下载流程，文件按扩展起的名字落进下载文件夹
+    ctx.new_cdp_session(app).send('Browser.setDownloadBehavior', {'behavior': 'default'})
     app.goto(f'chrome-extension://{eid}/index.html')
     app.set_input_files('#file', str(table)); app.wait_for_timeout(800)
     # 把两单「数据线、收纳盒」判成待定：词表里它们本来就是模糊词
@@ -119,7 +128,84 @@ def run(p, tmp):
           '设置里、待定页、发票栏都没有任何 AI 的开关和按钮')
     app.keyboard.press('Escape')
 
-    print('\n[5] 杂项')
+    print('\n[5] 备份数据 → 清除 → 从备份恢复：数据一致，进行中的任务不恢复')
+    STORE = 'orderTriage.app.v1'
+    # 先判一件，让判断不是空的；再放几条下载记录（要恢复的）和一批「进行中的任务 / 领活记录」（不该恢复的）
+    app.click('#seg-cat button[data-cat="unsure"]'); app.wait_for_timeout(300); app.keyboard.press('1'); app.wait_for_timeout(300)
+    TRANSIENT = {'applyJob': {'nos': ['5195000000000000002'], 'stage': 'running'}, 'applyResult': {'at': 1, 'stage': 'confirm'},
+                 'cardJobs': {'5195000000000000002': {'at': 1, 'exp': 2, 'state': 'queued'}}, 'cardRun': {'id': 'x', 'no': '5195000000000000002', 'at': 1},
+                 'chatQueue': {'at': 1, 'kind': 'compose', 'items': []}, 'chatAfter': 1, 'dlJobs': [{'id': 'j1', 'no': '5195000000000000002', 'kind': 'platform'}],
+                 'invJobs': {'sync': 1}, 'invClaim_sync': {'at': 1, 'by': 'x'}, 'invClaim_scan': {'at': 1, 'by': 'y'}, 'otReload_sync': 1,
+                 'jobTabs': {'https://i.taobao.com/x': 12}, 'nickWant': {'5195000000000000002': 1}, 'vipJob': {'at': 1, 'orders': []},
+                 'olderDone': {'from': '2026-01-01', 'at': 1}, 'autoLast': 'Mon Jan 01 2001'}
+    app.evaluate("""t => chrome.storage.local.set(Object.assign({ dlDone: { '5195000000000000003': [{ file: '2026-08-03_8.00_某某虚构百货_5195000000000000003.pdf', path: '', at: 1, from: 'platform', src: '', url: '' }] },
+        askSent: { '5195000000000000002': 1759000000000 }, autoDaily: { on: true, hour: 23 } }, t))""", TRANSIENT)
+    app.wait_for_timeout(500)
+    ls0 = app.evaluate(f"localStorage.getItem('{STORE}')")
+    st0 = app.evaluate('chrome.storage.local.get(null)')
+    n_orders, n_dec = app.evaluate(f"(() => {{ const d = JSON.parse(localStorage.getItem('{STORE}')); return [d.orders.length, Object.keys(d.decisions).length]; }})()")
+    check(n_dec >= 1, '备份前已有判断', n_dec)
+    app.evaluate("document.querySelector('details.more').open = true")
+    check(app.is_visible('#data-backup') and app.is_visible('[data-pick="backup-file"]')
+          and app.evaluate("[...document.querySelectorAll('#more .more-pop button')].every(b => b.title.length > 10)"),
+          '「更多」里有「备份数据」「从备份恢复…」，每项都有悬停说明')
+    app.click('#data-backup')
+    bdir = dl_dir / '订单分拣-备份'
+    bf = wait_until(app, lambda: bdir.is_dir() and (z := [x for x in bdir.iterdir() if x.suffix == '.json']) and z[0], 15)
+    check(bool(bf) and re.fullmatch(r'订单分拣-备份-\d{8}-\d{4}\.json', bf.name), '备份文件存进下载文件夹的「订单分拣-备份/订单分拣-备份-日期-时分.json」', bf)
+    bk = json.loads(bf.read_text(encoding='utf-8')) if bf else {}
+    ver = json.loads((ROOT / 'manifest.json').read_text(encoding='utf-8'))['version']
+    check(bk.get('app') == 'orderTriage' and bk.get('kind') == 'backup' and bk.get('format') == 1 and bk.get('version') == ver and re.match(r'\d{4}-\d\d-\d\dT', bk.get('at', '')),
+          '备份文件头：app / kind / format 1 / 插件版本 / 备份时间', {k: bk.get(k) for k in ('app', 'kind', 'format', 'version', 'at')})
+    check((bk.get('localStorage') or {}).get(STORE) == ls0 and all(k.startswith('orderTriage.') for k in bk.get('localStorage') or {}),
+          '主页数据（localStorage）原样存成字符串，只带本插件的键')
+    check(bk.get('storage', {}).get('dlDone') == st0['dlDone'] and 'dlJobs' in bk.get('storage', {}), '扩展存储整份存下（chrome.storage.local.get(null)）')
+
+    msgs = []
+    def on_dialog(d):
+        msgs.append(d.message)
+        d.accept() if mode[0] == 'accept' else d.dismiss()
+    mode = ['accept']
+    app.on('dialog', on_dialog)
+    app.click('#btn-settings'); app.wait_for_timeout(200); app.click('#data-clear'); app.wait_for_timeout(800)
+    check(msgs and '建议先备份数据' in msgs[-1], '「清除本机数据」的确认框提示先备份', msgs[-1:] )
+    left = app.evaluate('chrome.storage.local.get(null).then(r => Object.keys(r))')
+    check(app.evaluate(f"localStorage.getItem('{STORE}')") is None and set(left) <= {'invWant'}, '已清空（invWant 是主页随时按当前订单重写的发票范围）', left)
+    app.evaluate("document.querySelector('details.more').open = true")
+    check(app.is_visible('#more') and app.is_visible('[data-pick="backup-file"]') and not app.is_visible('#data-backup'),
+          '没有数据时「更多」仍在，可以「从备份恢复」（「备份数据」等需要数据的项隐藏）')
+    app.evaluate("document.querySelector('details.more').open = false")
+
+    # 不认识的格式：拒绝，不改动；版本比当前新：提示，取消就不改
+    bad = tmp / '格式2.json'; bad.write_text(json.dumps(dict(bk, format=2)), encoding='utf-8')
+    app.set_input_files('#backup-file', str(bad)); app.wait_for_timeout(800)
+    check(msgs and '无法识别' in msgs[-1] and app.evaluate(f"localStorage.getItem('{STORE}')") is None, '格式号不认识的备份：拒绝并提示，数据不动', msgs[-1:])
+    newer = tmp / '新版本.json'; newer.write_text(json.dumps(dict(bk, version='99.0.0')), encoding='utf-8')
+    mode[0] = 'dismiss'
+    app.set_input_files('#backup-file', str(newer)); app.wait_for_timeout(800)
+    check(msgs and '新于当前版本' in msgs[-1] and app.evaluate(f"localStorage.getItem('{STORE}')") is None, '较新版本的备份：确认框里提示，取消则不恢复', msgs[-1:])
+    other = tmp / '别的.json'; other.write_text(json.dumps({'format': 'order-triage-scrape', 'orders': []}), encoding='utf-8')
+    app.set_input_files('#backup-file', str(other)); app.wait_for_timeout(800)
+    check(msgs and '不是订单分拣的备份文件' in msgs[-1], '别的 JSON：提示不是备份文件', msgs[-1:])
+
+    mode[0] = 'accept'
+    with app.expect_navigation(timeout=15000):
+        app.set_input_files('#backup-file', str(bf))
+    app.wait_for_selector('#main:not([hidden])', timeout=10000); app.wait_for_timeout(800)
+    m = msgs[-1] if msgs else ''
+    check('将用备份覆盖当前全部数据' in m and f'订单：{n_orders} 单' in m and f'判断：{n_dec} 条' in m and '插件版本：' + ver in m and '备份时间：' in m,
+          '确认框写明覆盖全部数据，并列出备份时间、插件版本、订单数、判断数', m)
+    check(app.evaluate(f"localStorage.getItem('{STORE}')") == ls0, '恢复后主页数据和备份前完全一致')
+    st1 = app.evaluate('chrome.storage.local.get(null)')
+    regen = {'want', 'invWant', 'invPending', 'autoLast'}           # 主页打开时自己重写的、恢复时特意改的
+    keep = [k for k in st0 if k not in TRANSIENT and k not in regen]
+    check(keep and all(st1.get(k) == st0[k] for k in keep), f'扩展存储里的记录恢复一致（{len(keep)} 个键）', [k for k in keep if st1.get(k) != st0[k]])
+    check(not [k for k in TRANSIENT if k != 'autoLast' and k in st1], '进行中的任务、领活记录、标签页编号都没有恢复', [k for k in TRANSIENT if k in st1])
+    check(st1.get('autoLast') == app.evaluate('new Date().toDateString()'), '每日自动处理记成今天已运行，恢复后不会马上自动开始', st1.get('autoLast'))
+    check(app.evaluate("document.querySelectorAll('#seg-cat button').length") > 0 and str(n_orders) + ' 单' in app.inner_text('#summary'), '恢复后主页正常显示')
+    app.remove_listener('dialog', on_dialog)
+
+    print('\n[6] 杂项')
     check(not errors, '页面没有报错', errors)
     check(not [u for u in blocked if 'favicon' not in u] and not sent, '除了假图片，没有别的网络请求', blocked[:5])
     ctx.close()

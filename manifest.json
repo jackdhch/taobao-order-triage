@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "订单分拣（实验版）",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "description": "淘宝订单报销整理：实验室采购分拣、发票申请与归档。数据仅在本机处理；对淘宝的提交、发送操作均需在主页确认后执行。",
   "action": {
     "default_title": "打开订单分拣主页"

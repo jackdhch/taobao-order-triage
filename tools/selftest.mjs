@@ -325,6 +325,13 @@ assert.equal(I.detailRefund('某商品 退款完成 ￥12.25 x1').refunded, true
   assert.ok(scriptsFor('https://invoice-ua.taobao.com/e-invoice/invoice-apply-online.html?disableNav=YES%2CYES&orderId=1&channel=card').includes('extension/apply-card.js'));
   assert.ok(scriptsFor('https://invoice-ua.taobao.com/e-invoice/invoice-detail-tm.html?disableNav=YES&orderId=1').includes('extension/apply-card.js'));
   assert.ok(scriptsFor('https://market.m.taobao.com/app/im/chat-core/index.html').includes('extension/chat-main.js'));
-  assert.equal(mf.version, '0.11.0');
+  assert.equal(mf.version, '0.12.0');
+  // 备份文件里写的插件版本：网页版读不到 manifest，用 app.js 里写死的版本号，两处要一致
+  const appJs = fs.readFileSync(new URL('../js/app.js', import.meta.url), 'utf8');
+  assert.equal((/const VERSION = EXT \? chrome\.runtime\.getManifest\(\)\.version : '([\d.]+)'/.exec(appJs) || [])[1], mf.version);
 }
-console.log('自检通过：读表（xml:space）、合并规则、日期格式、先抓后导表、关键词建议、发票逻辑、已整理发票去重、读发票 PDF 文字、补差价待定、同店默认实验室、下载发票按金额日期对单、给卖家的消息、详情页退款、zip 打包、开票卡片、manifest 匹配');
+// 发票状态带上要列出的文件名（主页逐个单行显示，不从名字中间折断）
+assert.deepEqual(I.status({ got: [{ file: 'a_1.pdf' }, { file: 'b_2.pdf' }] }, {}).files, ['a_1.pdf', 'b_2.pdf']);
+assert.deepEqual(I.status({ have: { file: '第一批/001_x.pdf' } }, {}).files, ['第一批/001_x.pdf']);
+assert.deepEqual(I.status({ chat: { files: [{ name: '发票.pdf' }], cards: [], images: [], email: [], asks: [] } }, {}).files, ['发票.pdf']);
+console.log('自检通过：读表（xml:space）、合并规则、日期格式、先抓后导表、关键词建议、发票逻辑、已整理发票去重、读发票 PDF 文字、补差价待定、同店默认实验室、下载发票按金额日期对单、给卖家的消息、详情页退款、zip 打包、开票卡片、manifest 匹配与版本号、发票状态的文件名');
