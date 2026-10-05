@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>订单分拣 README 横幅</title>
+<!-- README 顶部横幅：由 tools/screenshots.py 用无界面浏览器按浅色 / 深色各渲染一次，存成 docs/assets/banner-*.png。
+     颜色取自 index.html 的 :root 变量；右侧是界面的示意图（色块和占位条，不含任何订单数据） -->
+<style>
+:root{
+  --ground:#F4F5F3; --surface:#FFFFFF; --sunk:#EDEFEC; --line:#DCE1DC; --line-soft:#E8EBE7;
+  --text:#1D2629; --muted:#5F6C72; --faint:#949EA2; --bar:#E3E7E3; --bar2:#ECEFEB;
+  --accent:#1C6E8C; --lab:#1C6E8C; --lab-wash:#E2EEF3; --per:#A5436A;
+  --ok-ink:#2F7D4F; --ok-bg:#E4F3EA; --info-ink:#6B3FA0; --info-bg:#EFE7F8; --plat-ink:#1F5FAD; --plat-bg:#E2ECFA;
+  --wait-ink:#9A6A0B; --wait-bg:#FBF1DC; --urge-ink:#0B7470; --urge-bg:#DCF2F0; --bad-ink:#B0382B; --bad-bg:#FBE6E3;
+  --ok-sw:#2E9D5B; --info-sw:#8250C8; --plat-sw:#2F6FD0; --wait-sw:#E0A400; --urge-sw:#12A19A; --bad-sw:#D63A2B;
+  --glow:rgba(28,110,140,.10);
+  --shadow:0 1px 2px rgba(29,38,41,.06),0 10px 30px -12px rgba(29,38,41,.22);
+}
+@media (prefers-color-scheme:dark){:root{
+  --ground:#121516; --surface:#1A1E20; --sunk:#222729; --line:#30373A; --line-soft:#272D30;
+  --text:#E3E7E8; --muted:#9AA6AB; --faint:#6D787D; --bar:#2C3336; --bar2:#262C2F;
+  --accent:#3E92B3; --lab:#3E92B3; --lab-wash:#16303A; --per:#E08AAB;
+  --ok-ink:#86D3A5; --ok-bg:#173426; --info-ink:#C9A9F0; --info-bg:#2D2140; --plat-ink:#8DBBF5; --plat-bg:#182B45;
+  --wait-ink:#E8BC62; --wait-bg:#392B11; --urge-ink:#6DD3CF; --urge-bg:#113534; --bad-ink:#F29A8C; --bad-bg:#3E1E19;
+  --ok-sw:#4CC27E; --info-sw:#B48CF0; --plat-sw:#5B9BF0; --wait-sw:#F2C230; --urge-sw:#3CC9C2; --bad-sw:#F0604E;
+  --glow:rgba(62,146,179,.16);
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 30px -12px rgba(0,0,0,.7);
+}}
+*{box-sizing:border-box}
+html,body{margin:0; background:transparent}
+body{font-family:"Microsoft YaHei UI","Microsoft YaHei","PingFang SC","Noto Sans CJK SC",system-ui,sans-serif; color:var(--text)}
+.banner{position:relative; width:1280px; height:360px; border-radius:24px; overflow:hidden; border:1px solid var(--line);
+        background:radial-gradient(circle at 78% 30%,var(--glow),transparent 46%),var(--ground)}
+/* 右半边淡淡的点阵 */
+.banner::before{content:""; position:absolute; inset:0 0 0 560px; opacity:.55;
+        background-image:radial-gradient(var(--line) 1.2px,transparent 1.3px); background-size:18px 18px;
+        -webkit-mask-image:linear-gradient(90deg,transparent,#000 30%); mask-image:linear-gradient(90deg,transparent,#000 30%)}
+.left{position:absolute; left:72px; top:0; bottom:0; display:flex; flex-direction:column; justify-content:center; gap:0}
+.mark{width:68px; height:68px; border-radius:18px; background:var(--accent); display:flex; align-items:center; justify-content:center;
+      box-shadow:0 8px 20px -8px var(--accent)}
+.mark svg{width:52px; height:52px}
+h1{margin:22px 0 0; font-size:58px; line-height:1.1; font-weight:700; letter-spacing:.06em}
+.sub{margin:14px 0 0; font-size:21px; color:var(--muted); letter-spacing:.02em}
+.steps{display:flex; align-items:center; gap:10px; margin-top:28px; font-size:15px; color:var(--muted)}
+.steps b{display:inline-flex; align-items:center; gap:7px; font-weight:500; color:var(--text)}
+.steps i{width:8px; height:8px; border-radius:50%; background:var(--accent); display:inline-block}
+.steps .ln{width:22px; height:1.5px; background:var(--line)}
+
+/* 右侧示意：发票状态卡片 + 分拣卡片 */
+.card{position:absolute; background:var(--surface); border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow)}
+.inv{left:768px; top:38px; width:444px; padding:16px 18px 10px}
+.inv-h{display:flex; align-items:center; gap:10px; margin-bottom:8px}
+.inv-h .t{font-size:14px; font-weight:650}
+.legend{display:flex; gap:6px; margin-left:auto}
+.legend i{width:10px; height:10px; border-radius:3px; display:block}
+.row{display:grid; grid-template-columns:34px 1fr auto; gap:12px; align-items:center; padding:9px 0; border-top:1px solid var(--line-soft)}
+.row:first-of-type{border-top:0}
+.th{width:34px; height:34px; border-radius:8px; background:var(--sunk); display:flex; align-items:center; justify-content:center}
+.th svg{width:22px; height:22px}
+.bars{display:flex; flex-direction:column; gap:6px}
+.bars span{height:8px; border-radius:4px; background:var(--bar)}
+.bars span + span{height:7px; background:var(--bar2)}
+.pill{font-size:12.5px; font-weight:500; padding:2px 10px; border-radius:10px; white-space:nowrap}
+.ok{background:var(--ok-bg); color:var(--ok-ink)} .info{background:var(--info-bg); color:var(--info-ink)}
+.plat{background:var(--plat-bg); color:var(--plat-ink)} .wait{background:var(--wait-bg); color:var(--wait-ink)}
+
+.sort{left:664px; top:226px; width:360px; padding:14px 16px; display:grid; grid-template-columns:52px 1fr; gap:14px; align-items:center}
+.sort .th{width:52px; height:52px; border-radius:10px}
+.sort .th svg{width:34px; height:34px}
+.pick{display:grid; grid-template-columns:1fr 1fr; background:var(--sunk); border:1px solid var(--line); border-radius:8px; padding:2px; gap:2px; margin-top:10px; width:180px}
+.pick span{text-align:center; font-size:13px; padding:4px 0; border-radius:6px; color:var(--muted)}
+.pick .on{background:var(--lab); color:#fff; font-weight:600}
+</style>
+</head>
+<body>
+<div class="banner">
+  <div class="left">
+    <div class="mark">
+      <!-- 分拣：一条线分成两路，落进两个格子 -->
+      <svg viewBox="0 0 48 48" fill="none" stroke="#fff" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="24" cy="8.5" r="3.6" fill="#fff" stroke="none"/>
+        <path d="M24 12v8c0 5-11 5-11 11M24 20c0 5 11 5 11 11"/>
+        <rect x="6.5" y="33" width="13" height="9.5" rx="2.6" fill="#fff"/>
+        <rect x="28.5" y="33" width="13" height="9.5" rx="2.6"/>
+      </svg>
+    </div>
+    <h1>订单分拣</h1>
+    <p class="sub">淘宝订单报销整理：实验室采购分拣、发票申请与归档</p>
+    <div class="steps">
+      <b><i></i>分拣</b><span class="ln"></span><b><i></i>开票</b><span class="ln"></span><b><i></i>下载核对</b><span class="ln"></span><b><i></i>整理报销文件</b>
+    </div>
+  </div>
+
+  <div class="card inv">
+    <div class="inv-h"><span class="t">发票</span>
+      <span class="legend"><i style="background:var(--ok-sw)"></i><i style="background:var(--info-sw)"></i><i style="background:var(--plat-sw)"></i><i style="background:var(--wait-sw)"></i><i style="background:var(--urge-sw)"></i><i style="background:var(--bad-sw)"></i></span>
+    </div>
+    <div class="row"><span class="th"><svg viewBox="0 0 100 100" fill="none" stroke="var(--faint)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"><rect x="30" y="30" width="40" height="40" rx="4"/><rect x="40" y="40" width="20" height="20" rx="2"/><path d="M38 30V20M50 30V20M62 30V20M38 70v10M50 70v10M62 70v10"/></svg></span>
+      <span class="bars"><span style="width:78%"></span><span style="width:44%"></span></span><span class="pill ok">已取得</span></div>
+    <div class="row"><span class="th"><svg viewBox="0 0 100 100" fill="none" stroke="var(--faint)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"><path d="M42 16h16v12l8 10v42a4 4 0 0 1-4 4H38a4 4 0 0 1-4-4V38l8-10z"/><path d="M34 54h32"/></svg></span>
+      <span class="bars"><span style="width:64%"></span><span style="width:38%"></span></span><span class="pill info">已开具，待下载</span></div>
+    <div class="row"><span class="th"><svg viewBox="0 0 100 100" fill="none" stroke="var(--faint)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"><circle cx="50" cy="50" r="28"/><circle cx="50" cy="50" r="18"/></svg></span>
+      <span class="bars"><span style="width:84%"></span><span style="width:50%"></span></span><span class="pill plat">已申请淘宝开票</span></div>
+    <div class="row"><span class="th"><svg viewBox="0 0 100 100" fill="none" stroke="var(--faint)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"><rect x="16" y="24" width="68" height="52" rx="4"/><rect x="38" y="38" width="22" height="22" rx="2"/></svg></span>
+      <span class="bars"><span style="width:58%"></span><span style="width:34%"></span></span><span class="pill wait">等待卖家回复</span></div>
+  </div>
+
+  <div class="card sort">
+    <span class="th"><svg viewBox="0 0 100 100" fill="none" stroke="var(--accent)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><rect x="20" y="34" width="60" height="36" rx="5"/><circle cx="38" cy="52" r="9"/><circle cx="38" cy="52" r="3"/><path d="M20 44H12M20 60H12M80 44h8M80 60h8"/></svg></span>
+    <div><div class="bars"><span style="width:92%"></span><span style="width:52%"></span></div>
+      <div class="pick"><span class="on">实验室</span><span>个人</span></div></div>
+  </div>
+</div>
+</body>
+</html>
