@@ -1677,7 +1677,7 @@
   // ── 备份数据 / 从备份恢复（用户 2026-10-05）：全部数据只在本机浏览器里，删掉扩展或清浏览器数据就没了 ──
   // 备份文件：{ app: 'orderTriage', kind: 'backup', format: 1, version, at, localStorage: { 'orderTriage.*': 原样字符串 }, storage: chrome.storage.local 全部 }
   // 格式有不兼容的改动时 format 加一；旧插件见到不认识的 format 就拒绝，不去猜
-  const VERSION = EXT ? chrome.runtime.getManifest().version : '0.12.0';     // 网页版读不到 manifest，selftest 核对两处一致
+  const VERSION = EXT ? chrome.runtime.getManifest().version : '0.13.0';     // 网页版读不到 manifest，selftest 核对两处一致
   const BACKUP_FORMAT = 1;
   // 恢复时丢掉的扩展存储键：进行中的任务、页面领活记录、标签页编号这类临时状态。恢复回去的话，开着的淘宝页一读到就会接着干活
   // （重新提交开票申请、给卖家发消息、找客服督促、下载），标签页编号也早已失效。

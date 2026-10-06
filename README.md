@@ -6,10 +6,11 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/%E7%89%88%E6%9C%AC-0.12.0-1C6E8C?style=flat-square" alt="版本 0.12.0">
+  <img src="https://img.shields.io/badge/%E7%89%88%E6%9C%AC-0.13.0-1C6E8C?style=flat-square" alt="版本 0.13.0">
   <img src="https://img.shields.io/badge/Chrome%20%E6%89%A9%E5%B1%95-Manifest%20V3-4285F4?style=flat-square&logo=googlechrome&logoColor=white" alt="Chrome 扩展 Manifest V3">
   <img src="https://img.shields.io/badge/%E6%95%B0%E6%8D%AE-%E4%BB%85%E5%9C%A8%E6%9C%AC%E6%9C%BA-2F7D4F?style=flat-square" alt="数据仅在本机">
   <img src="https://img.shields.io/badge/%E5%88%A4%E6%96%AD-%E5%9B%BA%E5%AE%9A%E8%A7%84%E5%88%99%20%C2%B7%20%E6%97%A0%20AI-5F6C72?style=flat-square" alt="固定规则，无 AI">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/%E8%AE%B8%E5%8F%AF%E8%AF%81-MIT-8A6D3B?style=flat-square" alt="许可证 MIT"></a>
 </p>
 
 <p align="center">
@@ -90,9 +91,9 @@
 
 ## 安装
 
-1. 下载本仓库（或 `git clone`）。
-2. 在 Chrome 中打开 `chrome://extensions`，开启右上角「开发者模式」。
-3. 点击「加载已解压的扩展程序」，选择仓库根目录（`manifest.json` 所在目录）。
+1. 在本页上方点击绿色的「Code」按钮 →「Download ZIP」，将压缩包解压到一个固定位置（例如「文档/订单分拣」）。之后不要移动或删除这个文件夹，Chrome 每次启动都从这里加载扩展。
+2. 在 Chrome 地址栏输入 `chrome://extensions` 并回车，开启右上角「开发者模式」。
+3. 点击「加载已解压的扩展程序」，选择解压出的文件夹（能直接看到 `manifest.json` 的那一层；如果解压后外面多套了一层同名文件夹，要进到里面一层）。
 4. 点击工具栏上的扩展图标，打开主页。
 5. 在「设置 → 发票信息」中填写单位的发票抬头和税号。
 6. 在淘宝「我的淘宝 → 已买到的宝贝」点击「导出订单」，将下载的 xlsx 拖入主页（或点击「导入订单表」）。
@@ -102,6 +103,17 @@
 
 > [!NOTE]
 > 没有自己的订单时，可在主页点击「载入示例数据」，用 8 单虚构订单试用界面。
+
+<details>
+<summary>更新到新版本</summary>
+
+1. 先在主页「更多 → 备份数据」备份一次。
+2. 重新「Download ZIP」，解压后覆盖原来的文件夹（保持同一位置）。
+3. 在 `chrome://extensions` 中找到「订单分拣」，点击刷新图标重新加载，然后刷新已打开的主页和淘宝页面。
+
+数据保存在浏览器中，覆盖文件不会丢失数据；如果数据异常，用「更多 → 从备份恢复」恢复。
+
+</details>
 
 <details>
 <summary>不安装扩展，直接打开网页</summary>
@@ -441,3 +453,7 @@ local-data/                本机数据目录（已被 .gitignore 忽略，不�
 ## 免责声明
 
 本项目不是淘宝官方工具；自动判断基于关键词，仅供参考，是否属于可报销的实验室物品以所在单位的报销规定为准。
+
+## 许可证
+
+[MIT](LICENSE)。`vendor/` 中的第三方库（jsQR、PDF.js）按各自的 Apache-2.0 许可证分发，许可证文本随附在各自目录中。
