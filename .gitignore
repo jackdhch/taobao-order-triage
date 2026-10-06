@@ -14,3 +14,6 @@ __pycache__/
 
 # 本机开发配置
 .claude/
+
+# 发布用压缩包（tools/make-release.sh 生成，上传到 GitHub Releases，不进仓库）
+dist/

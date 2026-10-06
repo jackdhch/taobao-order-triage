@@ -91,9 +91,9 @@
 
 ## 安装
 
-1. 在本页上方点击绿色的「Code」按钮 →「Download ZIP」，将压缩包解压到一个固定位置（例如「文档/订单分拣」）。之后不要移动或删除这个文件夹，Chrome 每次启动都从这里加载扩展。
+1. 打开 [Releases 发布页](https://github.com/jackdhch/taobao-order-triage/releases/latest)，在「Assets」下载 `order-triage-v版本号.zip`，右键「全部解压缩」到一个固定位置（例如「文档/订单分拣」）。之后不要移动或删除这个文件夹，Chrome 每次启动都从这里加载扩展。
 2. 在 Chrome 地址栏输入 `chrome://extensions` 并回车，开启右上角「开发者模式」。
-3. 点击「加载已解压的扩展程序」，选择解压出的文件夹（能直接看到 `manifest.json` 的那一层；如果解压后外面多套了一层同名文件夹，要进到里面一层）。
+3. 点击「加载已解压的扩展程序」，选择解压出的文件夹（能直接看到 `manifest.json` 的那一层）。
 4. 点击工具栏上的扩展图标，打开主页。
 5. 在「设置 → 发票信息」中填写单位的发票抬头和税号。
 6. 在淘宝「我的淘宝 → 已买到的宝贝」点击「导出订单」，将下载的 xlsx 拖入主页（或点击「导入订单表」）。
@@ -108,7 +108,7 @@
 <summary>更新到新版本</summary>
 
 1. 先在主页「更多 → 备份数据」备份一次。
-2. 重新「Download ZIP」，解压后覆盖原来的文件夹（保持同一位置）。
+2. 在 [Releases 发布页](https://github.com/jackdhch/taobao-order-triage/releases/latest) 下载新版压缩包，解压后覆盖原来的文件夹（保持同一位置）。
 3. 在 `chrome://extensions` 中找到「订单分拣」，点击刷新图标重新加载，然后刷新已打开的主页和淘宝页面。
 
 数据保存在浏览器中，覆盖文件不会丢失数据；如果数据异常，用「更多 → 从备份恢复」恢复。
@@ -416,6 +416,15 @@ env -u TMPDIR python3 tools/e2e-extras.py    # 读取发票文件夹、核对重
 每个端到端测试约一到两分钟。`env -u TMPDIR` 是因为临时目录路径过长时浏览器会报错，路径不长时可以省略。
 
 - 评估判断效果：`node tools/eval.mjs 订单数据.xlsx labels.json`，`labels.json` 格式为 `{ "lab": ["订单号", …], "personal": ["订单号", …] }`。
+
+</details>
+
+<details>
+<summary>发布新版本</summary>
+
+1. 改 `manifest.json` 的 `version`（`js/app.js` 的 `VERSION` 和 `tools/selftest.mjs` 里的版本号同步改），跑通全部测试。
+2. `bash tools/make-release.sh`，生成 `dist/order-triage-v版本号.zip`（只含插件运行需要的文件和一份「安装说明.txt」）。
+3. 提交、推送后：`gh release create v版本号 dist/order-triage-v版本号.zip --title "订单分拣 v版本号" --notes "更新内容……"`。
 
 </details>
 

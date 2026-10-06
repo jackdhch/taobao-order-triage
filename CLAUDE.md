@@ -101,3 +101,7 @@ docs/assets/               README 横幅、功能图标、状态色块（图标�
 ## 代码风格
 
 中文界面文案和注释；注释说「为什么」而不是「做了什么」。改动保持和周围代码一致的密度与写法。
+
+## 发布
+
+`bash tools/make-release.sh` 生成 `dist/order-triage-v<版本>.zip`（dist/ 不进仓库），用 `gh release create v<版本> <zip>` 上传到 GitHub Releases。README 的安装步骤指向 Releases 最新版。压缩包用 Python zipfile 打包，中文文件名才带 UTF-8 标记。
