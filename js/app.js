@@ -30,10 +30,10 @@
     catch (e) { toast('本机存储写入失败，可能是浏览器存储空间不足'); }
     if (EXT) chrome.storage.local.set({ want: wantList() });
   }
-  // 给淘宝页的缺图清单：只算订单表里的订单。没有订单表时给 null，淘宝页就抓看到的全部订单来建单
-  // （按抓取数据临时建的单如果也算进清单，淘宝页会只盯着这几单，后面几页的订单就不存了）
+  // 给淘宝页的缺图清单（用户自己打开订单页、点「开始补图片」时用）。还没有任何订单时给 null，淘宝页就抓看到的全部订单来建单。
+  // 「从淘宝读取订单」不用这份清单（淘宝页按 readJob 全部读，见 extension/taobao.js）
   function wantList() {
-    const table = S.orders.filter(o => o.source !== 'scrape' || o.older);      // 按订单页建的「订单表之前」的单缺图也要补
+    const table = S.orders.filter(o => !/^示例-/.test(o.no));
     if (!table.length) return null;
     const r = olderRange(), w = N.missingImages(table);
     // 过后还可能退款的单：没确认收货的、有件在退款中的、30 天内交易成功的（确认收货后的售后大多在这段时间）。
@@ -76,10 +76,13 @@
     const list = Object.values(scraped || {});
     if (!list.length) return;
     const none = !S.orders.length;
-    const r = N.mergeScraped(S.orders, list, { addNew: none, addRange: olderRange() });
+    // 读过的日期范围（S.readFrom 起）里、主页还没有的订单按订单页建单；从没读过时沿用旧规则（没有订单时全建、「订单表之前」那段）
+    const rr = readRange();
+    const r = N.mergeScraped(S.orders, list, { addNew: none && !rr, addRange: rr || olderRange() });
     if (!r.matched && !r.added) return;
     persist(); derive(); render();
-    if (r.filled || r.added) toast('已从淘宝订单页补充图片 ' + r.filled + ' 件' + (r.added ? (none ? '（尚无订单表，已按抓取数据建立 ' : '（订单表之前的订单，已按订单页建立 ') + r.added + ' 单）' : ''));
+    // 读取订单期间每翻一页并一次，进度在第 1 步里显示，不逐页弹提示
+    if ((r.filled || r.added) && !readBusy()) toast('已从淘宝订单页' + (r.added ? '新增 ' + r.added + ' 单' : '') + (r.added && r.filled ? '，' : '') + (r.filled ? '补充图片 ' + r.filled + ' 件' : ''));
   }
   // 淘宝页翻完了订单表之前的那段：过去的订单不会再变，清掉「提取到哪天」，以后补图找齐就停，不用每次翻回去（要刷新再填一次）
   function olderFinished(d) {
@@ -429,7 +432,7 @@
     $('main').hidden = !has;
     // 「更多」一直在：没有数据时也要能从备份恢复；只是要有数据才有意义的几项先藏起来
     for (const el of document.querySelectorAll('#more .need-data')) el.hidden = !has;
-    if (!has) return;
+    if (!has) { renderGuide(); return; }
     renderDash();
     renderSummary();
     renderSeg();
@@ -452,7 +455,7 @@
     window.scrollTo({ top: $('summary').getBoundingClientRect().bottom + window.scrollY });
   }
 
-  // ── 一条线的步骤：导入订单表 → 上次报销到哪 → 补图片 → 待定 → 检查个人 → 检查实验室 → 开发票 → 整理成报销文件 ──
+  // ── 一条线的步骤：从淘宝读取订单 → 上次报销到哪 → 待定 → 检查个人 → 检查实验室 → 开发票 → 整理成报销文件 ──
   // 每一步只有一个主按钮；不常用的放在顶栏「更多」里
   const pb = (attr, label, tip, primary) => '<button class="btn' + (primary === false ? '' : ' primary') + '" ' + attr + ' title="' + tip + '">' + label + '</button>';
   function flowSteps() {
@@ -467,49 +470,96 @@
     }
     const since = sinceInfo(), times = S.orders.map(o => (o.time || '').slice(0, 10)).filter(Boolean).sort();
     const ic = EXT ? invCounts() : null;
-    // 步骤格里的第二行要短（八步排一行）：识别方式只放在悬停说明和下方的详细说明里；同一年的日期范围后一个日期省掉年份
+    // 步骤格里的第二行要短（七步排一行）：识别方式只放在悬停说明和下方的详细说明里；同一年的日期范围后一个日期省掉年份
     const sinceText = since.mode === 'auto' || since.mode === 'date' ? '截至 ' + since.date : since.mode === 'none' ? '从第一单开始' : '未设置';
     const sinceTip = since.mode === 'auto' ? '，自动识别' : since.mode === 'date' ? '，手动指定' : '';
     const t0 = times[0] || '', t1 = times[times.length - 1] || '';
     const range = t0 === t1 ? t0 : t0.slice(0, 4) === t1.slice(0, 4) ? t0 + ' 至 ' + t1.slice(5) : t0 + ' 至 ' + t1;
     const sinceNote = since.mode === 'auto' ? '自动识别：上次报销截至 ' + since.date + ' ' + (since.shop || '') + ' 的订单，此前 ' + past + ' 件不再判断。'
-      : since.mode === 'date' ? since.date + ' 及以前的 ' + past + ' 件不再判断。' : since.mode === 'none' ? '订单表中的全部订单均需判断。' : '';
+      : since.mode === 'date' ? since.date + ' 及以前的 ' + past + ' 件不再判断。' : since.mode === 'none' ? '全部订单均需判断。' : '';
     const pack = EXT ? packState() : null;
+    // help：一两句「这一步是什么」；how：给第一次用的人的分步说明（去哪个页面、点什么、做完是什么样子），README「工作流程」的折叠说明与此一致
+    const FOLDER_TIP = '选择文件夹时浏览器会询问是否「上传」，确认即可：文件只在本机读取，不会上传。';
     return [
-      { id: 'import', title: '导入订单表', done: S.orders.length > 0,
+      // 第 1 步「从淘宝读取订单」（用户 2026-10-07）：原来的「导入订单表」「补充图片」两步合成一步，订单、图片、逐件退款一次读完；
+      // 订单表（xlsx）降为可选，在「更多」里导入。网页版没有扩展读不了淘宝页面，仍是导入订单表 + 复制抓取脚本
+      EXT ? { id: 'read', title: '从淘宝读取订单', done: S.orders.length > 0,
+        text: readBusy() ? readShort() : S.orders.length ? S.orders.length + ' 单 · ' + range : '未读取',
+        tip: S.orders.length ? S.orders.length + ' 单，' + t0 + ' 至 ' + t1 + '，有图 ' + img + ' / ' + live.length + ' 件' : '',
+        help: (img < live.length ? '尚有 ' + (live.length - img) + ' 件缺少图片（列表中以红色 ERROR 标出），再次读取可补上。' : '')
+          + '从淘宝「已买到的宝贝」读取订单、商品图片和逐件退款状态。有新订单时再次点击即可更新，已有的判断全部保留。',
+        how: [
+          '点击「从淘宝读取订单」，选择读取到哪天为止（默认为上次报销截止点，没有时为最近 6 个月），点击「开始读取」。',
+          '插件打开淘宝「已买到的宝贝」：未登录时请在该页面用手机淘宝 App 扫码，或输入账号密码登录一次，登录后自动开始翻页读取，本页显示读取进度。遇到滑块或安全验证时，请在该页面手动完成，完成后自动继续。',
+          '读取完成后淘宝页面自动关闭并回到本页，此步骤显示订单数和日期范围。已有从淘宝导出的订单表（xlsx）时，可在右上角「更多 → 导入订单表」补充。',
+        ],
+        note: readNote(),
+        acts: pb('data-flow="read"', '从淘宝读取订单', READ_TIP) }
+      : { id: 'import', title: '导入订单表', done: S.orders.length > 0,
         text: S.orders.length ? S.orders.length + ' 单 · ' + range : '未导入',
-        tip: S.orders.length ? S.orders.length + ' 单，' + t0 + ' 至 ' + t1 : '',
-        help: '在淘宝「已买到的宝贝」页点击「导出订单」，导入下载的 xlsx。有新订单时重新导入，已有判断保留。',
-        acts: pb('data-flow="import"', '导入订单表', '选择从淘宝导出的订单表（xlsx 或 csv）') },
+        tip: S.orders.length ? S.orders.length + ' 单，' + t0 + ' 至 ' + t1 + '，有图 ' + img + ' / ' + live.length + ' 件' : '',
+        help: '网页版无法自动读取淘宝页面，需导入订单表；安装为 Chrome 扩展后可一键从淘宝读取订单。',
+        how: [
+          '在已登录的淘宝「已买到的宝贝」页点击订单列表上方的「导出订单」，按页面提示下载 xlsx 表格，再点击「导入订单表」选择该文件，或拖入本页。',
+          '订单表中没有商品图片和逐件退款：点击「补充图片」复制抓取脚本，在「已买到的宝贝」页按 F12 打开控制台粘贴运行，点击右下角面板的「自动翻页」，完成后点击「保存 JSON」，将文件拖回本页。',
+        ],
+        acts: pb('data-flow="import"', '导入订单表', '选择从淘宝导出的订单表（xlsx 或 csv）')
+          + pb('data-flow="img-dlg"', '补充图片', '复制抓取脚本，在淘宝订单页运行', false) },
       { id: 'since', title: '上次报销截止点', done: ['auto', 'date', 'none'].includes(since.mode), text: sinceText, tip: sinceText + sinceTip,
-        help: sinceNote + '截止订单及更早的订单不再判断。可导入已整理的发票文件夹自动识别，或手动指定日期。',
+        help: sinceNote + '截止订单及更早的订单不再判断，避免重复报销。',
+        how: [
+          '以前报销过：点击「导入已整理的发票文件夹」，选择存放以往已报销发票 PDF 的文件夹（可含子文件夹），插件读取发票号码、日期和金额，自动找出上次报销的最后一单。' + FOLDER_TIP,
+          '没有整理好的发票文件夹：在右侧「或手动指定」中选择上次报销截止的日期。',
+          '第一次报销：点击「从第一单开始」，读取到的全部订单都参与判断。完成后此步骤显示「截至 日期」或「从第一单开始」。',
+        ],
         acts: pb('data-flow="have-dir"', '导入已整理的发票文件夹', '选择以往整理好的发票文件夹：读取每张 PDF 的号码、日期、金额，识别已报销的订单', since.mode === 'unknown')
           + '<label class="flow-date">或手动指定：截至 <input type="date" data-flow="since-date" title="上次报销截止的日期，此日及以前的订单不再判断" value="' + (since.mode === 'date' ? since.date : '') + '"></label>'
-          + (since.mode !== 'none' ? '<button class="linkbtn" data-flow="since-none" title="订单表中的全部订单均需判断">从第一单开始</button>' : '')
+          + (since.mode !== 'none' ? '<button class="linkbtn" data-flow="since-none" title="全部订单均需判断">从第一单开始</button>' : '')
           + (since.mode === 'date' || since.mode === 'none' ? '<button class="linkbtn" data-flow="since-auto" title="按已整理的发票自动识别上次报销截止的订单">改为自动识别</button>' : '') },
-      { id: 'images', title: '补充图片', done: live.length > 0 && img === live.length, text: '有图 ' + img + ' / ' + live.length + ' 件',
-        help: (img < live.length ? '尚有 ' + (live.length - img) + ' 件缺少图片（列表中以红色 ERROR 标出）。' : '')
-          + (EXT ? '打开淘宝订单页，点击页面右下角「开始补图片」，插件自动翻页，读取商品图片和退款情况。如出现滑块验证，请手动完成后再次点击。'
-                 : '复制抓取脚本，在淘宝订单页的控制台运行。安装为 Chrome 扩展后可自动完成。'),
-        acts: (EXT ? pb('data-flow="taobao"', '打开淘宝订单页', '在新标签页打开淘宝「已买到的宝贝」') : pb('data-flow="img-dlg"', '补充图片', '复制抓取脚本，在淘宝订单页运行'))
-          + (EXT ? '<button class="linkbtn" data-flow="img-dlg" title="淘宝仅能导出最近几个月的订单表，更早的订单从订单页读取">提取订单表之前的订单</button>' : '') },
       { id: 'unsure', cat: 'unsure', title: '判断待定', done: n.unsure === 0, text: n.unsure ? '剩余 ' + n.unsure + ' 件' : '已全部判断',
-        help: '自动判断无法确定的商品，逐件按 1（实验室）或 2（个人）判断。已退款商品自动排除。',
+        help: '自动判断无法确定的商品需逐件判断。已退款商品自动排除。',
+        how: [
+          '点击「判断待定商品」，下方列出待定商品，当前商品左侧有色条标记。',
+          '按键盘 <kbd>1</kbd> 判为实验室、按 <kbd>2</kbd> 判为个人（也可点击商品右侧的「实验室」「个人」），判断后自动跳到下一件；按 <kbd>Ctrl</kbd>+<kbd>Z</kbd> 撤销。',
+          '看不出是什么时，点击商品图片或商品名，在淘宝打开该订单详情核对。全部判断后此步骤显示「已全部判断」。',
+        ],
         acts: pb('data-goto="unsure"', '判断待定商品' + (n.unsure ? '（' + n.unsure + ' 件）' : ''), '列出待定商品，逐件判断') },
       { id: 'personal', cat: 'personal', title: '检查个人', done: n.unsure === 0 && unconf.personal === 0, text: n.personal + ' 件' + (unconf.personal ? ' · ' + unconf.personal + ' 件未确认' : ' · 已确认'),
-        help: '逐件核对判为个人的商品，判错的按 1 改为实验室；核对无误后点击「全部确认为个人」。确认后不再自动变更。',
+        help: '核对自动判为个人的商品，避免漏报实验室用品。',
+        how: [
+          '点击「检查个人商品」，下方列出判为个人的商品，未确认的自动判断排在前面。',
+          '判错的商品选中后按 <kbd>1</kbd> 改为实验室。',
+          '核对无误后点击列表上方的「全部确认为个人」。确认后不再自动变更，此步骤显示「已确认」。',
+        ],
         acts: pb('data-goto="personal"', '检查个人商品', '列出判为个人的商品，未确认的排在前面') },
       { id: 'lab', cat: 'lab', title: '检查实验室', done: n.unsure === 0 && unconf.lab === 0, text: n.lab + ' 件' + (unconf.lab ? ' · ' + unconf.lab + ' 件未确认' : ' · 已确认'),
-        help: '逐件核对判为实验室的商品，判错的按 2 改为个人；核对无误后点击「全部确认为实验室」。这些商品即本次报销范围。',
+        help: '核对自动判为实验室的商品。这些商品即本次报销范围。',
+        how: [
+          '点击「检查实验室商品」，下方列出判为实验室的商品，未确认的自动判断排在前面。',
+          '判错的商品选中后按 <kbd>2</kbd> 改为个人。',
+          '核对无误后点击列表上方的「全部确认为实验室」。确认后不再自动变更，此步骤显示「已确认」。',
+        ],
         acts: pb('data-goto="lab"', '检查实验室商品', '列出判为实验室的商品，未确认的排在前面') },
       { id: 'invoice', cat: 'invoice', title: '开具发票', done: !!ic && ic.todo === 0 && ic.ready === 0 && invOrders().length > 0,
         text: ic ? '已下载 ' + ic.done + ' / ' + (ic.todo + ic.ready + ic.done) + ' 单' : '需安装为 Chrome 扩展',
-        help: EXT ? '先点击「检查开票情况」，同步开票状态并下载已开具的发票；再依次申请平台开票、按卖家的开票入口申请、向卖家索要发票、请淘宝客服督促。'
+        help: EXT ? '需报销的实验室订单逐单显示发票状态。插件会自行打开淘宝的发票、旺旺等页面，需在本浏览器中保持淘宝登录，并已在「设置 → 发票信息」中填写抬头和税号。'
                   : '发票功能需安装为 Chrome 扩展后使用。',
-        acts: pb('data-goto="invoice"', '查看发票状态', '列出需报销的实验室订单及每单的发票状态') },
+        how: EXT ? [
+          '点击「查看发票状态」，下方列出需报销的订单和每单的发票状态，列表上方有五个按钮，按从左到右的顺序使用，当前应点击的一个显示为主按钮。',
+          '先点击「检查开票情况」：插件依次打开淘宝「我的发票」和旺旺，同步开票记录、读取卖家回复并下载已开具的发票，完成后各单状态自动更新，打开的页面自动关闭。',
+          '再按需点击「申请平台开票」「按卖家的开票入口申请」「向卖家索要发票」「请淘宝客服督促」。提交申请、发送消息前都先列出清单，确认后才执行；平台批量开票停在淘宝的确认页，由用户点击「确认提交」。',
+          '下载的发票存入下载文件夹的「订单分拣-发票」。带「›」的状态可点击，打开对应的淘宝页面；如需手动查看开票记录，点击「打开淘宝我的发票」。',
+        ] : null,
+        acts: pb('data-goto="invoice"', '查看发票状态', '列出需报销的实验室订单及每单的发票状态')
+          + (EXT ? '<button class="linkbtn" data-flow="inv-page" title="在新标签页打开淘宝「我的发票」，查看已开具、申请中、未申请的发票记录（插件同步、下载时会自行打开，无需手动操作）">打开淘宝我的发票</button>' : '') },
       { id: 'pack', title: '整理报销文件', done: !!pack && pack.done, text: pack ? pack.text : '需安装为 Chrome 扩展',
-        help: EXT ? '选择下载文件夹中的「订单分拣-发票」，按报销格式复制并重命名，附汇总表和压缩包，存入「订单分拣-报销」。原文件不变。'
+        help: EXT ? '把已下载的发票按报销格式复制并重命名，附汇总表和压缩包。原文件不变。'
                   : '整理报销文件需安装为 Chrome 扩展后使用。',
+        how: EXT ? [
+          '点击「选择发票文件夹并整理」，选择下载文件夹中的「订单分拣-发票」。' + FOLDER_TIP,
+          '在弹出的窗口中核对起始序号、批次名称和每张发票的新文件名，点击「生成报销文件夹和压缩包」。',
+          '结果存入下载文件夹的「订单分拣-报销」：按序号重命名的发票、汇总表和同名压缩包，单张超过 200 元的放入「低值品」子文件夹。',
+        ] : null,
         acts: EXT ? pb('data-pick="inv-pack-dir"', '选择发票文件夹并整理', '选择已下载的发票文件夹（如「订单分拣-发票」），预览新文件名，确认后生成报销文件夹和压缩包') : '' },
     ];
   }
@@ -532,7 +582,11 @@
         + '<span class="flow-s">' + esc(x.text) + '</span></li>').join('') + '</ol>'
       + '<div class="flow-detail"><div class="fd-text"><div class="fd-title">第 ' + (show + 1) + ' 步　' + d.title
       + (show !== cur && cur >= 0 ? '<span class="hint">当前步骤：第 ' + (cur + 1) + ' 步 ' + steps[cur].title + '</span>' : cur < 0 ? '<span class="hint">全部完成</span>' : '')
-      + '</div><p>' + esc(d.help) + '</p></div><div class="flow-acts">' + d.acts + '</div></div>';
+      + '</div><p>' + esc(d.help) + '</p>'
+      // how 是写死的说明文字（含 <kbd>），不夹带订单数据，按 HTML 放；note 里有文件名，转义
+      + (d.how ? '<ol class="fd-how">' + d.how.map(s => '<li>' + s + '</li>').join('') + '</ol>' : '')
+      + (d.note ? '<p class="fd-note">' + esc(d.note) + '</p>' : '')
+      + '</div><div class="flow-acts">' + d.acts + '</div></div>';
   }
 
   function renderSeg() {
@@ -830,15 +884,10 @@
         msgs.push(f.name + '：读取失败（' + e.message + '）');
       }
     }
-    // 订单表是基准：试用过的示例订单、没有订单表时按抓取数据临时建的单（这次导入的表里都没有的），都不留；
-    // 只留用户要的「订单表之前」那段按订单页建的单。等所有表都读完再筛，一次拖进两份表时，只在第二份里的单不会被第一份误删
-    if (tableNos.size) {
-      const r = olderRange(), inRange = o => { const d = (o.time || '').slice(0, 10); return !!(r && d && d >= r.from && d < r.before); };
-      S.orders = S.orders.filter(o => {
-        if (o.source === 'scrape' && !o.older && inRange(o)) o.older = true;     // 网页版：先按抓取 JSON 建的单，落在要的日期范围里的也留下
-        return !/^示例-/.test(o.no) && !(o.source === 'scrape' && !tableNos.has(o.no) && !o.older);
-      });
-    }
+    // 订单表降为可选（用户 2026-10-07）：订单主要从淘宝订单页读来，导入订单表只是合并——表里有的单以订单表字段为准
+    // （mergeExport 换成表里的商品行，图片、退款从订单页那份补上，手动判断跟着挪），表里没有的、按订单页建的单照常保留。
+    // 只去掉试用的示例订单
+    if (tableNos.size) S.orders = S.orders.filter(o => !/^示例-/.test(o.no));
     persist(); derive();
     // 先抓图、后导入订单表的情况：把扩展里已有的抓取数据再并一次
     if (EXT) chrome.storage.local.get('scraped').then(r => mergeFromExt(r.scraped));
@@ -1613,6 +1662,94 @@
     finally { setTimeout(() => URL.revokeObjectURL(url), 10000); }
   }
 
+  // ── 从淘宝读取订单（用户 2026-10-07：新人大多没用过淘宝网页版，卡在「导出订单表」；改成插件自己翻订单页读，订单表降为可选）──
+  // 主页写 readJob = { at, until }（30 分钟内有效）并开一个「已买到的宝贝」干活页 → 淘宝页（extension/taobao.js）领到活后自动翻页，
+  // 进度写 readProgress；读完后台写 readResult、关掉干活页、切回主页。读到的订单照常经 scraped 并进来（mergeFromExt）。
+  // S.readFrom：读过的最早一天（'0000-00-00' = 全部订单）。这一天及以后、主页还没有的订单按订单页建单；已有订单只补图片、退款、状态，判断全部保留
+  const READ_LIFE = 30 * 60e3;
+  const READ_TIP = '将打开淘宝「已买到的宝贝」，自动翻页读取订单、商品图片和退款状态；未登录时请在打开的页面登录一次，读取完成后自动回到本页';
+  const R = { job: null, progress: null, result: null };
+  const readRange = () => S.readFrom ? { from: S.readFrom, before: '9999-12-31' } : null;
+  // 正在读：任务还有效（等登录、正在翻），或进度 2 分钟内更新过（读得久的，过了 30 分钟也还在翻）
+  const readBusy = () => !!((R.job && Date.now() - R.job.at < READ_LIFE) || (R.progress && Date.now() - (R.progress.t || 0) < 120000));
+  const readShort = () => R.progress && R.progress.state === 'reading' ? '读取中 · 第 ' + (R.progress.page + 1) + ' 页'
+    : R.progress && R.progress.state === 'verify' ? '等待安全验证' : '等待登录淘宝';
+  function readNote() {
+    const p = R.progress;
+    if (readBusy()) {
+      if (p && p.state === 'reading') return '正在读取：第 ' + (p.page + 1) + ' 页，已读 ' + (p.stored || 0) + ' 单。读取期间请勿关闭淘宝页面。';
+      if (p && p.state === 'verify') return '淘宝页面出现安全验证：请切换到该页面手动完成验证，完成后自动继续读取。';
+      return '已打开淘宝「已买到的宝贝」，等待登录淘宝…未登录时请在打开的页面用手机淘宝 App 扫码，或输入账号密码登录，登录后自动开始读取。';
+    }
+    return R.result ? readResultText(R.result) : '';
+  }
+  function readResultText(r) {
+    const when = new Date(r.done).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    const nos = r.nos || [];
+    if (r.why === 'stopped') return '读取已停止（' + when + '）：已读取 ' + nos.length + ' 单。再次点击「从淘宝读取订单」可重新读取。';
+    if (r.why === 'verify') return '读取未完成（' + when + '）：淘宝页面的安全验证未完成。完成验证后再次点击「从淘宝读取订单」。';
+    if (!nos.length) return '未读取到订单（' + when + '）。请确认已在打开的页面登录淘宝、页面显示的是「已买到的宝贝」订单列表；页面正常显示订单仍读取不到时，可能是淘宝改版，请反馈给维护者。';
+    const set = new Set(nos), os = S.orders.filter(o => set.has(o.no));
+    const lines = os.reduce((a, o) => a + o.lines.length, 0);
+    const refunded = os.reduce((a, o) => a + o.lines.filter(l => N.refundState(l, o) === 'refunded').length, 0);
+    const days = os.map(o => (o.time || '').slice(0, 10)).filter(Boolean).sort();
+    return '已读取 ' + os.length + ' 单 ' + lines + ' 件（' + (days.length ? days[0] + ' 至 ' + days[days.length - 1] : '无日期') + '），其中退款 ' + refunded + ' 件（' + when + '）。'
+      + (r.why === 'stuck' || r.why === 'max' ? '翻页中途停止，可能未读到最早的订单，可再次读取。' : '');
+  }
+  // 读到哪天为止：默认上次报销截止点（更早的已报销过）；没有时最近 6 个月
+  function defaultUntil() {
+    const s = sinceInfo();
+    if (s.mode === 'date' || s.mode === 'auto') return s.date;
+    const d = new Date(); d.setMonth(d.getMonth() - 6);
+    return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+  }
+  function openRead() {
+    if (!EXT) { toast('从淘宝读取订单需安装为 Chrome 扩展；网页版请导入订单表'); return; }
+    const s = sinceInfo();
+    $('read-until').value = defaultUntil();
+    $('read-all').checked = false; $('read-until').disabled = false;
+    $('read-hint').textContent = (s.mode === 'date' || s.mode === 'auto' ? '默认为上次报销截止点 ' + s.date + '：更早的订单已报销过，不必再读。'
+      : '默认读取最近 6 个月；知道上次报销截止的日期时，可改为该日期。') + '订单越多读取越久，每页约 5 秒。';
+    $('read-err').textContent = '';
+    $('dlg-read').showModal();
+  }
+  async function startRead() {
+    const all = $('read-all').checked, until = all ? '' : $('read-until').value;
+    if (!all && !/^\d{4}-\d{2}-\d{2}$/.test(until)) { $('read-err').textContent = '请选择日期，或勾选「读取全部订单」'; return; }
+    $('dlg-read').close();
+    const from = all ? '0000-00-00' : until;
+    if (!S.readFrom || from < S.readFrom) S.readFrom = from;
+    S.orders = S.orders.filter(o => !/^示例-/.test(o.no));          // 试用的示例订单不和真实订单混在一起
+    persist(); derive(); render();
+    R.job = { at: Date.now(), until }; R.progress = null; R.result = null;
+    await chrome.storage.local.remove(['readProgress', 'readResult']);
+    await chrome.storage.local.set({ readJob: R.job });
+    chrome.runtime.sendMessage({ type: 'openWorkTab', url: TAOBAO });        // 插件开的干活页：读完由后台关掉
+    render();
+    toast('已打开淘宝「已买到的宝贝」：未登录时请在该页面登录，登录后自动开始读取');
+  }
+  function onReadResult(r) {
+    if (!r) return;
+    // 最后一页的数据先于结果写进 scraped，这里再并一次保证结果里的订单都在
+    // 回到主页时停在第 1 步，读取结果写在它的说明里（提示条几秒就消失）；上方提示当前该做第几步
+    chrome.storage.local.get('scraped').then(x => { mergeFromExt(x.scraped); view.step = 0; render(); toast(readResultText(r)); });
+  }
+
+  // ── 首次使用（没有订单时的「开始使用」卡片）：两项——填抬头税号（填了打勾）、从淘宝读取订单（显示读取进度）──
+  function renderGuide() {
+    const ok = !!(S.invoice.title && S.invoice.taxId);
+    const li = document.querySelector('#guide > li[data-g="info"]');
+    li.classList.toggle('is-done', ok);
+    li.querySelector('.g-n').textContent = ok ? '✓' : '1';
+    const el = $('g-read'), note = EXT ? readNote() : '';
+    el.hidden = !note;
+    el.textContent = note;
+  }
+  function guideAction(k) {
+    if (k === 'settings') openSettings();
+    else if (k === 'read') openRead();
+  }
+
   // ── 补图片 ──
   function openImages() {
     if (!S.orders.length) { toast('请先导入订单表，再补充图片'); return; }
@@ -1677,7 +1814,7 @@
   // ── 备份数据 / 从备份恢复（用户 2026-10-05）：全部数据只在本机浏览器里，删掉扩展或清浏览器数据就没了 ──
   // 备份文件：{ app: 'orderTriage', kind: 'backup', format: 1, version, at, localStorage: { 'orderTriage.*': 原样字符串 }, storage: chrome.storage.local 全部 }
   // 格式有不兼容的改动时 format 加一；旧插件见到不认识的 format 就拒绝，不去猜
-  const VERSION = EXT ? chrome.runtime.getManifest().version : '0.13.0';     // 网页版读不到 manifest，selftest 核对两处一致
+  const VERSION = EXT ? chrome.runtime.getManifest().version : '0.14.0';     // 网页版读不到 manifest，selftest 核对两处一致
   const BACKUP_FORMAT = 1;
   // 恢复时丢掉的扩展存储键：进行中的任务、页面领活记录、标签页编号这类临时状态。恢复回去的话，开着的淘宝页一读到就会接着干活
   // （重新提交开票申请、给卖家发消息、找客服督促、下载），标签页编号也早已失效。
@@ -1688,7 +1825,8 @@
   //   otReload_* 空白页自动刷新记录（panel.js）            jobTabs 派活开的标签页编号（background.js）
   //   nickWant 待读卖家旺旺名的订单（detail.js）           vipJob 请淘宝客服督促的任务（vip.js）
   //   olderDone 「订单表之前的订单已提取完」的一次性信号  autoLast 每日自动处理上次运行的日期（恢复时记成今天，免得一恢复就自动开始）
-  const BACKUP_SKIP = ['applyJob', 'applyResult', 'cardJobs', 'cardRun', 'chatQueue', 'chatAfter', 'dlJobs', 'invJobs', 'jobTabs', 'nickWant', 'vipJob', 'olderDone', 'autoLast'];
+  //   readJob / readProgress / readResult 「从淘宝读取订单」的任务、进度和一次性结果（taobao.js、background.js）
+  const BACKUP_SKIP = ['applyJob', 'applyResult', 'cardJobs', 'cardRun', 'chatQueue', 'chatAfter', 'dlJobs', 'invJobs', 'jobTabs', 'nickWant', 'vipJob', 'olderDone', 'autoLast', 'readJob', 'readProgress', 'readResult'];
   const skipKey = k => BACKUP_SKIP.includes(k) || /^(invClaim_|otReload_)/.test(k);
   const OWN_LS = k => /^orderTriage\./.test(k);
   const stampOf = d => d.getFullYear() + pad2(d.getMonth() + 1) + pad2(d.getDate()) + '-' + pad2(d.getHours()) + pad2(d.getMinutes());
@@ -1759,11 +1897,15 @@
   // ── 事件 ──
   function bind() {
     $('btn-import').onclick = $('btn-import2').onclick = () => $('file').click();
+    $('read-go').onclick = () => startRead().catch(e => toast('出错：' + e.message));
+    $('read-cancel').onclick = () => $('dlg-read').close();
+    $('read-all').onchange = e => { $('read-until').disabled = e.target.checked; $('read-err').textContent = ''; };
     $('file').onchange = e => { if (e.target.files.length) importFiles([...e.target.files]); e.target.value = ''; };
     $('btn-sample').onclick = async () => {
       S.orders = N.rowsToOrders(window.SAMPLE_ROWS);
       persist(); derive(); render(); toast('已载入 8 单示例数据（全部虚构）');
     };
+    $('empty').addEventListener('click', e => { const g = e.target.closest('[data-guide]'); if (g) guideAction(g.dataset.guide); });
     const drop = $('empty');
     ['dragenter', 'dragover'].forEach(ev => document.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('drag'); }));
     ['dragleave', 'drop'].forEach(ev => document.addEventListener(ev, e => { e.preventDefault(); if (ev === 'drop' || e.target === document.documentElement) drop.classList.remove('drag'); }));
@@ -1813,6 +1955,7 @@
       try { localStorage.removeItem(STORE); } catch (e) { /* 忽略 */ }
       if (EXT) chrome.storage.local.clear();
       S = { orders: [], decisions: {}, refunds: {}, rules: null, prefs: S.prefs, invoice: { title: I.DEFAULT_TITLE, taxId: I.DEFAULT_TAX, template: '', email: '' }, invFiles: {}, haveIdx: [] };
+      Object.assign(R, { job: null, progress: null, result: null });
       $('dlg-settings').close(); derive(); render();
     };
 
@@ -1826,7 +1969,8 @@
       if (f) {
         const k = f.dataset.flow;
         if (k === 'import') $('file').click();
-        else if (k === 'taobao') window.open(TAOBAO, '_blank', 'noopener');
+        else if (k === 'read') openRead();
+        else if (k === 'inv-page') openUrl(INV_URL);
         else if (k === 'img-dlg') openImages();
         else if (k === 'have-dir') $('inv-have-dir').click();
         else if (k === 'since-none') setSince('none');
@@ -1892,8 +2036,13 @@
       if (area !== 'local' || restoring) return;
       if (ch.scraped) mergeFromExt(ch.scraped.newValue);
       if (ch.olderDone) olderFinished(ch.olderDone.newValue);
+      if (ch.readJob) { R.job = ch.readJob.newValue || null; render(); }
+      if (ch.readProgress) { R.progress = ch.readProgress.newValue || null; render(); }
+      if (ch.readResult) { R.result = ch.readResult.newValue || null; onReadResult(R.result); }
     });
-    chrome.storage.local.get(['scraped', 'olderDone']).then(r => { mergeFromExt(r.scraped); olderFinished(r.olderDone); });
+    chrome.storage.local.get(['scraped', 'olderDone', 'readJob', 'readProgress', 'readResult']).then(r => {
+      Object.assign(R, { job: r.readJob || null, progress: r.readProgress || null, result: r.readResult || null });
+      mergeFromExt(r.scraped); olderFinished(r.olderDone); render(); });
     chrome.storage.local.set({ want: wantList() });
     // 读回同步结果后再写一次 invWant：刚打开时还没读回来，所有单都算「需找卖家」，旺旺要看的店会多出一大堆
     chrome.storage.local.get(XKEYS).then(r => {

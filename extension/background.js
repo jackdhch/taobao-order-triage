@@ -174,6 +174,46 @@ chrome.alarms.onAlarm.addListener(async a => {
   else await chrome.tabs.create({ url: url + '#auto', active: false });
 });
 
+// ── 从淘宝读取订单（用户 2026-10-07）：主页写 readJob = { at, until } 并开一个「已买到的宝贝」干活页 ──
+// readClaim：订单页加载时来领活。只让一个页面干：第一个来领的记下 tab，别的页面（用户自己开着的订单页）不自动翻
+// readDone：读完（或停下）后清掉 readJob，结果写进 readResult 给主页；读到了订单就关掉这个干活页、把主页切到前台
+const READ_LIFE = 30 * 60e3;
+let readChain = Promise.resolve();
+async function focusHome() {
+  const url = chrome.runtime.getURL('index.html');
+  const ctxs = chrome.runtime.getContexts ? await chrome.runtime.getContexts({ contextTypes: ['TAB'] }) : [];
+  const c = ctxs.find(x => (x.documentUrl || '').startsWith(url));
+  if (!c) { await chrome.tabs.create({ url }); return; }
+  await chrome.tabs.update(c.tabId, { active: true });
+  if (c.windowId != null && c.windowId >= 0) await chrome.windows.update(c.windowId, { focused: true }).catch(() => {});
+}
+chrome.runtime.onMessage.addListener((m, sender, reply) => {
+  if (!(m && (m.type === 'readClaim' || m.type === 'readDone') && sender.tab)) return;
+  readChain = readChain.then(async () => {
+    const { readJob } = await chrome.storage.local.get('readJob');
+    if (!readJob || readJob.at !== m.at) return false;
+    if (m.type === 'readClaim') {
+      if (Date.now() - readJob.at > READ_LIFE) return false;
+      if (readJob.tab != null && readJob.tab !== sender.tab.id) {
+        try { await chrome.tabs.get(readJob.tab); return false; } catch (e) { /* 领过活的页面已经关了：换这个页面接着干 */ }
+      }
+      await chrome.storage.local.set({ readJob: Object.assign({}, readJob, { tab: sender.tab.id }) });
+      return true;
+    }
+    if (readJob.tab !== sender.tab.id) return false;
+    await chrome.storage.local.remove(['readJob', 'readProgress']);
+    await chrome.storage.local.set({ readResult: { at: readJob.at, until: readJob.until || '', why: m.why, nos: m.nos || [], pages: m.pages || 0, done: Date.now() } });
+    // 停下的、一单都没读到的（可能没登录好、页面没出来）：页面留着给用户看；读到了就关掉干活页，回主页看结果
+    if (m.why !== 'stopped' && m.why !== 'verify' && (m.nos || []).length) {
+      await focusHome().catch(e => console.warn('[订单分拣] 切回主页失败', e));
+      const ids = await workTabs(() => null);
+      if (ids.includes(sender.tab.id)) await chrome.tabs.remove(sender.tab.id).catch(() => {});
+    }
+    return true;
+  }).then(reply, e => reply(String(e)));
+  return true;
+});
+
 // 订单页抓到的数据：几个订单页同时抓时统一在这里排队合并进 scraped
 let scrapedChain = Promise.resolve();
 chrome.runtime.onMessage.addListener((m, sender, reply) => {

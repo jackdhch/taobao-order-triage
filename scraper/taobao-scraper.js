@@ -24,9 +24,13 @@
 // want = { nos: [订单号...], from: 'YYYY-MM-DD', refresh?: [订单号...], older?: { from, before } }，可省略（省略时抓看到的全部订单）
 // refresh：已经抓过、但还没到终态的订单（还没确认收货、有件在退款中），过后还可能退款，要回来再看；6 小时内看过的不再为它翻页
 // older：淘宝只能导出最近几个月的订单表，更早的月份从订单页上读 —— before（订单表最早日期）之前、from 当天及以后的订单也存下来
+// want = { all: true, from: 'YYYY-MM-DD' | '' }：「从淘宝读取订单」（用户 2026-10-07：不再需要导出订单表）——从最新往前，
+//   from 当天及以后的订单全部存下，翻到比 from 更早的页或最后一页为止；from 为空 = 全部订单
 // opts = { initial, sync(m, replace), olderDone(from) }：Chrome 扩展里用，抓到的数据交给扩展存储，不写进淘宝页面自己的 localStorage。
 // sync 默认是「合并进去」（可能同时开着几个订单页），replace 为 true 时才整份替换（清空）；
 // olderDone：订单表之前的那段翻完了（主页据此清掉「提取到哪天」，以后补图不用再翻回去）
+// 读取订单用：progress({ state: 'reading' | 'verify', page, stored })；finish(why, { nos, pages })，why = past / end / max / stuck / empty / stopped；
+// resume：遇到安全验证时不弹窗，等用户在页面上完成验证后自动接着翻（读取任务没人守着点按钮）
 function orderTriageScraper(want, opts) {
   'use strict';
   if (window.orderTriage && window.orderTriage.setWant) {
@@ -48,11 +52,14 @@ function orderTriageScraper(want, opts) {
   function setWant(w) {
     // 空清单 = 订单表里的都有图了，仍然只认清单；只有 null（没有订单表）才抓看到的全部订单
     const rf = new Set(((w && w.refresh) || []).map(String));
-    W = w && Array.isArray(w.nos) ? { set: new Set([...w.nos.map(String), ...rf]), nos: new Set(w.nos.map(String)), imgN: w.nos.length, refresh: rf, from: w.from || '', older: w.older && w.older.from && w.older.before ? w.older : null } : null;
+    W = w && w.all ? { all: true, set: new Set(), nos: new Set(), imgN: 0, refresh: new Set(), from: w.from || '', older: null }
+      : w && Array.isArray(w.nos) ? { set: new Set([...w.nos.map(String), ...rf]), nos: new Set(w.nos.map(String)), imgN: w.nos.length, refresh: rf, from: w.from || '', older: w.older && w.older.from && w.older.before ? w.older : null } : null;
     if (panel) render();
   }
   const fresh = o => o && Date.now() - new Date(o.scrapedAt || 0).getTime() < 6 * 3600e3;
-  const missing = () => { if (!W) return []; const s = load(); return [...W.set].filter(no => !s[no] || (W.refresh.has(no) && !fresh(s[no]))); };
+  const missing = () => { if (!W || W.all) return []; const s = load(); return [...W.set].filter(no => !s[no] || (W.refresh.has(no) && !fresh(s[no]))); };
+  const runNos = new Set();                          // 这一次自动翻页存下的订单（读取订单时报给主页）
+  let pageNo = 0, waitingVerify = false;
   const isOlder = day => !!(W && W.older && day && day >= W.older.from && day < W.older.before);
   const olderCount = () => Object.values(load()).filter(o => isOlder((o.time || '').slice(0, 10))).length;
   let pageNewest = '';                              // 本页最新的订单日期，用来判断是否已翻过清单范围
@@ -272,11 +279,13 @@ function orderTriageScraper(want, opts) {
     pageNewest = '';
     for (const b of blocks) {
       try {
-        const o = b.parse();
-        if (o.time.slice(0, 10) > pageNewest) pageNewest = o.time.slice(0, 10);
-        if (!o.lines.length || (W && !W.set.has(o.no) && !isOlder(o.time.slice(0, 10)))) continue;
+        const o = b.parse(), day = o.time.slice(0, 10);
+        if (day > pageNewest) pageNewest = day;
+        if (!o.lines.length) continue;
+        if (W && (W.all ? W.from && day && day < W.from : !W.set.has(o.no) && !isOlder(day))) continue;
         await checkImgs(o);
         store[o.no] = Object.assign(o, { scrapedAt: new Date().toISOString() });
+        runNos.add(o.no);
         n++;
       } catch (e) { console.warn('[订单分拣] 解析失败', b.no, e); }
     }
@@ -314,14 +323,16 @@ function orderTriageScraper(want, opts) {
     return 'same';
   }
   // 从当前页一直往后翻；返回停下的原因
+  const report = state => { if (opts.progress) opts.progress({ state, page: pageNo, stored: runNos.size }); };
   async function walk(maxPages, id) {
     for (let p = 0; p < maxPages; p++) {
       if (id !== runId) return 'stopped';
       const got = await grab(true);
       if (id !== runId) return 'stopped';
       if (got < 0) return 'verify';
-      if (W && !W.older && !missing().length) { console.log('[订单分拣] 清单里的订单全部找齐了'); return 'done'; }
-      const stopAt = W && (W.older ? W.older.from : W.from);   // 要订单表之前的订单时，翻到那天为止
+      pageNo++; report('reading'); render();
+      if (W && !W.older && !W.all && !missing().length) { console.log('[订单分拣] 清单里的订单全部找齐了'); return 'done'; }
+      const stopAt = W && (W.older ? W.older.from : W.from);   // 要订单表之前的订单 / 读取订单时，翻到那天为止
       if (stopAt && pageNewest && pageNewest < stopAt) {    // 列表从新到旧，再往后只会更早
         console.log('[订单分拣] 本页已早于 ' + stopAt + '，停止');
         return 'past';
@@ -339,11 +350,22 @@ function orderTriageScraper(want, opts) {
   }
   async function auto(maxPages) {
     const id = ++runId;
-    running = true; seen = 0; render();
+    running = true; seen = 0; pageNo = 0; runNos.clear(); render();
     try {
-      const why = await walk(maxPages || (W && W.older ? 300 : 50), id);
+      let why;
+      for (;;) {
+        why = await walk(maxPages || (W && (W.older || W.all) ? 300 : 50), id);
+        if (why !== 'verify' || !opts.resume || id !== runId) break;
+        // 读取订单：没人守着点按钮，等用户在页面上完成验证（最多 30 分钟），然后从当前页接着翻
+        waitingVerify = true; report('verify'); render();
+        for (let t = 0; t < 1800 && needsVerify() && id === runId; t++) await sleep(1000);
+        waitingVerify = false; render();
+        if (id !== runId || needsVerify()) break;
+        await sleep(1500);
+      }
       if (id !== runId) return;
-      if (why === 'verify') alert('页面出现安全验证，请手动完成后再次点击「开始补图片」。');
+      if (opts.finish) await opts.finish(!seen ? 'empty' : why, { nos: [...runNos], pages: pageNo });
+      if (why === 'verify' && !opts.resume) alert('页面出现安全验证，请手动完成后再次点击「开始补图片」。');
       else if (!seen) console.warn('[订单分拣] 翻过的页一单都没认出来 —— 可能是淘宝改版了，请把这句话和页面截图发给维护者');
       // 实测漏掉的都是用户自己删掉的订单（删掉的连按订单号都搜不到），所以不再换列表重翻
       else if (W && missing().length) {
@@ -390,7 +412,11 @@ function orderTriageScraper(want, opts) {
       panel.innerHTML = '<button data-ot="mini" title="展开面板" style="font:inherit;font-weight:600;border:0;background:none;cursor:pointer;color:#1c6e8c;padding:0">订单分拣' + (running ? ' · 补图中…' : '') + ' ▴</button>';
       return;
     }
-    const status = !W ? '已暂存 <b style="color:#1c6e8c">' + n + '</b> 单'
+    const status = waitingVerify ? '<b style="color:#d0021b">页面出现安全验证</b>，请在本页手动完成验证，完成后自动继续读取'
+      : W && W.all && !running && !pageNo ? '等待订单列表加载，随后自动开始读取' + (W.from ? '（读到 ' + W.from + ' 为止）' : '（全部订单）')
+      : W && W.all ? (running ? '正在读取：第 ' + (pageNo + 1) + ' 页，' : '') + '已读取 <b style="color:#1c6e8c">' + runNos.size + '</b> 单'
+        + (W.from ? '（读到 ' + W.from + ' 为止）' : '（全部订单）') + (running ? '' : '，结果已送回分拣主页')
+      : !W ? '已暂存 <b style="color:#1c6e8c">' + n + '</b> 单'
       // 「还差」分开说：缺图的，和近期订单要回看退款的（图早就有了，只是退款可能还会变；2026-10-05 用户看到「清单还差 27 单」以为是缺图）
       : left && leftImg() ? '已找到 ' + n + ' 单，清单尚缺 <b style="color:#1c6e8c">' + leftImg() + '</b> 单' + (left > leftImg() ? '；另有 ' + (left - leftImg()) + ' 单近期订单需复查退款' : '')
       : left ? '图片已补齐；另有 <b style="color:#1c6e8c">' + left + '</b> 单近期订单需复查退款状态（点击「开始补图片」时一并复查）'
@@ -398,13 +424,15 @@ function orderTriageScraper(want, opts) {
       : !W.imgN ? '订单表中的订单<b style="color:#1c6e8c">均已有图</b>'
       : '清单 ' + W.set.size + ' 单<b style="color:#1c6e8c">已全部找到</b>' + (ext ? '，已送回分拣主页' : '，请保存 JSON');
     const older = W && W.older ? '<br>订单表之前（' + W.older.from + ' 起）：已提取 <b style="color:#1c6e8c">' + olderCount() + '</b> 单' : '';
-    const note = ext ? (W ? '找到的图片自动送回分拣主页，' : '分拣主页尚无订单表，将提取页面上的全部订单，') : '数据';
+    const reading = !!(W && W.all);
+    const note = ext ? (reading ? '读到的订单自动送回分拣主页，' : W ? '找到的图片自动送回分拣主页，' : '分拣主页尚无订单，将读取页面上的全部订单，') : '数据';
     // 扩展里只需要一个大按钮；控制台用法保留原来的四个按钮
-    panel.innerHTML = '<div style="font-weight:600;margin-bottom:4px;display:flex;justify-content:space-between">订单分拣 · ' + (ext ? '补图片' : '抓取')
+    panel.innerHTML = '<div style="font-weight:600;margin-bottom:4px;display:flex;justify-content:space-between">订单分拣 · ' + (reading ? '读取订单' : ext ? '补图片' : '抓取')
       + '<button data-ot="mini" title="收起面板" style="font:inherit;border:0;background:none;cursor:pointer;color:#66727a;padding:0 2px">—</button></div>'
       + '<div style="color:#66727a;font-size:12px;margin-bottom:10px">' + status + older
       + (running ? ' · 自动翻页中…' : '') + '</div>'
-      + (ext ? btn('auto', running ? '停止' : '开始补图片', true, 'width:100%;padding:9px 0;font-weight:600', running ? '停止自动翻页' : '自动翻页，读取清单中订单的商品图片和退款情况') + '<div>'
+      + (ext ? btn('auto', running ? '停止' : reading ? '重新读取' : '开始补图片', true, 'width:100%;padding:9px 0;font-weight:600',
+          running ? '停止自动翻页' : reading ? '从当前页开始重新自动翻页读取' : '自动翻页，读取清单中订单的商品图片和退款情况') + '<div>'
              : '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">'
              + btn('grab', '抓取本页', false, '', '读取本页显示的订单') + btn('auto', running ? '停止' : '自动翻页', false, '', running ? '停止自动翻页' : '自动翻页并逐页读取订单')
              + btn('dl', '保存 JSON', true, '', '把暂存的抓取数据保存为 JSON 文件') + btn('clr', '清空', false, '', '清空暂存的抓取数据'))
@@ -426,7 +454,12 @@ function orderTriageScraper(want, opts) {
 
   window.orderTriage = { __v: 2, grab, auto, download, clear, setWant, missing,
                          adopt: m => { if (ext) mem = m || {}; render(); },   // 扩展存储被别处改了（别的订单页、主页清空）
-                         peek: () => Object.values(load()), stop: () => { running = false; runId++; render(); } };
+                         peek: () => Object.values(load()), count: () => pageOrders().length, needsVerify,
+                         stop: () => {
+                           const was = running;
+                           running = false; waitingVerify = false; runId++; render();
+                           if (was && opts.finish) opts.finish('stopped', { nos: [...runNos], pages: pageNo });   // 读取订单：用户在淘宝页点了「停止」
+                         } };
   console.log('[订单分拣] 已加载' + (W ? '，清单 ' + W.set.size + ' 单' : '') + '。右下角面板可用；也可以在控制台用 orderTriage.grab() / .auto(页数) / .download() / .missing()');
 }
 

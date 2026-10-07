@@ -14,10 +14,12 @@ WSL 里有 python3 3.12、node 18、git；在 WSL 里用 `python3`，不要用 `
   可选 AI 功能已在 2026-10-04 按用户要求删掉：整套流程都是写死的规则，不需要 AI。
 - **零依赖**：不加载外部脚本、字体、CDN；除了商品图片（alicdn），页面不发出网络请求。开源库原样放在 vendor/（jsQR 读二维码、PDF.js 读发票 PDF），见 vendor/README.md
 - **只做电脑版**：不需要做、也不需要维护手机适配
-- **以导出的订单 Excel 为基准**：抓取到的网页数据只用来给 Excel 里已有的订单补图片、补逐件退款状态。
-  例外（用户 2026-09-28 提出）：淘宝只能导出最近几个月的订单表，用户在「补图片」窗口填了「提取到哪天」时，
-  订单表最早日期之前、那天及以后的订单按订单页上读到的建单（source: 'scrape'，want.older / mergeScraped 的 addBefore）；
-  订单表时间段里表上没有的订单仍然不建
+- **订单从淘宝订单页读取，订单表可选**（用户 2026-10-07 改：新人大多没用过淘宝网页版，卡在「导出订单表」）：
+  第 1 步「从淘宝读取订单」——主页写 readJob={at,until}（30 分钟有效）并开「已买到的宝贝」干活页，extension/taobao.js 向后台领活后
+  不用点按钮就自动翻页（scraper 的 want={all:true,from}），订单、图片、逐件退款一次读完；读完后台写 readResult、关页、切回主页。
+  S.readFrom（读过的最早一天）及以后的订单按订单页建单（source: 'scrape'）。导入订单表（「更多」里，可选）只合并：
+  表里有的单以订单表为准（mergeExport），表里没有的按订单页建的单保留，只去掉示例订单。
+  旧的「订单表之前的订单」（want.older / S.older）只剩网页版补图窗口在用
 - **能区分退款**：导出表里的「交易成功」不代表没退款（部分退款看不出来），退款要靠抓取的逐件文字或手动标记
 - **对外操作要用户确认**：提交开票申请、给卖家发消息这类会改变淘宝上状态的动作，每一批先列清单、用户点确认才执行；
   Claude 自己不能在用户账号上点这类按钮（自动安全检查会拦，也不许绕过），真实账号上的这类测试由用户点
@@ -35,7 +37,8 @@ WSL 里有 python3 3.12、node 18、git；在 WSL 里用 `python3`，不要用 `
 ```
 manifest.json              Chrome 扩展说明（MV3）。项目根目录本身就是扩展：「加载已解压的扩展程序」选根目录
 extension/background.js    点扩展图标打开主页（chrome-extension://…/index.html）
-extension/taobao.js        淘宝订单页的内容脚本：读主页写的缺图清单 want，调抓取函数，结果写回 chrome.storage.local 的 scraped
+extension/taobao.js        淘宝订单页的内容脚本：有有效的 readJob 且向后台领到活时自动全部读取（进度 readProgress、结束 readDone）；
+                           否则读主页写的缺图清单 want 出「开始补图片」面板。结果写回 chrome.storage.local 的 scraped
 extension/invoice-list.js  「全部发票」页（i.taobao.com/my_itaobao/invoice）：同步三个标签的开票记录 → invSync；按 dlJobs 点「下载到本地」
 extension/chat.js          旺旺网页版（market.m.taobao.com/app/im，内容在 iframe chat-core）：扫描卖家回复 → chatScan（开票卡片单独记 cards，不算图片）；
                            按 dlJobs 点「下载文件」；按 cardRun 点开票卡片的「去申请」
@@ -50,14 +53,16 @@ index.html                 页面（样式内联；扩展页不允许内联脚�
 js/xlsx-lite.js            零依赖 xlsx/csv 读取（DecompressionStream 解 zip，正则读 sheet XML）
 js/normalize.js            列名别名 → 统一订单结构；一单多件续行合并；抓取数据按订单号合并；退款判断
 js/classify.js             关键词打分 + 同店铺/同商品记忆；classifyAll 两遍扫描（补邮费链接跟随店铺）；suggest 根据手动判断推荐增删词
-js/app.js                  界面、状态（localStorage）、导入订单表、键盘操作。界面是一条线的 8 步（flowSteps），顶上进度条（renderDash），
+js/app.js                  界面、状态（localStorage）、从淘宝读取订单、导入订单表、键盘操作。界面是一条线的 7 步（flowSteps，每步 help + how 分步说明），
+                           没有订单时显示「开始使用」卡片（renderGuide），顶上进度条（renderDash），
                            不常用的收在顶栏「更多」；不提供导出（「备份数据」除外）、不提供改词表（用户 2026-10-05 要求去掉多余的自由度）
 js/sample.js               虚构示例数据（给没有数据的人试用）
 scraper/taobao-scraper.js  在淘宝「已买到的宝贝」页控制台运行：按文字特征定位订单块，抓图片/逐件退款，可自动翻页，存本地 JSON
 tools/eval.mjs             node 评估分类效果：node tools/eval.mjs [订单表] [labels.json]
 tools/selftest.mjs         自检（虚构数据）：合并只补图片/退款/链接、不新增订单；关键词建议
 tools/mock-taobao.html     模拟订单页（数据虚构）：无参数 = 旧版结构（测回退解析）；?v=new = 2026-09 真实新版结构
-tools/e2e-mock.py          离线端到端测试：加载扩展 → 导入虚构订单表 → 模拟页一键补图 → 逐单核对（不联网）
+tools/e2e-mock.py          离线端到端测试：主页「从淘宝读取订单」（真实网址的请求回应模拟页）→ 自动翻页、关页、结果；导入订单表合并；
+                           导入虚构订单表 → 模拟页一键补图 → 逐单核对（不联网）
 tools/e2e-invoice.py       离线：全部发票同步、旺旺扫描、下载改名（含本机假阿里云 https）
 tools/e2e-extras.py        离线：选文件夹读发票 PDF、核对重复、二维码
 tools/e2e-apply.py         离线：平台批量申请、按卖家的开票入口申请（mock-invoice-apply.html）、干活页用完关掉

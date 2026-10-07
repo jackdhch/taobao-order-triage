@@ -159,6 +159,11 @@ details.more > summary::after{content:"▾"; font-size:10px; color:var(--muted)}
 .fd-title{font-weight:650; font-size:14px}
 .fd-title .hint{font-weight:400; color:var(--uns-ink); font-size:12.5px; margin-left:8px}
 .fd-text p{margin:2px 0 0; color:var(--muted); font-size:13px; max-width:80ch}
+/* 每步「去哪里、点什么、做完什么样子」：给第一次用的人看的分步说明 */
+.fd-how{margin:4px 0 0; padding-left:20px; color:var(--muted); font-size:13px; max-width:80ch; line-height:1.65}
+.fd-how li{padding-left:2px}
+.fd-how b{color:var(--text); font-weight:600}
+.fd-text .fd-note{margin:6px 0 0; padding:5px 10px; border-radius:6px; background:var(--ok-bg); color:var(--ok-ink); font-size:12.5px; max-width:80ch}
 .flow-acts{display:flex; gap:12px; align-items:center; flex-wrap:wrap}
 .flow-date{font-size:12.5px; color:var(--muted); display:flex; align-items:center; gap:6px}
 .flow-date input{font:inherit; font-size:12.5px; background:var(--surface); border:1px solid var(--line); border-radius:6px; padding:3px 6px; color:var(--text)}
@@ -277,15 +282,25 @@ kbd{font-family:var(--mono); font-size:11px; border:1px solid var(--line); borde
 .tone-off{background:var(--off-bg); color:var(--off-ink)}
 
 /* 空状态 */
-.empty{background:var(--surface); border:1.5px dashed var(--line); border-radius:12px; padding:34px 28px; margin-block:6px 26px}
+.empty{background:var(--surface); border:1.5px dashed var(--line); border-radius:12px; padding:34px 28px; margin:6px auto 26px; max-width:920px}
 .empty.drag{border-color:var(--accent); background:var(--lab-wash)}
 .empty h2{margin:0 0 6px; font-size:18px}
-.empty p{margin:0 0 18px; color:var(--muted); max-width:62ch}
-.steps{display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; margin-bottom:22px}
-.step{border-top:2px solid var(--line); padding-top:10px}
-.step b{display:block; margin-bottom:3px}
-.step span{color:var(--muted); font-size:13px}
-.empty .acts{display:flex; gap:10px; flex-wrap:wrap}
+.empty > p{margin:0 0 16px; color:var(--muted); max-width:72ch}
+/* 首次使用：四项准备按顺序列出，做完的打勾（app.js renderGuide） */
+.guide{list-style:none; margin:0 0 18px; padding:0; border:1px solid var(--line); border-radius:10px; background:var(--surface); overflow:hidden}
+.guide > li{display:grid; grid-template-columns:26px minmax(0,1fr) auto; gap:4px 14px; align-items:start; padding:13px 16px; border-top:1px solid var(--line-soft)}
+.guide > li:first-child{border-top:0}
+.g-n{width:24px; height:24px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center; font-size:12.5px; font-weight:600;
+     background:var(--sunk); color:var(--muted); border:1px solid var(--line)}
+.guide > li.is-done .g-n{background:var(--ok-bg); color:var(--ok-ink); border-color:transparent}
+.guide > li.is-done .g-t{color:var(--muted)}
+.g-t{display:block; font-weight:600}
+.g-d{display:block; margin-top:2px; color:var(--muted); font-size:13px; max-width:72ch}
+.g-act{align-self:center; display:flex; gap:8px}
+.g-note{grid-column:2 / -1; padding:6px 10px; border-radius:6px; background:var(--ok-bg); color:var(--ok-ink); font-size:12.5px}
+.g-note b{font-weight:600; word-break:break-all}
+.guide-alt{display:flex; flex-direction:column; gap:6px; font-size:13px; color:var(--muted)}
+.guide-alt .btn{margin:0 6px; vertical-align:baseline}
 .none{padding:24px; text-align:center; color:var(--faint); background:var(--surface); border:1px solid var(--line); border-radius:var(--r)}
 
 /* 对话框 */
@@ -341,7 +356,8 @@ footer p{margin:0 0 4px; max-width:90ch}
   .share{grid-column:3; grid-row:1}
   .cls{grid-column:1/-1}
   .cls .pick{max-width:260px}
-  .steps{grid-template-columns:1fr}
+  .guide > li{grid-template-columns:26px minmax(0,1fr)}
+  .g-act{grid-column:2}
   .bar{position:static}
   .keys{display:none}
   .seg button{padding:4px 9px}
@@ -355,9 +371,9 @@ footer p{margin:0 0 4px; max-width:90ch}
   <header class="top">
     <div class="brand"><h1>订单分拣</h1><span>淘宝订单报销整理：实验室采购分拣、发票申请与归档</span></div>
     <details class="more" id="more">
-      <summary class="btn" title="其他操作：重新导入订单表、单项发票操作、备份与恢复数据">更多</summary>
+      <summary class="btn" title="其他操作：导入订单表（可选）、单项发票操作、备份与恢复数据">更多</summary>
       <div class="more-pop">
-        <button class="need-data" id="btn-import" title="选择从淘宝导出的新订单表（xlsx 或 csv），已有判断保留">重新导入订单表</button>
+        <button id="btn-import" title="可选：从淘宝导出的订单表补充数据（xlsx 或 csv）。表里有的订单以订单表为准，按订单页读取的其他订单和已有判断都保留">导入订单表（xlsx，可选）</button>
         <div class="more-h ext-only need-data">发票</div>
         <button class="ext-only need-data" id="inv-sync" title="打开淘宝「我的发票」，读取已开具、申请中、未申请的记录，更新每单的发票状态">同步开票状态</button>
         <button class="ext-only need-data" id="inv-scan" title="打开需卖家回复的旺旺会话，读取卖家发送的发票文件、二维码、开票申请入口和回复">读取卖家旺旺回复</button>
@@ -380,17 +396,31 @@ footer p{margin:0 0 4px; max-width:90ch}
     <input type="file" id="backup-file" accept=".json,application/json">
   </div>
 
+  <!-- 首次使用（没有任何订单时显示）：两项，填了抬头税号的打勾，读取进度显示在第 2 项下面；逻辑见 app.js renderGuide -->
   <section id="empty" class="empty" hidden>
-    <h2>导入淘宝订单表</h2>
-    <p>在淘宝「已买到的宝贝」页点击「导出订单」，将下载的 xlsx 拖到此处，或点击下方按钮选择。文件仅在本页读取，不上传。</p>
-    <div class="steps">
-      <div class="step"><b>1　导入订单表</b><span>淘宝导出的 xlsx 或 csv。有新订单时重新导出并导入，已有判断保留。</span></div>
-      <div class="step"><b>2　按顶部步骤依次处理</b><span>上次报销截止点 → 补充图片 → 判断待定 → 检查个人 → 检查实验室 → 开具发票 → 整理报销文件。</span></div>
-      <div class="step"><b>3　只需判断是否属于实验室</b><span>已退款商品自动排除，逐件确定是否报销即可。</span></div>
-    </div>
-    <div class="acts">
-      <button class="btn primary" id="btn-import2" title="选择从淘宝导出的订单表（xlsx 或 csv）">导入订单表</button>
-      <button class="btn" id="btn-sample" title="载入 8 单虚构的示例订单，用于试用界面">载入示例数据</button>
+    <h2>开始使用</h2>
+    <p>第一次使用请完成以下两项。订单数据只保存在本机浏览器中，不上传。</p>
+    <ol class="guide" id="guide">
+      <li data-g="info">
+        <span class="g-n">1</span>
+        <div><b class="g-t">填写发票抬头和税号</b>
+          <span class="g-d">在「设置 → 发票信息」中填写单位全称和统一社会信用代码。申请发票、向卖家索要发票时使用，仅保存在本机。</span></div>
+        <div class="g-act"><button class="btn" data-guide="settings" title="打开设置，填写发票抬头和税号">打开设置</button></div>
+      </li>
+      <li data-g="read">
+        <span class="g-n">2</span>
+        <div class="ext-only"><b class="g-t">从淘宝读取订单</b>
+          <span class="g-d">点击「从淘宝读取订单」，选择读取到哪天为止。插件会打开淘宝「已买到的宝贝」页面：未登录时，用手机淘宝 App 扫描页面上的二维码，或输入账号密码登录一次；之后自动翻页读取订单、商品图片和退款状态，读完自动回到本页。</span></div>
+        <div class="g-act ext-only"><button class="btn primary" data-guide="read" title="将打开淘宝「已买到的宝贝」，自动翻页读取订单、商品图片和退款状态；未登录时请在打开的页面登录一次，读取完成后自动回到本页">从淘宝读取订单</button></div>
+        <div class="web-only"><b class="g-t">导入订单表</b>
+          <span class="g-d">网页版无法自动读取淘宝页面：在已登录的淘宝「已买到的宝贝」页点击订单列表上方的「导出订单」，下载 xlsx 表格，再点击「导入订单表」选择该文件，或将文件拖到本页。安装为 Chrome 扩展后可一键从淘宝读取。</span></div>
+        <div class="g-act web-only"><button class="btn primary" id="btn-import2" title="选择从淘宝导出的订单表（xlsx 或 csv）">导入订单表</button></div>
+        <div class="g-note" id="g-read" hidden></div>
+      </li>
+    </ol>
+    <div class="guide-alt">
+      <div>想先看看界面，可<button class="btn sm" id="btn-sample" title="载入 8 单虚构的示例订单，用于试用界面；开始读取或导入真实订单时自动清除">载入示例数据</button>（8 单虚构订单，开始读取或导入真实订单时自动清除）。</div>
+      <div>换电脑或重装插件后，可在右上角「更多 → 从备份恢复…」导入以前备份的数据<span class="ext-only">；已有从淘宝导出的订单表（xlsx）时，也可在「更多 → 导入订单表」导入</span>。</div>
     </div>
   </section>
 
@@ -466,6 +496,22 @@ footer p{margin:0 0 4px; max-width:90ch}
       <button class="btn" id="rules-cancel" title="关闭设置，不保存修改">取消</button>
       <button class="btn primary" id="rules-save" title="保存设置">保存</button>
     </div>
+  </div>
+</dialog>
+
+<dialog id="dlg-read">
+  <div class="dlg">
+    <h3>从淘宝读取订单</h3>
+    <p>将打开淘宝「已买到的宝贝」，从最新的订单开始自动翻页，读取订单、商品图片和逐件退款状态。未登录时请在打开的页面登录一次（手机淘宝 App 扫码，或输入账号密码），登录后自动开始；读取完成后淘宝页面自动关闭并回到本页。已有的订单和判断全部保留。</p>
+    <div class="inv-set">
+      <label>读取到哪天为止（含当天）<input type="date" id="read-until" title="从最新的订单往前读，读到这一天为止"></label>
+      <label class="inline" title="不限日期，翻到订单列表的最后一页"><input type="checkbox" id="read-all"> 读取全部订单（不限日期，订单多时较慢）</label>
+    </div>
+    <p id="read-hint"></p>
+    <p>读取期间请勿关闭打开的淘宝页面；出现滑块或安全验证时，请在该页面手动完成，完成后自动继续。</p>
+    <div class="row"><span class="err" id="read-err"></span>
+      <button class="btn" id="read-cancel" title="关闭窗口，不读取">取消</button>
+      <button class="btn primary" id="read-go" title="打开淘宝「已买到的宝贝」并开始读取">开始读取</button></div>
   </div>
 </dialog>
 

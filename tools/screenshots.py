@@ -6,7 +6,7 @@
     env -u TMPDIR python3 tools/screenshots.py banner shots    # 只生成其中几类：banner / shots / gifs
 
 - banner：tools/readme-banner.html 按浅色、深色各渲染一次（2 倍清晰度）→ docs/assets/banner-light.png、banner-dark.png
-- shots： 静态截图 → docs/screenshots/*.png（主页浅色 / 深色对照、发票栏、整理报销文件对话框）
+- shots： 静态截图 → docs/screenshots/*.png（「开始使用」卡片、主页浅色 / 深色对照、发票栏、整理报销文件对话框）
 - gifs：  演示动图 → docs/screenshots/demo-*.gif（主页总览、键盘分拣、发票状态变化）
 
 数据来源：
@@ -417,6 +417,14 @@ def save2x(page, name, clip):
 
 
 def make_shots(p, page, home, tmp):
+    # 第一次打开：没有数据时的「开始使用」卡片（README「第一次使用」）
+    page.emulate_media(color_scheme='light')
+    reset(page, home)
+    page.wait_for_selector('#empty:not([hidden])')
+    page.wait_for_timeout(300)
+    r = page.locator('#empty').bounding_box()
+    save(page, 'welcome', clip={'x': r['x'] - 12, 'y': max(0, r['y'] - 12), 'width': r['width'] + 24, 'height': r['height'] + 24})
+
     # 浅色 / 深色对照：主页左上部分（顶栏、进度、前四步），README 里两张并排，取窄一些才看得清
     for scheme in ('light', 'dark'):
         page.emulate_media(color_scheme=scheme)
@@ -470,10 +478,10 @@ def gif_overview(page, home):
     r.note('上次报销截止点：选择「从第一单开始」')
     r.click('#summary [data-flow="since-none"]', hold=1800)
     r.note('')
-    # 八步流程：依次点开第 6、7 步看说明
-    r.click('.flow li[data-step="5"]', hold=1300)
-    r.click('.flow li[data-step="6"]', hold=1500)
-    r.click('.flow li[data-step="3"]', hold=900)
+    # 七步流程：依次点开第 5、6 步看说明，再回到第 3 步「判断待定」
+    r.click('.flow li[data-step="4"]', hold=1300)
+    r.click('.flow li[data-step="5"]', hold=1500)
+    r.click('.flow li[data-step="2"]', hold=900)
     r.click('.flow-acts [data-goto="unsure"]', hold=2600)
     r.save('demo-overview')
 

@@ -43,7 +43,8 @@ body{font:14px system-ui,"Microsoft YaHei";background:#fff;margin:20px}
 <div id="list"></div>
 <div class="pager"><button id="prev">上一页</button><button id="next">下一页</button></div>
 <script>
-const NEW = new URLSearchParams(location.search).get('v') === 'new';
+// tools/e2e-mock.py 测「从淘宝读取订单」时，把真实「已买到的宝贝」网址的请求拦下、回应这个模拟页（地址里没有 ?v=new），按新版显示
+const NEW = new URLSearchParams(location.search).get('v') === 'new' || location.hostname === 'buyertrade.taobao.com';
 if (!NEW) {
 const PAGES = [
  [

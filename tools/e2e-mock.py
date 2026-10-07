@@ -5,12 +5,17 @@
     python3 tools/e2e-mock.py
 
 需要 python3 和 playwright（含它自带的 Chromium：python3 -m playwright install chromium）。
-流程：起本地 http 服务（只端出模拟页）→ 带扩展启动无界面 Chromium → 扩展主页导入虚构订单表 →
+流程：起本地 http 服务（只端出模拟页）→ 带扩展启动无界面 Chromium →
+[0] 主页「从淘宝读取订单」：真实「已买到的宝贝」网址的请求由这里回应模拟页，淘宝页不点按钮自动翻页、读到截止日期、读完自己关掉；
+    之后导入只含两单的订单表只合并不删单；再读一次是增量更新 →
+[1][2] 扩展主页导入虚构订单表 →
 打开 tools/mock-taobao.html?v=new 点「开始补图片」→ 等自动翻页（两遍）结束 → 逐单逐件核对；
 最后用旧版模拟页（无参数）确认「按文字特征猜」的回退解析还能用。
 自动翻页每页会停 2.5~5 秒（抓取脚本故意放慢），整个测试大约一分钟。
 """
 import csv
+import datetime
+import re
 import shutil
 import socket
 import subprocess
@@ -89,6 +94,108 @@ def compare(got, o):
     return bad
 
 
+def read_section(ctx, base, eid, mock, watch, tmp):
+    """「从淘宝读取订单」（用户 2026-10-07：不再需要导出订单表）：主页一键 → 模拟订单页领到任务自动翻页 → 读完关页、主页显示结果；
+    没有读取任务时不自动翻；截止日期生效；之后导入订单表只合并、不删按订单页建的单；再读一次是增量更新，判断保留"""
+    print('\n[0] 从淘宝读取订单')
+    store = lambda pg, k: pg.evaluate(f'chrome.storage.local.get("{k}").then(r => r["{k}"])')
+    a0 = watch(ctx.new_page(), '主页（读取）')
+    a0.goto(f'chrome-extension://{eid}/index.html')
+    a0.wait_for_selector('#empty:not([hidden])')
+    txt = a0.inner_text('#empty')
+    check(a0.locator('#guide > li').count() == 2 and '填写发票抬头和税号' in txt and '从淘宝读取订单' in txt and '导出订单' not in txt,
+          '没有数据时显示「开始使用」两项：填写抬头税号、从淘宝读取订单（不再要求导出订单表）', txt)
+    untitled = a0.evaluate("[...document.querySelectorAll('#empty button')].filter(b => b.offsetParent && !b.title).map(b => b.textContent)")
+    check(not untitled, '「开始使用」里的按钮都有悬停说明', untitled)
+    check(a0.inner_text('#guide > li[data-g="info"] .g-n').strip() == '1', '抬头税号未填时第 1 项不打勾')
+    a0.click('#empty [data-guide="settings"]'); a0.fill('#inv-title', '某虚构大学'); a0.fill('#inv-tax', '121000009999999996'); a0.click('#rules-save')
+    a0.wait_for_timeout(300)
+    check(a0.inner_text('#guide > li[data-g="info"] .g-n').strip() == '✓', '填好抬头税号后第 1 项打勾')
+
+    m0 = watch(ctx.new_page(), '模拟页（无读取任务）')
+    m0.goto(base + 'tools/mock-taobao.html?v=new')
+    m0.wait_for_selector(PANEL)
+    m0.wait_for_timeout(3500)
+    check(m0.evaluate('window.__mock.log') == ['default:1'] and '自动翻页中' not in m0.inner_text(PANEL) and '读取订单' not in m0.inner_text(PANEL),
+          '没有读取任务时，打开订单页不自动翻页', [m0.evaluate('window.__mock.log'), m0.inner_text(PANEL)])
+    m0.close()
+
+    a0.click('#empty [data-guide="read"]')
+    a0.wait_for_selector('#dlg-read[open]')
+    dv = a0.input_value('#read-until')
+    days = (datetime.date.today() - datetime.date.fromisoformat(dv)).days if re.fullmatch(r'\d{4}-\d\d-\d\d', dv) else -1
+    check(175 <= days <= 190, '没有上次报销截止点时，默认读取最近 6 个月', dv)
+    untitled = a0.evaluate("[...document.querySelectorAll('#dlg-read button, #dlg-read input')].filter(b => !b.title && !b.closest('[title]')).map(b => b.id)")
+    check(not untitled, '读取窗口的按钮、输入框都有悬停说明', untitled)
+    until = '2026-08-15'
+    a0.fill('#read-until', until)
+    with ctx.expect_page(timeout=10000) as pi:
+        a0.click('#read-go')
+    tb = pi.value
+    opened = wait_until(a0, lambda: not tb.is_closed() and 'buyertrade.taobao.com/trade/itemlist/list_bought_items.htm' in tb.url, 10)
+    check(bool(opened), '打开了淘宝「已买到的宝贝」', tb.url)
+    job = store(a0, 'readJob')
+    check(job and job.get('until') == until, '扩展存储里写了读取任务 readJob（带截止日期）', job)
+    shown = wait_until(a0, lambda: (t := a0.inner_text('body')) and ('等待登录淘宝' in t or '正在读取' in t) and t, 15)
+    check(bool(shown), '主页显示读取进度（等待登录淘宝 / 正在读取）')
+    res = wait_until(a0, lambda: store(a0, 'readResult'), 150)
+    expect = [o for o in mock['orders'] if not o.get('hideDefault') and o['d'] >= until]
+    check(res and res['why'] == 'past' and sorted(res['nos']) == sorted(o['no'] for o in expect) and res['pages'] == 3,
+          f'淘宝页没点按钮就自动翻页，读到 {until} 为止（3 页，{len(expect)} 单；截止日期之前的没存）', res)
+    check(bool(wait_until(a0, lambda: tb.is_closed(), 10)), '读完后自动关闭插件打开的淘宝页')
+    check(store(a0, 'readJob') is None, '读完后清掉 readJob')
+    home_orders = lambda: a0.evaluate("(JSON.parse(localStorage.getItem('orderTriage.app.v1') || '{}').orders) || []")
+    got = wait_until(a0, lambda: (x := home_orders()) and len(x) == len(expect) and x, 10) or home_orders()
+    check({o['no'] for o in got} == {o['no'] for o in expect}, f'主页按订单页建了 {len(expect)} 单', sorted(o['no'] for o in got))
+    n_lines = sum(len(o['items']) for o in expect)
+    n_ref = sum(1 for o in expect for it in o['items'] if it.get('refund'))
+    summ = wait_until(a0, lambda: (t := a0.inner_text('#summary')) and '已读取' in t and t, 10) or a0.inner_text('body')
+    check(f'已读取 {len(expect)} 单 {n_lines} 件' in summ and f'其中退款 {n_ref} 件' in summ, f'主页显示「已读取 {len(expect)} 单 {n_lines} 件（日期范围），其中退款 {n_ref} 件」', summ[:400])
+    with_img = sum(1 for o in got for l in o['lines'] if l.get('img'))
+    check(with_img == n_lines - 1, '商品图片一起读回（图全坏的那件除外）', with_img)
+    tip = a0.get_attribute('.flow li[data-step="0"]', 'title') or ''
+    check('从淘宝读取订单' in tip and f'有图 {n_lines - 1} / ' in tip and a0.locator('.flow li').count() == 7, '流程为七步，第 1 步「从淘宝读取订单」的悬停说明有图片数', tip)
+
+    # 订单表降为可选：导入订单表只合并。表里有的单换成订单表的商品行（图片从订单页那份补上、手动判断跟着挪），表里没有的单保留
+    o9 = next(o for o in got if o['no'] == '5190000000000000009')
+    k_old = o9['lines'][0]['key']
+    a0.evaluate("k => { const S = JSON.parse(localStorage.getItem('orderTriage.app.v1')); S.decisions[k] = 'lab'; localStorage.setItem('orderTriage.app.v1', JSON.stringify(S)); }", k_old)
+    a0.reload(); a0.wait_for_selector('#main:not([hidden])')
+    m9 = next(o for o in mock['orders'] if o['no'] == '5190000000000000009')
+    tbl = tmp / '订单表-两单.csv'
+    write_csv(tbl, [dict(m9, items=[dict(m9['items'][0], sku='白色 1L（订单表写法）')]), next(o for o in mock['orders'] if o['no'] == '5190000000000000015')])
+    a0.set_input_files('#file', str(tbl))
+    after = wait_until(a0, lambda: (x := home_orders()) and any(o['source'] == 'export' for o in x) and x, 10) or home_orders()
+    n9 = next((o for o in after if o['no'] == m9['no']), {})
+    dec = a0.evaluate("JSON.parse(localStorage.getItem('orderTriage.app.v1')).decisions")
+    l9 = (n9.get('lines') or [{}])[0]
+    check(len(after) == len(expect), '导入只含 2 单的订单表后，按订单页建的其他订单都还在', len(after))
+    check(n9.get('source') == 'export' and l9.get('sku') == '白色 1L（订单表写法）' and l9.get('img'), '表里有的单以订单表字段为准，商品图从订单页那份补上', l9)
+    check(dec.get(l9.get('key')) == 'lab' and k_old not in dec, '手动判断跟着挪到订单表的商品行上', {k: v for k, v in dec.items() if k.startswith(m9['no'])})
+    check(a0.is_visible('#btn-import') or a0.evaluate("!!document.getElementById('btn-import') && !document.getElementById('btn-import').classList.contains('need-data')"),
+          '「导入订单表（xlsx，可选）」在「更多」里，没有数据时也能用')
+
+    # 再读一次 = 增量更新：已有订单和判断保留
+    t0 = res['done']
+    a0.click('.flow li[data-step="0"]'); a0.click('#summary [data-flow="read"]')
+    a0.wait_for_selector('#dlg-read[open]')
+    a0.fill('#read-until', '2026-09-01')
+    with ctx.expect_page(timeout=10000) as pi:
+        a0.click('#read-go')
+    tb2 = pi.value
+    res2 = wait_until(a0, lambda: (r := store(a0, 'readResult')) and r['done'] > t0 and r, 150)
+    exp2 = [o for o in mock['orders'] if not o.get('hideDefault') and o['d'] >= '2026-09-01']
+    check(res2 and res2['pages'] == 2 and sorted(res2['nos']) == sorted(o['no'] for o in exp2), '再读一次（读到 09-01）：翻 2 页就停', res2)
+    check(bool(wait_until(a0, lambda: tb2.is_closed(), 10)), '第二次读完也自动关闭淘宝页')
+    a0.wait_for_timeout(800)
+    dec2 = a0.evaluate("JSON.parse(localStorage.getItem('orderTriage.app.v1')).decisions")
+    check(len(home_orders()) == len(expect) and dec2.get(l9.get('key')) == 'lab', '增量更新后订单一单不少，手动判断保留', [len(home_orders()), dec2])
+
+    # 清干净，后面的测试从空白开始
+    a0.evaluate("() => { localStorage.clear(); return chrome.storage.local.clear(); }")
+    a0.close()
+
+
 def run(p, base, tmp):
     ctx = p.chromium.launch_persistent_context(str(tmp / 'profile'), channel='chromium', headless=True, args=[
         '--disable-extensions-except=' + str(ROOT), '--load-extension=' + str(ROOT),
@@ -99,9 +206,15 @@ def run(p, base, tmp):
     GIF1 = bytes.fromhex('47494638396101000100800000ffffff00000021f90401000000002c00000000010001000002024401003b')
     PNG2 = bytes.fromhex('89504e470d0a1a0a0000000d4948445200000002000000020802000000fdd49a730000001049444154789c63f8cfc000440c100a001fee03fd8b5f14d40000000049454e44ae426082')
 
+    MOCK_HTML = (ROOT / 'tools' / 'mock-taobao.html').read_bytes()
+
     def block(route):
         url = route.request.url
         blocked.append(url)
+        if urlsplit(url).hostname == 'buyertrade.taobao.com':
+            # 「从淘宝读取订单」打开的真实「已买到的宝贝」网址：回应模拟页（模拟页按网址认出来，显示新版结构）
+            route.fulfill(status=200, content_type='text/html; charset=utf-8', body=MOCK_HTML)
+            return
         if urlsplit(url).hostname == 'img.alicdn.com':
             # 假图片：正常的回 2×2 小图；「_200x200」小图和「-dead」回 1×1 灰点（淘宝 CDN 不带 Referer 时就是这样）
             bad = '_200x200' in url or '-dead' in url
@@ -132,6 +245,8 @@ def run(p, base, tmp):
     csv_path = tmp / '虚构订单表.csv'
     write_csv(csv_path, table)
 
+    read_section(ctx, base, eid, mock, watch, tmp)
+
     print('\n[1] 扩展主页导入虚构订单表')
     app = watch(ctx.new_page(), '主页')
     app.goto(f'chrome-extension://{eid}/index.html')
@@ -139,7 +254,8 @@ def run(p, base, tmp):
     get_want = lambda: app.evaluate('chrome.storage.local.get("want").then(r => r.want)')
     want = wait_until(app, lambda: (w := get_want()) and len(w['nos']) == len(table) and w, 10)
     check(bool(want), f'缺图清单写进扩展存储：{len(table)} 单', get_want())
-    check(f'有图 0 / {all_lines} 件' in app.inner_text('.flow'), f'导入后步骤条「补图片」显示「有图 0 / {all_lines} 件」', app.inner_text('.flow'))
+    step0 = lambda: app.get_attribute('.flow li[data-step="0"]', 'title') or ''
+    check(f'有图 0 / {all_lines} 件' in step0(), f'导入后第 1 步的悬停说明显示「有图 0 / {all_lines} 件」', step0())
     check(app.get_attribute('#seg-cat button[aria-pressed="true"]', 'data-cat') == 'unsure', '主页打开默认在「待定」', app.inner_text('#seg-cat'))
 
     print('\n[2] 新版模拟页：开始补图片，自动翻页')
@@ -193,7 +309,7 @@ def run(p, base, tmp):
     check(len(dead) == 1, '模拟页里有 1 件图全坏', dead)
     app.bring_to_front()
     img_n = all_lines - sum(len(o['items']) for o in table if o['no'] in left) - len(dead)
-    foot = wait_until(app, lambda: (t := app.inner_text('.flow')) and f'有图 {img_n} / {all_lines} 件' in t and t, 5) or app.inner_text('.flow')
+    foot = wait_until(app, lambda: (t := step0()) and f'有图 {img_n} / {all_lines} 件' in t and t, 5) or step0()
     check(f'有图 {img_n} / {all_lines} 件' in foot, f'扩展主页显示「有图 {img_n} / {all_lines} 件」（图全坏的那件不算有图）', foot)
     app.click('#seg-cat button[data-cat="all"]'); app.wait_for_timeout(300)
     err = app.evaluate("t => { const e = [...document.querySelectorAll('.line')].find(x => x.textContent.includes(t)); const p = e && e.querySelector('.thumb'); return p ? [p.className, p.textContent, getComputedStyle(p).color] : null; }", dead[0])
@@ -282,50 +398,10 @@ def run(p, base, tmp):
     check(not bad, '旧版页面第 1 页 3 单：店铺、标题、单价、数量、逐件退款、商品图都抓对', '\n          '.join(bad))
     check(m2.evaluate('localStorage.length') == 0, '旧版模拟页的 localStorage 也是空的')
 
-    print('\n[4] 订单表之前的订单：填「提取到哪天」，按订单页建单')
+    # 「订单表之前的订单」（补图窗口填「提取到哪天」）已由「从淘宝读取订单」的截止日期取代，见上面的 [0]
     m2.close()
-    app.evaluate('chrome.storage.local.clear()')
-    app.evaluate("localStorage.removeItem('orderTriage.app.v1')")
-    app.reload()
-    early = sorted(findable, key=lambda o: o['d'])[:3]          # 最早的 3 单不放进订单表（相当于淘宝导不出来的月份）
-    table2 = [o for o in table if o not in early]
-    before, frm = min(o['d'] for o in table2), '2026-07-10'
-    expect = {o['no'] for o in early if frm <= o['d'] < before}
-    csv2 = tmp / '虚构订单表-近几个月.csv'
-    write_csv(csv2, table2)
-    app.set_input_files('#file', str(csv2))
-    # 存储里留着一条比要提取的日期还早的旧抓取数据（比如以前没订单表时抓的）：不该被建单
-    stale = {'no': '5190000000000000099', 'time': '2026-06-15', 'status': '交易成功', 'shop': '某某虚构旧店', 'lines': [{'title': '旧的抓取数据'}]}
-    app.evaluate('x => chrome.storage.local.set({ scraped: { [x.no]: x } })', stale)
-    app.wait_for_timeout(800)
-    app.click('.flow li[data-step="2"]'); app.click('button[data-flow="img-dlg"]')
-    app.fill('#img-older', frm)
-    w = wait_until(app, lambda: (x := get_want()) and x.get('older') and x, 5) or get_want()
-    check(w and w.get('older') == {'from': frm, 'before': before}, f'清单里带上「{frm} 至订单表最早一天 {before} 之前」', w)
-    app.click('#img-close')
-    m3 = watch(ctx.new_page(), '模拟页（订单表之前）')
-    m3.goto(base + 'tools/mock-taobao.html?v=new')
-    m3.wait_for_selector(PANEL)
-    check('订单表之前' in m3.inner_text(PANEL), '淘宝页面板显示「订单表之前」的提取数', m3.inner_text(PANEL).replace('\n', ' | '))
-    m3.click(PANEL + ' button[data-ot="auto"]')
-    t0 = time.time()
-    while time.time() - t0 < 300 and '自动翻页中' not in m3.inner_text(PANEL): m3.wait_for_timeout(200)
-    while time.time() - t0 < 300 and '自动翻页中' in m3.inner_text(PANEL): m3.wait_for_timeout(300)
-    got = set(get_scraped())
-    check(expect <= got and not ({o['no'] for o in early} - expect) & got, f'存下了 {frm} 之后、订单表之前的 {len(expect)} 单，更早的没存',
-          f'存了 {sorted(got & {o["no"] for o in early})}，应为 {sorted(expect)}')
-    home = lambda: set(app.evaluate("JSON.parse(localStorage.getItem('orderTriage.app.v1')).orders.filter(o => o.source === 'scrape').map(o => o.no)"))
-    made = wait_until(app, lambda: home() == expect, 5)
-    check(made, f'主页按订单页建了这 {len(expect)} 单（存储里那条比 {frm} 还早的旧数据没建）', home())
-    cleared = wait_until(app, lambda: (x := get_want()) and 'older' not in x and x, 5)
-    check(bool(cleared) and not app.evaluate("JSON.parse(localStorage.getItem('orderTriage.app.v1')).older"),
-          '翻完后主页清掉了「提取到哪天」，以后补图找齐就停', get_want())
-    app.set_input_files('#file', str(csv2))
-    app.wait_for_timeout(1500)
-    check(home() == expect, '重新导入订单表后，这几单还在（没被当成「没有订单表时临时建的单」删掉）', home())
-    m3.close()
 
-    print('\n[5] 杂项')
+    print('\n[4] 杂项')
     check(not errors, '页面没有报错', errors)
     check(not dialogs, '没有弹窗（没出现安全验证提示等）', dialogs)
     outside = [u for u in blocked if not urlsplit(u).hostname.endswith(('alicdn.com', 'taobao.com'))]
