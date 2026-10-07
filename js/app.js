@@ -103,15 +103,15 @@
   // 词表写死在代码里（设置里的词表编辑已删）；以前保存的自定义词表不再使用
   const rules = () => C.DEFAULT_RULES;
 
-  // 上次报销到哪一单：那一单及以前的订单不再判断。
-  // 用户指定了日期就按日期；否则自动找「已整理的发票」（导入的发票文件夹 / 已报销订单号清单）对得上的订单里最晚的一单。
-  // S.since：'YYYY-MM-DD' 指定日期；'none' 从订单表第一单开始算；空 = 自动
+  // 上次报销到哪天（S.since = 'YYYY-MM-DD'）：读取对话框里唯一要填的日期（用户 2026-10-07：主线一条线，不再有单独的「上次报销截止点」一步）。
+  // 只读这天之后的订单；这天及以前的旧订单（以前读过、导入过的）不再判断。
+  // 以前版本存的 'none'（从第一单开始）、空（按已整理发票自动识别）都当作没有截止日。
+  // guess：导入过已整理的发票时，对得上的订单里最晚的一天，只用作读取对话框的默认值
   function sinceInfo() {
-    if (S.since === 'none') return { mode: 'none' };
     if (/^\d{4}-\d{2}-\d{2}$/.test(S.since || '')) return { mode: 'date', at: S.since + '~', date: S.since };   // '~' 排在时分秒后面，当天的单都算「以前」
     let best = null;
     for (const o of S.orders) if (o.time && haveOf(o) && (!best || o.time > best.time)) best = o;
-    return best ? { mode: 'auto', at: best.time, date: best.time.slice(0, 10), no: best.no, shop: best.shop } : { mode: 'unknown' };
+    return { mode: 'unknown', guess: best ? best.time.slice(0, 10) : '' };
   }
   // 这单是不是已经有本单位抬头的发票（平台已开、整理过、下载过、申请中）：有的话多半是实验室的东西
   function invoicedFor(o) {
@@ -142,7 +142,7 @@
     const since = sinceInfo();
     for (const o of S.orders) {
       const shares = N.lineShares(o);
-      const past = !!(since.at && (o.time || '') <= since.at);       // 上次报销截止那单及以前：不再判断
+      const past = !!(since.at && (o.time || '') <= since.at);       // 上次报销那天及以前：不再判断
       const inv = invoicedFor(o);
       o.lines.forEach((l, i) => {
         const manual = S.decisions[l.key];
@@ -455,11 +455,11 @@
     window.scrollTo({ top: $('summary').getBoundingClientRect().bottom + window.scrollY });
   }
 
-  // ── 一条线的步骤：从淘宝读取订单 → 上次报销到哪 → 待定 → 检查个人 → 检查实验室 → 开发票 → 整理成报销文件 ──
-  // 每一步只有一个主按钮；不常用的放在顶栏「更多」里
+  // ── 一条线的六步：从淘宝读取订单 → 判断待定 → 检查个人 → 检查实验室 → 开具发票 → 整理报销文件 ──
+  // 用户 2026-10-07：主线必须是一条线，不能有重复的入口，也不能一步里给几条路选。每一步只有一个主按钮；不常用的放在顶栏「更多」里
   const pb = (attr, label, tip, primary) => '<button class="btn' + (primary === false ? '' : ' primary') + '" ' + attr + ' title="' + tip + '">' + label + '</button>';
   function flowSteps() {
-    const live = derived.rows.filter(x => !x.past), past = derived.rows.length - live.length;
+    const live = derived.rows.filter(x => !x.past);
     const n = { lab: 0, personal: 0, unsure: 0, ref: 0 }, unconf = { lab: 0, personal: 0 };
     let img = 0;
     for (const x of live) {
@@ -468,15 +468,13 @@
       n[effCat(x)]++;
       if (effCat(x) !== 'unsure' && S.decisions[x.l.key] !== effCat(x)) unconf[effCat(x)]++;
     }
-    const since = sinceInfo(), times = S.orders.map(o => (o.time || '').slice(0, 10)).filter(Boolean).sort();
+    // 只算这次要判断的（上次报销那天之后的）订单
+    const times = live.map(x => (x.o.time || '').slice(0, 10)).filter(Boolean).sort(), nOrders = new Set(live.map(x => x.o.no)).size;
     const ic = EXT ? invCounts() : null;
-    // 步骤格里的第二行要短（七步排一行）：识别方式只放在悬停说明和下方的详细说明里；同一年的日期范围后一个日期省掉年份
-    const sinceText = since.mode === 'auto' || since.mode === 'date' ? '截至 ' + since.date : since.mode === 'none' ? '从第一单开始' : '未设置';
-    const sinceTip = since.mode === 'auto' ? '，自动识别' : since.mode === 'date' ? '，手动指定' : '';
+    // 步骤格里的第二行要短（六步排一行）；同一年的日期范围后一个日期省掉年份
     const t0 = times[0] || '', t1 = times[times.length - 1] || '';
     const range = t0 === t1 ? t0 : t0.slice(0, 4) === t1.slice(0, 4) ? t0 + ' 至 ' + t1.slice(5) : t0 + ' 至 ' + t1;
-    const sinceNote = since.mode === 'auto' ? '自动识别：上次报销截至 ' + since.date + ' ' + (since.shop || '') + ' 的订单，此前 ' + past + ' 件不再判断。'
-      : since.mode === 'date' ? since.date + ' 及以前的 ' + past + ' 件不再判断。' : since.mode === 'none' ? '全部订单均需判断。' : '';
+    const since = sinceInfo();
     const pack = EXT ? packState() : null;
     // help：一两句「这一步是什么」；how：给第一次用的人的分步说明（去哪个页面、点什么、做完是什么样子），README「工作流程」的折叠说明与此一致
     const FOLDER_TIP = '选择文件夹时浏览器会询问是否「上传」，确认即可：文件只在本机读取，不会上传。';
@@ -484,20 +482,20 @@
       // 第 1 步「从淘宝读取订单」（用户 2026-10-07）：原来的「导入订单表」「补充图片」两步合成一步，订单、图片、逐件退款一次读完；
       // 订单表（xlsx）降为可选，在「更多」里导入。网页版没有扩展读不了淘宝页面，仍是导入订单表 + 复制抓取脚本
       EXT ? { id: 'read', title: '从淘宝读取订单', done: S.orders.length > 0,
-        text: readBusy() ? readShort() : S.orders.length ? S.orders.length + ' 单 · ' + range : '未读取',
-        tip: S.orders.length ? S.orders.length + ' 单，' + t0 + ' 至 ' + t1 + '，有图 ' + img + ' / ' + live.length + ' 件' : '',
+        text: readBusy() ? readShort() : S.orders.length ? nOrders + ' 单 · ' + range : '未读取',
+        tip: S.orders.length ? nOrders + ' 单，' + t0 + ' 至 ' + t1 + '，有图 ' + img + ' / ' + live.length + ' 件' + (since.date ? '；上次报销到 ' + since.date : '') : '',
         help: (img < live.length ? '尚有 ' + (live.length - img) + ' 件缺少图片（列表中以红色 ERROR 标出），再次读取可补上。' : '')
-          + '从淘宝「已买到的宝贝」读取订单、商品图片和逐件退款状态。有新订单时再次点击即可更新，已有的判断全部保留。',
+          + '从淘宝「已买到的宝贝」读取上次报销之后的订单、商品图片和逐件退款状态。有新订单时再次读取即可补充，已有的判断全部保留。',
         how: [
-          '点击「从淘宝读取订单」，选择读取到哪天为止（默认为上次报销截止点，没有时为最近 6 个月），点击「开始读取」。',
+          '点击「从淘宝读取订单」，填写上次报销到哪天（只读取这一天之后的订单；第一次使用默认最近 6 个月），点击「开始读取」。',
           '插件打开淘宝「已买到的宝贝」：未登录时请在该页面用手机淘宝 App 扫码，或输入账号密码登录一次，登录后自动开始翻页读取，本页显示读取进度。遇到滑块或安全验证时，请在该页面手动完成，完成后自动继续。',
-          '读取完成后淘宝页面自动关闭并回到本页，此步骤显示订单数和日期范围。已有从淘宝导出的订单表（xlsx）时，可在右上角「更多 → 导入订单表」补充。',
+          '读取完成后淘宝页面自动关闭并回到本页，此步骤显示订单数和日期范围，读取结果显示在步骤条下方。',
         ],
-        note: readNote(),
-        acts: pb('data-flow="read"', '从淘宝读取订单', READ_TIP) }
+        // 读过以后这一步已完成：按钮改叫「再次读取」，免得像是还要再做一遍
+        acts: pb('data-flow="read"', S.orders.length ? '再次读取（补充新订单）' : '从淘宝读取订单', READ_TIP) }
       : { id: 'import', title: '导入订单表', done: S.orders.length > 0,
-        text: S.orders.length ? S.orders.length + ' 单 · ' + range : '未导入',
-        tip: S.orders.length ? S.orders.length + ' 单，' + t0 + ' 至 ' + t1 + '，有图 ' + img + ' / ' + live.length + ' 件' : '',
+        text: S.orders.length ? nOrders + ' 单 · ' + range : '未导入',
+        tip: S.orders.length ? nOrders + ' 单，' + t0 + ' 至 ' + t1 + '，有图 ' + img + ' / ' + live.length + ' 件' : '',
         help: '网页版无法自动读取淘宝页面，需导入订单表；安装为 Chrome 扩展后可一键从淘宝读取订单。',
         how: [
           '在已登录的淘宝「已买到的宝贝」页点击订单列表上方的「导出订单」，按页面提示下载 xlsx 表格，再点击「导入订单表」选择该文件，或拖入本页。',
@@ -505,17 +503,6 @@
         ],
         acts: pb('data-flow="import"', '导入订单表', '选择从淘宝导出的订单表（xlsx 或 csv）')
           + pb('data-flow="img-dlg"', '补充图片', '复制抓取脚本，在淘宝订单页运行', false) },
-      { id: 'since', title: '上次报销截止点', done: ['auto', 'date', 'none'].includes(since.mode), text: sinceText, tip: sinceText + sinceTip,
-        help: sinceNote + '截止订单及更早的订单不再判断，避免重复报销。',
-        how: [
-          '以前报销过：点击「导入已整理的发票文件夹」，选择存放以往已报销发票 PDF 的文件夹（可含子文件夹），插件读取发票号码、日期和金额，自动找出上次报销的最后一单。' + FOLDER_TIP,
-          '没有整理好的发票文件夹：在右侧「或手动指定」中选择上次报销截止的日期。',
-          '第一次报销：点击「从第一单开始」，读取到的全部订单都参与判断。完成后此步骤显示「截至 日期」或「从第一单开始」。',
-        ],
-        acts: pb('data-flow="have-dir"', '导入已整理的发票文件夹', '选择以往整理好的发票文件夹：读取每张 PDF 的号码、日期、金额，识别已报销的订单', since.mode === 'unknown')
-          + '<label class="flow-date">或手动指定：截至 <input type="date" data-flow="since-date" title="上次报销截止的日期，此日及以前的订单不再判断" value="' + (since.mode === 'date' ? since.date : '') + '"></label>'
-          + (since.mode !== 'none' ? '<button class="linkbtn" data-flow="since-none" title="全部订单均需判断">从第一单开始</button>' : '')
-          + (since.mode === 'date' || since.mode === 'none' ? '<button class="linkbtn" data-flow="since-auto" title="按已整理的发票自动识别上次报销截止的订单">改为自动识别</button>' : '') },
       { id: 'unsure', cat: 'unsure', title: '判断待定', done: n.unsure === 0, text: n.unsure ? '剩余 ' + n.unsure + ' 件' : '已全部判断',
         help: '自动判断无法确定的商品需逐件判断。已退款商品自动排除。',
         how: [
@@ -548,10 +535,9 @@
           '点击「查看发票状态」，下方列出需报销的订单和每单的发票状态，列表上方有五个按钮，按从左到右的顺序使用，当前应点击的一个显示为主按钮。',
           '先点击「检查开票情况」：插件依次打开淘宝「我的发票」和旺旺，同步开票记录、读取卖家回复并下载已开具的发票，完成后各单状态自动更新，打开的页面自动关闭。',
           '再按需点击「申请平台开票」「按卖家的开票入口申请」「向卖家索要发票」「请淘宝客服督促」。提交申请、发送消息前都先列出清单，确认后才执行；平台批量开票停在淘宝的确认页，由用户点击「确认提交」。',
-          '下载的发票存入下载文件夹的「订单分拣-发票」。带「›」的状态可点击，打开对应的淘宝页面；如需手动查看开票记录，点击「打开淘宝我的发票」。',
+          '下载的发票存入下载文件夹的「订单分拣-发票」。带「›」的状态可点击，打开该单对应的淘宝页面。',
         ] : null,
-        acts: pb('data-goto="invoice"', '查看发票状态', '列出需报销的实验室订单及每单的发票状态')
-          + (EXT ? '<button class="linkbtn" data-flow="inv-page" title="在新标签页打开淘宝「我的发票」，查看已开具、申请中、未申请的发票记录（插件同步、下载时会自行打开，无需手动操作）">打开淘宝我的发票</button>' : '') },
+        acts: pb('data-goto="invoice"', '查看发票状态', '列出需报销的实验室订单及每单的发票状态') },
       { id: 'pack', title: '整理报销文件', done: !!pack && pack.done, text: pack ? pack.text : '需安装为 Chrome 扩展',
         help: EXT ? '把已下载的发票按报销格式复制并重命名，附汇总表和压缩包。原文件不变。'
                   : '整理报销文件需安装为 Chrome 扩展后使用。',
@@ -570,6 +556,15 @@
     const left = lp ? got.filter(no => !(lp.nos || []).includes(no)).length : got.length;
     return { done: !!lp && left === 0, text: lp ? (left ? '新增 ' + left + ' 单发票' : '已整理 ' + lp.n + ' 张') : got.length ? got.length + ' 单可整理' : '暂无发票' };
   }
+  // 读取进度和结果：放在步骤条和说明区之间，不随选中的步骤切换消失（用户 2026-10-07：读完说明区切到当前步骤，结果原来写在第 1 步里就看不到了）。
+  // 结果一直留着，直到点「关闭」或下次读取
+  function readBar() {
+    const t = EXT ? readNote() : '';
+    if (!t) return '';
+    const busy = readBusy(), bad = !busy && R.result && (!(R.result.nos || []).length || ['stopped', 'verify', 'stuck', 'max'].includes(R.result.why));
+    return '<div class="read-bar' + (busy ? ' busy' : bad ? ' bad' : '') + '"><span>' + esc(t) + '</span>'
+      + (busy ? '' : '<button class="linkbtn" data-flow="read-close" title="关闭这条读取结果提示">关闭</button>') + '</div>';
+  }
   function renderSummary() {
     const steps = flowSteps();
     const cur = steps.findIndex(x => !x.done);
@@ -580,6 +575,7 @@
         '<li class="' + (x.done ? 'is-done' : i === cur ? 'is-cur' : '') + (i === show ? ' is-sel' : '') + '" data-step="' + i + '" role="button" tabindex="0" title="第 ' + (i + 1) + ' 步：' + x.title + '（' + esc(x.tip || x.text) + '）">'
         + '<span class="flow-h"><span class="flow-n">' + (x.done ? '✓' : i + 1) + '</span><span class="flow-t">' + x.title + '</span></span>'
         + '<span class="flow-s">' + esc(x.text) + '</span></li>').join('') + '</ol>'
+      + readBar()
       + '<div class="flow-detail"><div class="fd-text"><div class="fd-title">第 ' + (show + 1) + ' 步　' + d.title
       + (show !== cur && cur >= 0 ? '<span class="hint">当前步骤：第 ' + (cur + 1) + ' 步 ' + steps[cur].title + '</span>' : cur < 0 ? '<span class="hint">全部完成</span>' : '')
       + '</div><p>' + esc(d.help) + '</p>'
@@ -1663,11 +1659,11 @@
   }
 
   // ── 从淘宝读取订单（用户 2026-10-07：新人大多没用过淘宝网页版，卡在「导出订单表」；改成插件自己翻订单页读，订单表降为可选）──
-  // 主页写 readJob = { at, until }（30 分钟内有效）并开一个「已买到的宝贝」干活页 → 淘宝页（extension/taobao.js）领到活后自动翻页，
+  // 主页写 readJob = { at, from }（from = 上次报销那天的后一天；30 分钟内有效）并开一个「已买到的宝贝」干活页 → 淘宝页（extension/taobao.js）领到活后自动翻页，
   // 进度写 readProgress；读完后台写 readResult、关掉干活页、切回主页。读到的订单照常经 scraped 并进来（mergeFromExt）。
-  // S.readFrom：读过的最早一天（'0000-00-00' = 全部订单）。这一天及以后、主页还没有的订单按订单页建单；已有订单只补图片、退款、状态，判断全部保留
+  // S.readFrom：读过的最早一天。这一天及以后、主页还没有的订单按订单页建单；已有订单只补图片、退款、状态，判断全部保留
   const READ_LIFE = 30 * 60e3;
-  const READ_TIP = '将打开淘宝「已买到的宝贝」，自动翻页读取订单、商品图片和退款状态；未登录时请在打开的页面登录一次，读取完成后自动回到本页';
+  const READ_TIP = '将打开淘宝「已买到的宝贝」，自动翻页读取上次报销之后的订单、商品图片和退款状态；未登录时请在打开的页面登录一次，读取完成后自动回到本页';
   const R = { job: null, progress: null, result: null };
   const readRange = () => S.readFrom ? { from: S.readFrom, before: '9999-12-31' } : null;
   // 正在读：任务还有效（等登录、正在翻），或进度 2 分钟内更新过（读得久的，过了 30 分钟也还在翻）
@@ -1696,32 +1692,35 @@
     return '已读取 ' + os.length + ' 单 ' + lines + ' 件（' + (days.length ? days[0] + ' 至 ' + days[days.length - 1] : '无日期') + '），其中退款 ' + refunded + ' 件（' + when + '）。'
       + (r.why === 'stuck' || r.why === 'max' ? '翻页中途停止，可能未读到最早的订单，可再次读取。' : '');
   }
-  // 读到哪天为止：默认上次报销截止点（更早的已报销过）；没有时最近 6 个月
-  function defaultUntil() {
+  // 读取对话框只问一件事（用户 2026-10-07）：上次报销到哪天。默认：填过的日期 > 导入过已整理发票时推断的那天 > 最近 6 个月
+  const ymd = d => d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+  function defaultSince() {
     const s = sinceInfo();
-    if (s.mode === 'date' || s.mode === 'auto') return s.date;
+    if (s.date || s.guess) return s.date || s.guess;
     const d = new Date(); d.setMonth(d.getMonth() - 6);
-    return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+    return ymd(d);
   }
   function openRead() {
     if (!EXT) { toast('从淘宝读取订单需安装为 Chrome 扩展；网页版请导入订单表'); return; }
     const s = sinceInfo();
-    $('read-until').value = defaultUntil();
-    $('read-all').checked = false; $('read-until').disabled = false;
-    $('read-hint').textContent = (s.mode === 'date' || s.mode === 'auto' ? '默认为上次报销截止点 ' + s.date + '：更早的订单已报销过，不必再读。'
-      : '默认读取最近 6 个月；知道上次报销截止的日期时，可改为该日期。') + '订单越多读取越久，每页约 5 秒。';
+    $('read-since').value = defaultSince();
+    $('read-hint').textContent = (s.date ? '默认为上次填写的日期 ' + s.date + '。' : s.guess ? '默认为已整理的发票中最晚一单的下单日期 ' + s.guess + '。' : '默认为 6 个月前。')
+      + '订单越多读取越久，每页约 5 秒。';
     $('read-err').textContent = '';
     $('dlg-read').showModal();
   }
   async function startRead() {
-    const all = $('read-all').checked, until = all ? '' : $('read-until').value;
-    if (!all && !/^\d{4}-\d{2}-\d{2}$/.test(until)) { $('read-err').textContent = '请选择日期，或勾选「读取全部订单」'; return; }
+    const since = $('read-since').value;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(since)) { $('read-err').textContent = '请选择上次报销到哪天'; return; }
     $('dlg-read').close();
-    const from = all ? '0000-00-00' : until;
+    // 只读这天之后的订单：淘宝页从最新往前翻到这天的后一天为止；这天及以前的旧订单不再判断（S.since）
+    const d = new Date(since + 'T00:00:00'); d.setDate(d.getDate() + 1);
+    const from = ymd(d);
+    S.since = since;
     if (!S.readFrom || from < S.readFrom) S.readFrom = from;
     S.orders = S.orders.filter(o => !/^示例-/.test(o.no));          // 试用的示例订单不和真实订单混在一起
     persist(); derive(); render();
-    R.job = { at: Date.now(), until }; R.progress = null; R.result = null;
+    R.job = { at: Date.now(), from }; R.progress = null; R.result = null;
     await chrome.storage.local.remove(['readProgress', 'readResult']);
     await chrome.storage.local.set({ readJob: R.job });
     chrome.runtime.sendMessage({ type: 'openWorkTab', url: TAOBAO });        // 插件开的干活页：读完由后台关掉
@@ -1730,9 +1729,20 @@
   }
   function onReadResult(r) {
     if (!r) return;
-    // 最后一页的数据先于结果写进 scraped，这里再并一次保证结果里的订单都在
-    // 回到主页时停在第 1 步，读取结果写在它的说明里（提示条几秒就消失）；上方提示当前该做第几步
-    chrome.storage.local.get('scraped').then(x => { mergeFromExt(x.scraped); view.step = 0; render(); toast(readResultText(r)); });
+    // 最后一页的数据先于结果写进 scraped，这里再并一次保证结果里的订单都在。
+    // 读完直接显示当前该做的那一步（用户 2026-10-07：停在第 1 步时下方还是读取按钮，和上方高亮的步骤对不上）；
+    // 读取结果在步骤条下方一直显示（readBar），并用提示条报一次
+    chrome.storage.local.get('scraped').then(x => {
+      mergeFromExt(x.scraped);
+      const cur = flowSteps().findIndex(st => !st.done);
+      view.step = cur >= 0 ? cur : null;
+      render(); toast(readResultText(r));
+    });
+  }
+  function closeReadResult() {
+    R.result = null;
+    chrome.storage.local.remove('readResult');
+    render();
   }
 
   // ── 首次使用（没有订单时的「开始使用」卡片）：两项——填抬头税号（填了打勾）、从淘宝读取订单（显示读取进度）──
@@ -1814,7 +1824,7 @@
   // ── 备份数据 / 从备份恢复（用户 2026-10-05）：全部数据只在本机浏览器里，删掉扩展或清浏览器数据就没了 ──
   // 备份文件：{ app: 'orderTriage', kind: 'backup', format: 1, version, at, localStorage: { 'orderTriage.*': 原样字符串 }, storage: chrome.storage.local 全部 }
   // 格式有不兼容的改动时 format 加一；旧插件见到不认识的 format 就拒绝，不去猜
-  const VERSION = EXT ? chrome.runtime.getManifest().version : '0.14.0';     // 网页版读不到 manifest，selftest 核对两处一致
+  const VERSION = EXT ? chrome.runtime.getManifest().version : '0.15.0';     // 网页版读不到 manifest，selftest 核对两处一致
   const BACKUP_FORMAT = 1;
   // 恢复时丢掉的扩展存储键：进行中的任务、页面领活记录、标签页编号这类临时状态。恢复回去的话，开着的淘宝页一读到就会接着干活
   // （重新提交开票申请、给卖家发消息、找客服督促、下载），标签页编号也早已失效。
@@ -1899,7 +1909,6 @@
     $('btn-import').onclick = $('btn-import2').onclick = () => $('file').click();
     $('read-go').onclick = () => startRead().catch(e => toast('出错：' + e.message));
     $('read-cancel').onclick = () => $('dlg-read').close();
-    $('read-all').onchange = e => { $('read-until').disabled = e.target.checked; $('read-err').textContent = ''; };
     $('file').onchange = e => { if (e.target.files.length) importFiles([...e.target.files]); e.target.value = ''; };
     $('btn-sample').onclick = async () => {
       S.orders = N.rowsToOrders(window.SAMPLE_ROWS);
@@ -1959,7 +1968,6 @@
       $('dlg-settings').close(); derive(); render();
     };
 
-    const setSince = v => { S.since = v; persist(); derive(); render(); };
     $('remind').addEventListener('click', e => { const go = e.target.closest('[data-goto]'); if (go) goCat(go.dataset.goto); });
     $('remind').addEventListener('keydown', e => { const go = e.target.closest('[data-goto]'); if (go && e.key === 'Enter') goCat(go.dataset.goto); });
     $('summary').addEventListener('click', e => {
@@ -1970,21 +1978,14 @@
         const k = f.dataset.flow;
         if (k === 'import') $('file').click();
         else if (k === 'read') openRead();
-        else if (k === 'inv-page') openUrl(INV_URL);
+        else if (k === 'read-close') closeReadResult();
         else if (k === 'img-dlg') openImages();
-        else if (k === 'have-dir') $('inv-have-dir').click();
-        else if (k === 'since-none') setSince('none');
-        else if (k === 'since-auto') setSince('');
         return;
       }
       const li = e.target.closest('[data-step]');
       if (li) { const st = flowSteps()[+li.dataset.step]; view.step = +li.dataset.step; if (st.cat) view.cat = st.cat; render(); }
     });
     $('summary').addEventListener('keydown', e => { if (e.key === 'Enter') { const li = e.target.closest('[data-step]'); if (li) li.click(); } });
-    $('summary').addEventListener('change', e => {
-      const t = e.target;
-      if (t.dataset.flow === 'since-date') setSince(t.value || '');
-    });
     $('seg-cat').onclick = e => { const b = e.target.closest('button'); if (b) goCat(b.dataset.cat); };
     let qt = null;
     $('q').oninput = e => { clearTimeout(qt); qt = setTimeout(() => { view.q = e.target.value; renderList(); }, 120); };

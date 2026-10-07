@@ -116,8 +116,7 @@ def run(p, tmp):
     app.evaluate('''no => { const S = JSON.parse(localStorage.getItem('orderTriage.app.v1')); S.haveNos = [no];
                          localStorage.setItem('orderTriage.app.v1', JSON.stringify(S)); }''', NO['N1'])
     app.reload(); app.wait_for_selector('#main:not([hidden])'); app.wait_for_timeout(800)
-    # 导入已有票的订单号后，插件会自动把最晚那单当成「上次报销到这」；这里要从第一单开始算
-    app.click('.flow li[data-step="1"]'); app.click('button[data-flow="since-none"]'); app.wait_for_timeout(400)
+    # 已报销的订单号不再自动推断「上次报销到哪天」（用户 2026-10-07 去掉了这一步），全部订单照常参与判断
     app.click('#seg-cat button[data-cat="invoice"]'); app.wait_for_timeout(500)
     btn = app.inner_text('#inv-apply')
     rows = app.evaluate(r"[...document.querySelectorAll('.inv-table tbody tr')].map(tr => tr.innerText.replace(/\s+/g, ' ').slice(0, 90))")

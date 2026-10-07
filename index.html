@@ -140,7 +140,7 @@ details.more > summary::after{content:"▾"; font-size:10px; color:var(--muted)}
 
 /* 一条线的步骤 */
 .summary{background:var(--surface); border:1px solid var(--line); border-radius:var(--r); padding:12px 14px; box-shadow:var(--shadow)}
-/* 八步按内容分配宽度（等分时「上次报销截止点」和日期范围在 1200px 下会折行）；标题不折行，放不下时只让第二行文字换行 */
+/* 各步按内容分配宽度（等分时日期范围在 1200px 下会折行）；标题不折行，放不下时只让第二行文字换行 */
 .flow{list-style:none; margin:0 0 10px; padding:0; display:flex; gap:5px}
 .flow li{flex:1 1 auto; display:flex; flex-direction:column; gap:2px; padding:7px 8px 8px; border-radius:8px; cursor:pointer; background:var(--sunk); border:1px solid transparent}
 .flow li:hover{border-color:var(--line)}
@@ -154,6 +154,11 @@ details.more > summary::after{content:"▾"; font-size:10px; color:var(--muted)}
 .flow li.is-cur{background:var(--uns-wash)}
 .flow li.is-cur .flow-n{background:var(--uns); color:#fff; border-color:transparent}
 .flow li.is-sel{border-color:var(--text); background:var(--surface)}
+/* 读取订单的进度 / 结果（app.js readBar）：在步骤条和说明区之间，切换步骤也一直在 */
+.read-bar{display:flex; gap:6px 14px; align-items:center; justify-content:space-between; flex-wrap:wrap; margin:0 0 10px; padding:7px 12px;
+          border-radius:8px; background:var(--ok-bg); color:var(--ok-ink); font-size:13px}
+.read-bar.busy{background:var(--plat-bg); color:var(--plat-ink)}
+.read-bar.bad{background:var(--bad-bg); color:var(--bad-ink)}
 .flow-detail{display:flex; gap:10px 18px; align-items:center; justify-content:space-between; flex-wrap:wrap; padding:2px 2px 0}
 .fd-text{min-width:0; flex:1 1 380px}
 .fd-title{font-weight:650; font-size:14px}
@@ -373,6 +378,7 @@ footer p{margin:0 0 4px; max-width:90ch}
     <details class="more" id="more">
       <summary class="btn" title="其他操作：导入订单表（可选）、单项发票操作、备份与恢复数据">更多</summary>
       <div class="more-pop">
+        <button data-pick="inv-have-dir" title="可选：读取以前整理好的发票，避免重复下载，并识别已报销的订单">导入已整理的发票文件夹…</button>
         <button id="btn-import" title="可选：从淘宝导出的订单表补充数据（xlsx 或 csv）。表里有的订单以订单表为准，按订单页读取的其他订单和已有判断都保留">导入订单表（xlsx，可选）</button>
         <div class="more-h ext-only need-data">发票</div>
         <button class="ext-only need-data" id="inv-sync" title="打开淘宝「我的发票」，读取已开具、申请中、未申请的记录，更新每单的发票状态">同步开票状态</button>
@@ -410,7 +416,7 @@ footer p{margin:0 0 4px; max-width:90ch}
       <li data-g="read">
         <span class="g-n">2</span>
         <div class="ext-only"><b class="g-t">从淘宝读取订单</b>
-          <span class="g-d">点击「从淘宝读取订单」，选择读取到哪天为止。插件会打开淘宝「已买到的宝贝」页面：未登录时，用手机淘宝 App 扫描页面上的二维码，或输入账号密码登录一次；之后自动翻页读取订单、商品图片和退款状态，读完自动回到本页。</span></div>
+          <span class="g-d">点击「从淘宝读取订单」，填写上次报销到哪天（只读取这之后的订单）。插件会打开淘宝「已买到的宝贝」页面：未登录时，用手机淘宝 App 扫描页面上的二维码，或输入账号密码登录一次；之后自动翻页读取订单、商品图片和退款状态，读完自动回到本页。</span></div>
         <div class="g-act ext-only"><button class="btn primary" data-guide="read" title="将打开淘宝「已买到的宝贝」，自动翻页读取订单、商品图片和退款状态；未登录时请在打开的页面登录一次，读取完成后自动回到本页">从淘宝读取订单</button></div>
         <div class="web-only"><b class="g-t">导入订单表</b>
           <span class="g-d">网页版无法自动读取淘宝页面：在已登录的淘宝「已买到的宝贝」页点击订单列表上方的「导出订单」，下载 xlsx 表格，再点击「导入订单表」选择该文件，或将文件拖到本页。安装为 Chrome 扩展后可一键从淘宝读取。</span></div>
@@ -420,7 +426,7 @@ footer p{margin:0 0 4px; max-width:90ch}
     </ol>
     <div class="guide-alt">
       <div>想先看看界面，可<button class="btn sm" id="btn-sample" title="载入 8 单虚构的示例订单，用于试用界面；开始读取或导入真实订单时自动清除">载入示例数据</button>（8 单虚构订单，开始读取或导入真实订单时自动清除）。</div>
-      <div>换电脑或重装插件后，可在右上角「更多 → 从备份恢复…」导入以前备份的数据<span class="ext-only">；已有从淘宝导出的订单表（xlsx）时，也可在「更多 → 导入订单表」导入</span>。</div>
+      <div>换电脑或重装插件后，可在右上角「更多 → 从备份恢复…」导入以前备份的数据。</div>
     </div>
   </section>
 
@@ -504,9 +510,9 @@ footer p{margin:0 0 4px; max-width:90ch}
     <h3>从淘宝读取订单</h3>
     <p>将打开淘宝「已买到的宝贝」，从最新的订单开始自动翻页，读取订单、商品图片和逐件退款状态。未登录时请在打开的页面登录一次（手机淘宝 App 扫码，或输入账号密码），登录后自动开始；读取完成后淘宝页面自动关闭并回到本页。已有的订单和判断全部保留。</p>
     <div class="inv-set">
-      <label>读取到哪天为止（含当天）<input type="date" id="read-until" title="从最新的订单往前读，读到这一天为止"></label>
-      <label class="inline" title="不限日期，翻到订单列表的最后一页"><input type="checkbox" id="read-all"> 读取全部订单（不限日期，订单多时较慢）</label>
+      <label>上次报销到哪天？<input type="date" id="read-since" title="只读取这一天之后的订单；第一次使用请选一个起始日期，例如 6 个月前"></label>
     </div>
+    <p>只读取这一天之后的订单，读到的订单全部进入后续判断。第一次使用请选一个起始日期，例如最近 6 个月。</p>
     <p id="read-hint"></p>
     <p>读取期间请勿关闭打开的淘宝页面；出现滑块或安全验证时，请在该页面手动完成，完成后自动继续。</p>
     <div class="row"><span class="err" id="read-err"></span>

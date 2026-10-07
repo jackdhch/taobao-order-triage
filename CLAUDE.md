@@ -15,7 +15,7 @@ WSL 里有 python3 3.12、node 18、git；在 WSL 里用 `python3`，不要用 `
 - **零依赖**：不加载外部脚本、字体、CDN；除了商品图片（alicdn），页面不发出网络请求。开源库原样放在 vendor/（jsQR 读二维码、PDF.js 读发票 PDF），见 vendor/README.md
 - **只做电脑版**：不需要做、也不需要维护手机适配
 - **订单从淘宝订单页读取，订单表可选**（用户 2026-10-07 改：新人大多没用过淘宝网页版，卡在「导出订单表」）：
-  第 1 步「从淘宝读取订单」——主页写 readJob={at,until}（30 分钟有效）并开「已买到的宝贝」干活页，extension/taobao.js 向后台领活后
+  第 1 步「从淘宝读取订单」——对话框只问「上次报销到哪天」（存 S.since，只读之后的订单、之前的不再判断），主页写 readJob={at,from}（30 分钟有效）并开「已买到的宝贝」干活页，extension/taobao.js 向后台领活后
   不用点按钮就自动翻页（scraper 的 want={all:true,from}），订单、图片、逐件退款一次读完；读完后台写 readResult、关页、切回主页。
   S.readFrom（读过的最早一天）及以后的订单按订单页建单（source: 'scrape'）。导入订单表（「更多」里，可选）只合并：
   表里有的单以订单表为准（mergeExport），表里没有的按订单页建的单保留，只去掉示例订单。
@@ -53,7 +53,8 @@ index.html                 页面（样式内联；扩展页不允许内联脚�
 js/xlsx-lite.js            零依赖 xlsx/csv 读取（DecompressionStream 解 zip，正则读 sheet XML）
 js/normalize.js            列名别名 → 统一订单结构；一单多件续行合并；抓取数据按订单号合并；退款判断
 js/classify.js             关键词打分 + 同店铺/同商品记忆；classifyAll 两遍扫描（补邮费链接跟随店铺）；suggest 根据手动判断推荐增删词
-js/app.js                  界面、状态（localStorage）、从淘宝读取订单、导入订单表、键盘操作。界面是一条线的 7 步（flowSteps，每步 help + how 分步说明），
+js/app.js                  界面、状态（localStorage）、从淘宝读取订单、导入订单表、键盘操作。界面是一条线的 6 步（flowSteps，每步 help + how 分步说明，每步只有一个操作；用户 2026-10-07 要求主线不能有重复入口和分支，
+                           「上次报销截止点」一步已删，「导入已整理的发票文件夹」「导入订单表」在「更多」里），读取进度 / 结果在步骤条下方（readBar），
                            没有订单时显示「开始使用」卡片（renderGuide），顶上进度条（renderDash），
                            不常用的收在顶栏「更多」；不提供导出（「备份数据」除外）、不提供改词表（用户 2026-10-05 要求去掉多余的自由度）
 js/sample.js               虚构示例数据（给没有数据的人试用）

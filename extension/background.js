@@ -174,7 +174,7 @@ chrome.alarms.onAlarm.addListener(async a => {
   else await chrome.tabs.create({ url: url + '#auto', active: false });
 });
 
-// ── 从淘宝读取订单（用户 2026-10-07）：主页写 readJob = { at, until } 并开一个「已买到的宝贝」干活页 ──
+// ── 从淘宝读取订单（用户 2026-10-07）：主页写 readJob = { at, from } 并开一个「已买到的宝贝」干活页 ──
 // readClaim：订单页加载时来领活。只让一个页面干：第一个来领的记下 tab，别的页面（用户自己开着的订单页）不自动翻
 // readDone：读完（或停下）后清掉 readJob，结果写进 readResult 给主页；读到了订单就关掉这个干活页、把主页切到前台
 const READ_LIFE = 30 * 60e3;
@@ -202,7 +202,7 @@ chrome.runtime.onMessage.addListener((m, sender, reply) => {
     }
     if (readJob.tab !== sender.tab.id) return false;
     await chrome.storage.local.remove(['readJob', 'readProgress']);
-    await chrome.storage.local.set({ readResult: { at: readJob.at, until: readJob.until || '', why: m.why, nos: m.nos || [], pages: m.pages || 0, done: Date.now() } });
+    await chrome.storage.local.set({ readResult: { at: readJob.at, from: readJob.from || '', why: m.why, nos: m.nos || [], pages: m.pages || 0, done: Date.now() } });
     // 停下的、一单都没读到的（可能没登录好、页面没出来）：页面留着给用户看；读到了就关掉干活页，回主页看结果
     if (m.why !== 'stopped' && m.why !== 'verify' && (m.nos || []).length) {
       await focusHome().catch(e => console.warn('[订单分拣] 切回主页失败', e));

@@ -122,20 +122,21 @@ def read_section(ctx, base, eid, mock, watch, tmp):
 
     a0.click('#empty [data-guide="read"]')
     a0.wait_for_selector('#dlg-read[open]')
-    dv = a0.input_value('#read-until')
+    check(a0.locator('#dlg-read input').count() == 1, '读取窗口只有一个问题：上次报销到哪天（没有「读取全部订单」等分支）')
+    dv = a0.input_value('#read-since')
     days = (datetime.date.today() - datetime.date.fromisoformat(dv)).days if re.fullmatch(r'\d{4}-\d\d-\d\d', dv) else -1
     check(175 <= days <= 190, '没有上次报销截止点时，默认读取最近 6 个月', dv)
     untitled = a0.evaluate("[...document.querySelectorAll('#dlg-read button, #dlg-read input')].filter(b => !b.title && !b.closest('[title]')).map(b => b.id)")
     check(not untitled, '读取窗口的按钮、输入框都有悬停说明', untitled)
-    until = '2026-08-15'
-    a0.fill('#read-until', until)
+    until = '2026-08-15'                            # 上次报销到 08-14：只读 08-15 及以后的订单
+    a0.fill('#read-since', '2026-08-14')
     with ctx.expect_page(timeout=10000) as pi:
         a0.click('#read-go')
     tb = pi.value
     opened = wait_until(a0, lambda: not tb.is_closed() and 'buyertrade.taobao.com/trade/itemlist/list_bought_items.htm' in tb.url, 10)
     check(bool(opened), '打开了淘宝「已买到的宝贝」', tb.url)
     job = store(a0, 'readJob')
-    check(job and job.get('until') == until, '扩展存储里写了读取任务 readJob（带截止日期）', job)
+    check(job and job.get('from') == until, '扩展存储里写了读取任务 readJob（从上次报销那天的后一天读起）', job)
     shown = wait_until(a0, lambda: (t := a0.inner_text('body')) and ('等待登录淘宝' in t or '正在读取' in t) and t, 15)
     check(bool(shown), '主页显示读取进度（等待登录淘宝 / 正在读取）')
     res = wait_until(a0, lambda: store(a0, 'readResult'), 150)
@@ -154,7 +155,20 @@ def read_section(ctx, base, eid, mock, watch, tmp):
     with_img = sum(1 for o in got for l in o['lines'] if l.get('img'))
     check(with_img == n_lines - 1, '商品图片一起读回（图全坏的那件除外）', with_img)
     tip = a0.get_attribute('.flow li[data-step="0"]', 'title') or ''
-    check('从淘宝读取订单' in tip and f'有图 {n_lines - 1} / ' in tip and a0.locator('.flow li').count() == 7, '流程为七步，第 1 步「从淘宝读取订单」的悬停说明有图片数', tip)
+    check('从淘宝读取订单' in tip and f'有图 {n_lines - 1} / ' in tip and a0.locator('.flow li').count() == 6 and '上次报销截止点' not in a0.inner_text('.flow'), '流程为六步（没有「上次报销截止点」），第 1 步「从淘宝读取订单」的悬停说明有图片数', tip)
+    sel, cur = a0.locator('.flow li.is-sel').get_attribute('data-step'), a0.locator('.flow li.is-cur').get_attribute('data-step')
+    check(sel == cur and '从淘宝读取订单' not in a0.locator('#summary .flow-acts').inner_text(), '读完后下方说明切到当前步骤，不再显示「从淘宝读取订单」按钮', (sel, cur))
+    branch = a0.evaluate("""() => { const out = [];
+        for (let i = 0; i < document.querySelectorAll('.flow li').length; i++) {
+          document.querySelector('.flow li[data-step="' + i + '"]').click();
+          const acts = document.querySelector('#summary .flow-acts');
+          out.push([...acts.querySelectorAll('button, input, label')].length); }
+        return out; }""")
+    check(all(n <= 1 for n in branch), '主线每一步只有一个操作（没有「手动指定日期」「从第一单开始」这类分支）', branch)
+    check(a0.locator('#more [data-pick="inv-have-dir"]').count() == 1 and 'title' in a0.evaluate("document.querySelector('#more [data-pick=\"inv-have-dir\"]').outerHTML"),
+          '「导入已整理的发票文件夹」移到「更多」里，作为可选功能')
+    a0.click('.flow li[data-step="1"]'); a0.wait_for_timeout(200)
+    check('已读取' in a0.inner_text('#summary'), '切到别的步骤，读取结果仍显示在步骤条下方')
 
     # 订单表降为可选：导入订单表只合并。表里有的单换成订单表的商品行（图片从订单页那份补上、手动判断跟着挪），表里没有的单保留
     o9 = next(o for o in got if o['no'] == '5190000000000000009')
@@ -179,7 +193,8 @@ def read_section(ctx, base, eid, mock, watch, tmp):
     t0 = res['done']
     a0.click('.flow li[data-step="0"]'); a0.click('#summary [data-flow="read"]')
     a0.wait_for_selector('#dlg-read[open]')
-    a0.fill('#read-until', '2026-09-01')
+    check(a0.input_value('#read-since') == '2026-08-14', '再次读取时默认用上次填写的日期', a0.input_value('#read-since'))
+    a0.fill('#read-since', '2026-08-31')
     with ctx.expect_page(timeout=10000) as pi:
         a0.click('#read-go')
     tb2 = pi.value

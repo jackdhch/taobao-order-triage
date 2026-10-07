@@ -298,7 +298,7 @@ def wrap_sample(page):
 
 
 def load_sample(page, home):
-    """点「载入示例数据」，商品配上示意图，上次报销截止点选「从第一单开始」"""
+    """点「载入示例数据」，商品配上示意图（不设上次报销日期，全部订单参与判断）"""
     wrap_sample(page)
     page.click('#btn-sample')
     page.wait_for_selector('#main:not([hidden])')
@@ -465,7 +465,7 @@ def make_shots(p, page, home, tmp):
 
 
 def gif_overview(page, home):
-    """主页总览：载入示例数据 → 进度条、八步流程亮起 → 从第一单开始 → 进入待定列表"""
+    """主页总览：载入示例数据 → 进度条、六步流程亮起 → 查看各步说明 → 进入待定列表"""
     page.set_viewport_size({'width': GW, 'height': GH})
     reset(page, home)
     wrap_sample(page)
@@ -474,14 +474,10 @@ def gif_overview(page, home):
     r.snap(1200)
     r.click('#btn-sample', hold=1800, after=lambda: page.wait_for_selector('#main:not([hidden])'))
     r.inject()
-    r.click('.flow li[data-step="1"]', hold=1200)
-    r.note('上次报销截止点：选择「从第一单开始」')
-    r.click('#summary [data-flow="since-none"]', hold=1800)
-    r.note('')
-    # 七步流程：依次点开第 5、6 步看说明，再回到第 3 步「判断待定」
-    r.click('.flow li[data-step="4"]', hold=1300)
-    r.click('.flow li[data-step="5"]', hold=1500)
-    r.click('.flow li[data-step="2"]', hold=900)
+    # 六步流程：依次点开第 4、5 步看说明，再回到第 2 步「判断待定」
+    r.click('.flow li[data-step="3"]', hold=1300)
+    r.click('.flow li[data-step="4"]', hold=1500)
+    r.click('.flow li[data-step="1"]', hold=900)
     r.click('.flow-acts [data-goto="unsure"]', hold=2600)
     r.save('demo-overview')
 
