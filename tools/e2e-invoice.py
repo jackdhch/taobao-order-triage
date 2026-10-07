@@ -216,7 +216,7 @@ def run(p, tmp):
     check(want and want.get('since') == '2026-08-02' and want.get('taxId') == TAX, 'invWant 的起始日期是 2026-08-02（最早的实验室订单），带上税号',
           want and {k: want.get(k) for k in ('since', 'title', 'taxId')})
 
-    app.click('#seg-cat button[data-cat="invoice"]')
+    app.click('.flow li[data-step="2"]')            # 第 3 步「处理发票」：下方显示发票表
     app.wait_for_selector('.inv-table')
 
     def inv_rows():
@@ -238,13 +238,12 @@ def run(p, tmp):
 
     print('\n[2] 同步发票状态（「全部发票」模拟页）')
     with ctx.expect_page() as pi:
-        app.evaluate("document.querySelector('details.more').open = true")   # 单项操作收在「更多」里
-        app.click('#inv-sync')
+        app.evaluate('() => { __otDev.sync(); }')        # 界面上只有「自动处理发票」一个按钮；这里单独测其中的同步这一段
     inv = pi.value
     t0 = time.time()
     sync = wait_until(app, lambda: store('invSync'), 120)
     print(f'  同步用时 {time.time() - t0:.0f} 秒；面板：' + inv.inner_text('div[style*="2147483647"]').replace('\n', ' | '))
-    check(bool(sync), '点「同步发票状态」打开全部发票页，120 秒内写回 invSync')
+    check(bool(sync), '同步这一段：打开全部发票页，120 秒内写回 invSync')
     rows = (sync or {}).get('rows', {})
     log = inv.evaluate('window.__mock.log')
     inv_clicks = inv.evaluate('window.__mock.clicks')      # 插件开的这一页同步完 3 秒就关，先存下来
@@ -266,12 +265,11 @@ def run(p, tmp):
 
     print('\n[3] 扫描旺旺里的发票回复（旺旺模拟页，聊天在 iframe 里）')
     with ctx.expect_page() as pi:
-        app.evaluate("document.querySelector('details.more').open = true")
-        app.click('#inv-scan')
+        app.evaluate('() => { __otDev.scan(); }')
     chat = pi.value
     t0 = time.time()
     scan = wait_until(app, lambda: store('chatScan'), 180)
-    check(bool(scan), '点「扫描」打开旺旺页，180 秒内写回 chatScan')
+    check(bool(scan), '读回复这一段：打开旺旺页，180 秒内写回 chatScan')
     core = next((f for f in chat.frames if '/chat-core/' in f.url), None)
     check(core is not None, '旺旺页里有 chat-core 框架')
     cm = core.evaluate('({ opened: window.__mock.opened, sent: window.__mock.sent })') if core else {'opened': [], 'sent': []}
@@ -295,8 +293,8 @@ def run(p, tmp):
           f'会命中外层 .message-item-line，所有图片都被滤掉）')
     app.wait_for_timeout(500)
     rows = check_status(AFTER_SCAN, '扫描后主页状态：E 卖家已发送文件，F 图片（二维码），G 要求提供邮箱，I 已向卖家索要等回复，H 仍需向卖家索要', F_HINT)
-    check(rows.get(NO['E'], {}).get('btns') == ['下载卖家文件（1 个）'] and rows.get(NO['A'], {}).get('btns') == ['下载发票'],
-          'A 有「下载发票」按钮，E 有「下载卖家文件（1 个）」按钮', {k: rows.get(NO[k], {}).get('btns') for k in 'AE'})
+    check(not rows.get(NO['E'], {}).get('btns') and not rows.get(NO['A'], {}).get('btns'),
+          '发票表里没有逐单的下载按钮（下载由「自动处理发票」完成）', {k: rows.get(NO[k], {}).get('btns') for k in 'AE'})
     # 三种「等待」状态颜色各不相同，标签可点、悬停说明写着去哪
     pill = lambda k: app.evaluate("no => { const tr = [...document.querySelectorAll('.inv-table tbody tr')].find(tr => tr.innerText.includes(no)); const s = tr && tr.querySelector('.st'); "
                                   "return s ? { cls: s.className, tag: s.tagName, title: s.title, bg: getComputedStyle(s).backgroundColor } : {}; }", NO[k])
@@ -317,8 +315,7 @@ def run(p, tmp):
     for pg in (inv, chat):
         if not pg.is_closed(): pg.close()
     n_pages = len(pages)
-    app.evaluate("document.querySelector('details.more').open = true")
-    app.click('#inv-dl-all')
+    app.evaluate('() => { __otDev.download(); }')
     app.wait_for_timeout(1500)
     jobs = store('invJobs') or {}
     now = app.evaluate('Date.now()')
@@ -388,22 +385,32 @@ def run(p, tmp):
           f'读到 {len(s2.get("rows", {}))} 单，应为 {len(rows_all)} 单；写回时页面渲染过的页 {slow.evaluate("window.__mock.log")}'
           '（是空的就说明 invoice-list.js 领到活马上就读，没等表格出来：找不到标签就跳过，最后把空结果写回 invSync）')
 
-    print('\n[6b] 检查开票情况：点一次，依次同步 → 看卖家回复 → 下载，不用再点别的')
+    print('\n[6b] 自动处理发票：点一次，依次同步 → 看卖家回复 → 列一张确认清单（只确认一次）；取消则只下载，不提交、不发送')
     for pg in [pg for pg in ctx.pages if pg.url.startswith(INV_URL) or '/app/im/' in pg.url]: pg.close()
     at = lambda k: app.evaluate('k => chrome.storage.local.get(k).then(r => r[k] ? r[k].at : 0)', k)
     s0, c0 = at('invSync'), at('chatScan')
     app.bring_to_front()
-    app.click('#inv-auto')
+    app.evaluate("() => { window.__dlgN = 0; const o = HTMLDialogElement.prototype.showModal; HTMLDialogElement.prototype.showModal = function () { if (this.id === 'dlg-list') window.__dlgN++; return o.call(this); }; }")
+    check(app.locator('#summary .flow-acts button').count() == 1 and app.inner_text('#summary .flow-acts') == '自动处理发票', '「处理发票」这一步只有一个按钮「自动处理发票」', app.inner_text('#summary .flow-acts'))
+    app.click('#summary [data-flow="inv-run"]')
     s1 = wait_until(app, lambda: (v := at('invSync')) != s0 and v, 120)
     check(bool(s1), '① 同步发票状态：写回了新的 invSync')
     c1 = wait_until(app, lambda: (v := at('chatScan')) != c0 and v, 180)
     check(bool(c1) and c1 > (s1 or 0), '② 同步完自动去旺旺看卖家回复：写回了新的 chatScan（在同步之后）')
     app.bring_to_front()
-    toast = wait_until(app, lambda: (t := app.inner_text('#toast')) and ('下载' in t) and t, 20) or app.inner_text('#toast')
-    check('下载' in toast, '③ 看完回复自动进入下载这一步', toast)
+    dlg = wait_until(app, lambda: app.locator('#dlg-list[open]').count() and app.inner_text('#list-rows'), 120) or ''
+    heads = app.evaluate("[...document.querySelectorAll('#list-rows h4.grp')].map(h => h.textContent)")
+    check(bool(dlg) and heads and any('向卖家索要发票' in h for h in heads) and any('申请平台开票' in h for h in heads),
+          '③ 要对外提交、发送的合成一张清单，分组列出（向卖家索要、平台申请等）', heads)
+    app.click('#list-cancel')
+    fin = wait_until(app, lambda: (t := app.inner_text('#summary')) and '发票处理完成' in t and t, 120) or app.inner_text('#summary')
+    check('发票处理完成' in fin, '取消清单后只做下载，处理结束后步骤条下方写明结果', fin[:300])
+    check(app.evaluate('window.__dlgN') == 1, '整个过程只弹出一次确认清单', app.evaluate('window.__dlgN'))
+    sent = [s for pg in ctx.pages for fr in pg.frames if '/chat-core/' in fr.url for s in fr.evaluate('window.__mock.sent')]
+    check(not sent and not [pg for pg in ctx.pages if 'batchInvoice' in pg.url or 'alimebot' in pg.url], '取消后没有发消息、没有打开批量开票页和客服页', sent)
     work = lambda: [pg.url[:70] for pg in ctx.pages if pg.url.startswith(INV_URL) or '/trade/detail/' in pg.url or 'tmall.com' in pg.url]
     gone = wait_until(app, lambda: not work() and True, 40)
-    check(bool(gone), '一轮「检查开票情况」跑完：插件开的全部发票页、订单详情页都关了', work())
+    check(bool(gone), '一轮跑完：插件开的全部发票页、订单详情页都关了', work())
     check(len([pg for pg in ctx.pages if '/app/im/' in pg.url]) <= 1, '旺旺聊天页只有一个', [pg.url[:70] for pg in ctx.pages if '/app/im/' in pg.url])
 
     print('\n[7] 杂项')
@@ -426,10 +433,10 @@ def run(p, tmp):
     app.evaluate('''no => { const S = JSON.parse(localStorage.getItem('orderTriage.app.v1')); delete S.invFiles[no];
                          localStorage.setItem('orderTriage.app.v1', JSON.stringify(S)); }''', NO['H'])   # 前面「挂上 PDF」挂的也清掉
     app.reload(); app.wait_for_timeout(1500)
-    app.click('#seg-cat button[data-cat="invoice"]'); app.wait_for_timeout(500)
-    label = app.inner_text('#inv-ask')
-    check('2 家' in label, '「给卖家发消息」：卖家要邮箱的碳纤维加工 + 需找卖家的轴承，共 2 家', label)
-    app.click('#inv-ask'); app.wait_for_selector('#dlg-ask[open]', timeout=60000); app.click('#ask-manual')
+    app.click('.flow li[data-step="2"]'); app.wait_for_timeout(500)
+    label = app.evaluate('__otDev.lists()')['ask']
+    check(label == 2, '要向卖家索要的：卖家要邮箱的碳纤维加工 + 需找卖家的轴承，共 2 家', label)
+    app.evaluate('() => { __otDev.ask(false); }')     # 逐家填好、由人点发送的写法（界面上已无入口），用来测切到别家时清掉输入框等安全检查
 
     def core_of(name):
         for pg in ctx.pages:
@@ -472,8 +479,8 @@ def run(p, tmp):
     check(not skipped_txt.strip(), '[8] 里点了「跳过这家」：填的消息清掉了，没留在输入框里', skipped_txt)
     for pg in [pg for pg in ctx.pages if '/app/im/' in pg.url]: pg.close()
     app.bring_to_front(); app.reload(); app.wait_for_timeout(1500)
-    app.click('#seg-cat button[data-cat="invoice"]'); app.wait_for_timeout(500)
-    app.click('#inv-ask'); app.wait_for_selector('#dlg-ask[open]', timeout=60000); app.click('#ask-manual')
+    app.click('.flow li[data-step="2"]'); app.wait_for_timeout(500)
+    app.evaluate('() => { __otDev.ask(false); }')
     got = wait_until(app, lambda: filled('某某虚构轴承'), 20)
     check(bool(got), '轴承这家的消息填好了', got and got[1])
     if got:
@@ -488,19 +495,25 @@ def run(p, tmp):
         check('点了发送' not in fr.evaluate('window.__mock.sent')[-3:], '没有发出去')
         check(not app.evaluate('chrome.storage.local.get("chatQueue").then(r => r.chatQueue || null)'), '队列清掉了，不会再自己往下走')
 
-    print('\n[8c] 确认清单后自动发送：弹窗列出店铺和要发的话；点「确认，自动发送」后插件自己点发送，不用人点')
+    print('\n[8c] 自动处理发票的确认清单里勾上「向卖家索要」、点「确认执行」：插件自己点发送，不用人点')
     for pg in [pg for pg in ctx.pages if '/app/im/' in pg.url]: pg.close()
     app.evaluate('no => chrome.storage.local.get("askSent").then(r => { const a = Object.assign({}, r.askSent); delete a[no]; return chrome.storage.local.set({ askSent: a }); })', NO['H'])
     app.bring_to_front(); app.reload(); app.wait_for_timeout(1500)
-    app.click('#seg-cat button[data-cat="invoice"]'); app.wait_for_timeout(500)
-    app.click('#inv-ask'); app.wait_for_selector('#dlg-ask[open]', timeout=60000)
-    lst = app.inner_text('#ask-list')
-    check('某某虚构轴承' in lst and NO['H'] in lst and '税号' in lst, '确认窗口列出了店铺、订单号和要发的话', lst[:200])
-    app.click('#ask-auto')
-    ok = wait_until(app, lambda: (v := app.evaluate('chrome.storage.local.get("askSent").then(r => r.askSent || {})')) and NO['H'] in v and v, 40)
+    app.click('.flow li[data-step="2"]'); app.wait_for_timeout(500)
+    app.click('#summary [data-flow="inv-run"]')
+    app.wait_for_selector('#dlg-list[open]', timeout=400000)
+    lst = app.inner_text('#list-rows')
+    check('某某虚构轴承' in lst and NO['H'] in lst and '税号' in lst, '确认清单列出了店铺、订单号和要发的话', lst[:200])
+    # 只留「向卖家索要」这一组
+    app.evaluate("() => { const h = [...document.querySelectorAll('#list-rows h4.grp')]; const gi = h.findIndex(x => x.textContent.includes('向卖家索要'));"
+                 " document.querySelectorAll('#list-rows input[data-g]').forEach(i => { i.checked = +i.dataset.g === gi; }); }")
+    app.click('#list-ok')
+    ok = wait_until(app, lambda: (v := app.evaluate('chrome.storage.local.get("askSent").then(r => r.askSent || {})')) and NO['H'] in v and v, 300)
     fr = core_of('某某虚构轴承')
     sent_h = fr.evaluate('window.__mock.posted || []') if fr else []
     check(bool(ok) and any(NO['H'] in p['text'] for p in sent_h), '插件自己点了发送，消息发到了轴承这家', sent_h[-1:] if sent_h else None)
+    fin = wait_until(app, lambda: (t := app.inner_text('#summary')) and '发票处理完成' in t and t, 120) or ''
+    check('索要发票' in fin and not [pg for pg in ctx.pages if 'batchInvoice' in pg.url or 'alimebot' in pg.url], '结果写明向卖家索要了；没勾的平台申请、客服督促没有执行', fin[:300])
 
     print('\n[9] 旺旺只留一个聊天页：新开的把旧的关掉；剩下的「连接断开」就自己刷新')
     for pg in [pg for pg in ctx.pages if '/app/im/' in pg.url]: pg.close()
@@ -519,9 +532,8 @@ def run(p, tmp):
         c.convs[k].images = [{ time: '2026-08-15 20:05:30', src: 'https://img.alicdn.com/mock/qr-dppt-106.png' }]; c.at = Date.now(); return chrome.storage.local.set({ chatScan: c }); })''')
     for pg in [pg for pg in ctx.pages if '/app/im/' in pg.url or INV_URL in pg.url]: pg.close()
     app.bring_to_front(); app.reload(); app.wait_for_timeout(1500)
-    app.click('#seg-cat button[data-cat="invoice"]'); app.wait_for_timeout(500)
-    app.evaluate("document.querySelector('details.more').open = true")
-    app.click('#inv-dl-all')
+    app.click('.flow li[data-step="2"]'); app.wait_for_timeout(500)
+    app.evaluate('() => { __otDev.download(); }')
     got = wait_until(app, lambda: (d := store('dlDone')) and d.get(NO['F']), 40) or []
     check(len(got) == 1 and got[0].get('from') == 'qr' and got[0].get('file') == save_name('F'), f'F 单按二维码下载，建议文件名 {save_name("F")}', got)
     path = Path(got[0].get('path', '')) if got else None
@@ -542,20 +554,13 @@ def run(p, tmp):
     check('需处理' in txt and '等待中' in txt and '待下载' in txt, '进度条按「需处理 / 等待中 / 待下载」分开计数', txt[:300])
     badge = app.evaluate('chrome.action.getBadgeText({})')
     check(badge == str(n), f'插件图标上显示 {n}', badge)
-    app.click('#remind [data-goto="invoice"]'); app.wait_for_timeout(500)
-    check(app.locator('#inv-bar:not([hidden])').count() == 1, '点进度条上的发票跳到发票栏')
+    app.click('.flow li[data-step="2"]'); app.wait_for_timeout(500)
+    check(app.locator('#inv-legend:not([hidden])').count() == 1, '点步骤条上的「处理发票」显示发票表和颜色图例')
 
     print('\n[12] 请淘宝官方人工客服督促：先发「人工」直到转人工，再一单一句督促；转人工之前一句督促的话都不发')
-    label = app.inner_text('#inv-vip')
-    n_vip = int(re.search(r'（(\d+) 单）', label).group(1)) if re.search(r'（(\d+) 单）', label) else 0
-    check(n_vip >= 1, '发票栏有「请淘宝客服督促（N 单）」，N 是超过 7 天还没开票的单', label)
-    expect = app.evaluate("chrome.storage.local.get('invPending').then(r => r.invPending)")
-    app.click('#inv-vip')
-    # 对外发消息之前先列清单确认
-    app.wait_for_selector('#dlg-list[open]', timeout=10000)
-    lst = app.inner_text('#list-rows')
-    check(lst.count('订单号') == n_vip and not [pg for pg in ctx.pages if 'alimebot' in pg.url], f'督促前先弹出确认清单（{n_vip} 单），确认前没打开客服页', lst[:200])
-    app.click('#list-ok')
+    n_vip = app.evaluate('__otDev.lists()')['vip']
+    check(n_vip >= 1, '有超过 7 天还没开票、要请客服督促的单', n_vip)
+    app.evaluate('() => { __otDev.vip(); }')       # 确认清单在 [8c] 测过；这里单独测督促这一段
     core = lambda: next((pg for pg in ctx.pages if 'alimebot' in pg.url), None)
     done = wait_until(app, lambda: (pg := core()) and len([t for t in pg.evaluate('window.__mock.sent') if '督促' in t]) >= n_vip and pg, 60)
     pg = done or core()
@@ -568,7 +573,7 @@ def run(p, tmp):
     sent = wait_until(app, lambda: (v := app.evaluate("chrome.storage.local.get('vipSent').then(r => r.vipSent || {})")) and len(v) == n_vip and v, 10)
     check(bool(sent), '插件记下了哪几单督促过', sent)
     app.bring_to_front(); app.wait_for_timeout(800)
-    check('（0 单）' in app.inner_text('#inv-vip'), '督促过的 7 天内不再督促：按钮变成 0 单', app.inner_text('#inv-vip'))
+    check(app.evaluate('__otDev.lists()')['vip'] == 0, '督促过的 7 天内不再督促：督促清单变成 0 单', app.evaluate('__otDev.lists()'))
     check('已由淘宝客服督促，等待开票' in app.inner_text('#list'), '督促过的单状态变成「已由淘宝客服督促，等待开票」')
     pu = app.evaluate("() => { const s = [...document.querySelectorAll('.inv-table .st')].find(s => s.textContent.includes('已由淘宝客服督促')); return s ? { cls: s.className, title: s.title } : {}; }")
     check('tone-urge' in pu.get('cls', '') and '投诉' in pu.get('title', ''), '督促状态是单独的颜色（青色），点击打开淘宝投诉记录', pu)
@@ -583,8 +588,8 @@ def run(p, tmp):
     import zipfile
     src = dl_dir / '订单分拣-发票'
     before = sorted(x.name for x in src.iterdir())
-    app.bring_to_front(); app.click('#seg-cat button[data-cat="invoice"]'); app.wait_for_timeout(500)
-    app.evaluate("document.querySelector('details.more').open = true")
+    app.bring_to_front(); app.click('.flow li[data-step="3"]'); app.wait_for_timeout(500)
+    check(app.inner_text('#summary .flow-acts') == '选择发票文件夹并整理', '「整理报销文件」这一步只有一个按钮')
     app.set_input_files('#inv-pack-dir', str(src))
     app.wait_for_selector('#dlg-pack[open]', timeout=10000)
     plan = app.input_value('#pack-list')
@@ -620,7 +625,7 @@ def run(p, tmp):
                          localStorage.setItem('orderTriage.app.v1', JSON.stringify(S)); }''', NO['A'])
     app.evaluate('() => chrome.storage.local.get("scraped").then(r => { const s = r.scraped || {}; for (const k in s) if (s[k].nick && k.endsWith("101")) delete s[k].nick; return chrome.storage.local.set({ scraped: s }); })')
     app.goto(f'chrome-extension://{eid}/index.html'); app.wait_for_timeout(1500)
-    app.click('#seg-cat button[data-cat="all"]'); app.wait_for_timeout(500)
+    app.click('.flow li[data-step="1"]'); app.wait_for_timeout(500)
     n0 = len(pages)
     app.click(f'article.order:has-text("{NO["A"]}") button[data-ww]')
     chat_pg = wait_until(app, lambda: next((pg for pg in ctx.pages if '/app/im/chat/' in pg.url and 'cntaobao某某虚构卖家' in unquote(pg.url)), None), 40)

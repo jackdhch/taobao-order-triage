@@ -114,10 +114,9 @@ def read_section(ctx, base, eid, mock, watch, tmp):
 
     m0 = watch(ctx.new_page(), '模拟页（无读取任务）')
     m0.goto(base + 'tools/mock-taobao.html?v=new')
-    m0.wait_for_selector(PANEL)
     m0.wait_for_timeout(3500)
-    check(m0.evaluate('window.__mock.log') == ['default:1'] and '自动翻页中' not in m0.inner_text(PANEL) and '读取订单' not in m0.inner_text(PANEL),
-          '没有读取任务时，打开订单页不自动翻页', [m0.evaluate('window.__mock.log'), m0.inner_text(PANEL)])
+    check(m0.evaluate('window.__mock.log') == ['default:1'] and m0.locator(PANEL).count() == 0,
+          '没有读取任务时（用户自己打开订单页），不自动翻页，也不出面板', [m0.evaluate('window.__mock.log'), m0.locator(PANEL).count()])
     m0.close()
 
     a0.click('#empty [data-guide="read"]')
@@ -155,7 +154,7 @@ def read_section(ctx, base, eid, mock, watch, tmp):
     with_img = sum(1 for o in got for l in o['lines'] if l.get('img'))
     check(with_img == n_lines - 1, '商品图片一起读回（图全坏的那件除外）', with_img)
     tip = a0.get_attribute('.flow li[data-step="0"]', 'title') or ''
-    check('从淘宝读取订单' in tip and f'有图 {n_lines - 1} / ' in tip and a0.locator('.flow li').count() == 6 and '上次报销截止点' not in a0.inner_text('.flow'), '流程为六步（没有「上次报销截止点」），第 1 步「从淘宝读取订单」的悬停说明有图片数', tip)
+    check('读取订单' in tip and f'有图 {n_lines - 1} / ' in tip and [t.strip() for t in a0.locator('.flow .flow-t').all_inner_texts()] == ['读取订单', '核对商品', '处理发票', '整理报销文件'], '主线四步：读取订单 → 核对商品 → 处理发票 → 整理报销文件，第 1 步「从淘宝读取订单」的悬停说明有图片数', tip)
     sel, cur = a0.locator('.flow li.is-sel').get_attribute('data-step'), a0.locator('.flow li.is-cur').get_attribute('data-step')
     check(sel == cur and '从淘宝读取订单' not in a0.locator('#summary .flow-acts').inner_text(), '读完后下方说明切到当前步骤，不再显示「从淘宝读取订单」按钮', (sel, cur))
     branch = a0.evaluate("""() => { const out = [];
@@ -167,6 +166,17 @@ def read_section(ctx, base, eid, mock, watch, tmp):
     check(all(n <= 1 for n in branch), '主线每一步只有一个操作（没有「手动指定日期」「从第一单开始」这类分支）', branch)
     check(a0.locator('#more [data-pick="inv-have-dir"]').count() == 1 and 'title' in a0.evaluate("document.querySelector('#more [data-pick=\"inv-have-dir\"]').outerHTML"),
           '「导入已整理的发票文件夹」移到「更多」里，作为可选功能')
+    more = a0.evaluate("[...document.querySelectorAll('#more .more-pop button')].map(b => b.textContent.trim())")
+    check(len(more) == 4 and {'备份数据', '从备份恢复'} <= set(more) and any('已整理的发票' in t for t in more) and any('订单表' in t for t in more),
+          '「更多」只有四项：导入已整理的发票文件夹、导入订单表、备份数据、从备份恢复', more)
+    scroll_only = a0.evaluate("document.querySelectorAll('[data-goto], [data-bulk], #seg-cat, #inv-bar, #inv-auto, #inv-sync, #inv-scan, #inv-dl-all').length")
+    check(scroll_only == 0, '没有只切换视图 / 滚动页面的按钮，也没有发票的五个分步按钮', scroll_only)
+    prim = a0.evaluate("""() => [...document.querySelectorAll('.flow li')].map((li, i) => { li.click();
+        return document.querySelectorAll('#summary .flow-acts .btn.primary').length; })""")
+    check(all(n <= 1 for n in prim), '每一步至多一个主按钮', prim)
+    hints = a0.evaluate("""() => [...document.querySelectorAll('.flow li')].map(li => { li.click();
+        return document.querySelector('#summary .fd-hint').textContent.length; })""")
+    check(all(n <= 30 for n in hints) and a0.locator('#summary ol.fd-how').count() == 0, '每步只有一行短提示（≤ 30 字），没有大段编号说明', hints)
     a0.click('.flow li[data-step="1"]'); a0.wait_for_timeout(200)
     check('已读取' in a0.inner_text('#summary'), '切到别的步骤，读取结果仍显示在步骤条下方')
 
@@ -262,128 +272,77 @@ def run(p, base, tmp):
 
     read_section(ctx, base, eid, mock, watch, tmp)
 
-    print('\n[1] 扩展主页导入虚构订单表')
+    print('\n[1] 扩展主页导入虚构订单表（可选的 xlsx 入口）')
     app = watch(ctx.new_page(), '主页')
     app.goto(f'chrome-extension://{eid}/index.html')
     app.set_input_files('#file', str(csv_path))
-    get_want = lambda: app.evaluate('chrome.storage.local.get("want").then(r => r.want)')
-    want = wait_until(app, lambda: (w := get_want()) and len(w['nos']) == len(table) and w, 10)
-    check(bool(want), f'缺图清单写进扩展存储：{len(table)} 单', get_want())
+    STORE = 'orderTriage.app.v1'
+    home_orders = lambda: app.evaluate(f"(JSON.parse(localStorage.getItem('{STORE}') || '{{}}').orders) || []")
+    check(bool(wait_until(app, lambda: len(home_orders()) == len(table), 10)), f'导入订单表：{len(table)} 单', len(home_orders()))
     step0 = lambda: app.get_attribute('.flow li[data-step="0"]', 'title') or ''
-    check(f'有图 0 / {all_lines} 件' in step0(), f'导入后第 1 步的悬停说明显示「有图 0 / {all_lines} 件」', step0())
-    check(app.get_attribute('#seg-cat button[aria-pressed="true"]', 'data-cat') == 'unsure', '主页打开默认在「待定」', app.inner_text('#seg-cat'))
+    check(f'有图 0 / {all_lines} 件' in step0(), f'第 1 步的悬停说明显示「有图 0 / {all_lines} 件」', step0())
+    check(app.get_attribute('.flow li.is-cur', 'data-step') == '1' and '核对商品' in app.inner_text('.flow li.is-cur'), '导入后当前步骤是「核对商品」')
+    first = app.evaluate("(() => { const l = document.querySelector('#list .line'); return l ? [l.className, l.innerText] : null; })()")
+    check(first and 'is-uns' in first[0] and '待定' in first[1], '商品列表里待定的排在最前，整行标黄、带「待定」标签', first)
 
-    print('\n[2] 新版模拟页：开始补图片，自动翻页')
+    print('\n[2] 新版模拟页：主页排读取任务，订单页自动翻页读取（订单、图片、退款）')
+    # 相当于在读取窗口里填「上次报销到 2026-06-30」：只读 07-01 及以后（模拟页全部订单）
+    app.evaluate(f"() => {{ const S = JSON.parse(localStorage.getItem('{STORE}')); S.since = '2026-06-30'; S.readFrom = '2026-07-01'; localStorage.setItem('{STORE}', JSON.stringify(S)); }}")
+    app.reload(); app.wait_for_selector('#main:not([hidden])')
+    get_scraped = lambda: app.evaluate('chrome.storage.local.get("scraped").then(r => r.scraped || {})')
+    store = lambda k: app.evaluate(f'chrome.storage.local.get("{k}").then(r => r["{k}"])')
+    app.evaluate("chrome.storage.local.set({ readJob: { at: Date.now(), from: '2026-07-01' } })")
     m = watch(ctx.new_page(), '模拟页')
+    t0 = time.time()
     m.goto(base + 'tools/mock-taobao.html?v=new')
     m.wait_for_selector(PANEL)
-    check(f'清单尚缺 {len(table)} 单' in m.inner_text(PANEL), '面板拿到了主页的清单', m.inner_text(PANEL))
-    btns = m.evaluate("p => [...document.querySelector(p).querySelectorAll('button[data-ot]')].map(b => b.dataset.ot)", PANEL)
-    check(sorted(btns) == ['auto', 'mini'], '淘宝页面板只有「开始补图片」和「收起」两个按钮', btns)
-    get_scraped = lambda: app.evaluate('chrome.storage.local.get("scraped").then(r => r.scraped || {})')
-    t0 = time.time()
-    m.click(PANEL + ' button[data-ot="auto"]')
-    seen_running = False
-    while time.time() - t0 < 300:
-        txt = m.inner_text(PANEL)
-        seen_running |= '自动翻页中' in txt
-        if seen_running and '自动翻页中' not in txt:
-            break
-        m.wait_for_timeout(300)
-    panel = m.inner_text(PANEL)
-    print(f'  自动翻页用时 {time.time() - t0:.0f} 秒；面板：' + panel.replace('\n', ' | '))
-    check(seen_running and '自动翻页中' not in panel, '自动翻页在 300 秒内停下')
-
+    res = wait_until(app, lambda: store('readResult'), 300)
+    print(f'  自动翻页用时 {time.time() - t0:.0f} 秒；面板：' + m.inner_text(PANEL).replace('\n', ' | '))
+    check(bool(res) and res['why'] == 'end', '订单页没点按钮就自动翻页，翻到最后一页停下', res and res['why'])
     log = m.evaluate('window.__mock.log')
     print('  模拟页翻过的页：', log)
     n_def = len(mock['lists']['default'])
-    # 真实页面上漏掉的都是用户删掉的订单（按订单号都搜不到），所以翻完默认列表就停，不再换搜索列表重翻；
-    # 模拟页里 hideDefault 的订单就相当于删掉的
-    check(log == [f'default:{i + 1}' for i in range(n_def)], f'只翻默认列表 {n_def} 页（最后一页「下一页」带 trade-button-disabled，在这里停），不再换列表重翻', log)
+    check(log == [f'default:{i + 1}' for i in range(n_def)], f'只翻默认列表 {n_def} 页（最后一页「下一页」带 trade-button-disabled，在这里停）', log)
     check(not dialogs, '标题里带「滑块」「验证码」的商品没被当成安全验证', dialogs)
-
-    visible = {o['no'] for o in findable} - hidden
+    visible = {o['no'] for o in mock['orders'] if not o.get('hideDefault')}
     scraped = get_scraped()
-    got = set(scraped)
-    check(got == visible, f'列表里有的 {len(visible)} 单全找到（含刚打开时没渲染、要往下滚才出齐的），没存订单表以外的',
-          f'多了 {sorted(got - visible)}，少了 {sorted(visible - got)}')
-    left = hidden | {NEVER['no']}
-    check(f'清单尚缺 {len(left)} 单' in panel and f'已找到 {len(visible)} 单' in panel, f'面板最后显示还差 {len(left)} 单', panel)
-    want = get_want()
-    dead_nos = {o['no'] for o in findable if o['no'] in visible and any(it.get('imgSaved') == '' for it in o['items'])}
-    check(want and set(want['nos']) == left | dead_nos and want['from'] == min(o['d'] for o in table if o['no'] in left | dead_nos),
-          '主页的缺图清单只剩列表里没有的几单，加上图全坏的那单；日期统一成了 YYYY-MM-DD（订单表里一半是「2026/8/5」写法）', want)
-    check(any('多半是已删除的订单' in l for l in logs), '控制台提示剩下的多半是已删除的订单', logs[-3:])
-
-    bad = {o['no']: b for o in findable if o['no'] in scraped and (b := compare(scraped[o['no']], o))}
+    check(set(scraped) == visible and sorted(res['nos']) == sorted(visible), f'列表里的 {len(visible)} 单全读到（含刚打开时没渲染、要往下滚才出齐的；含订单表里没有的新订单）',
+          f'多了 {sorted(set(scraped) - visible)}，少了 {sorted(visible - set(scraped))}')
+    bad = {o['no']: b for o in mock['orders'] if o['no'] in scraped and (b := compare(scraped[o['no']], o))}
     check(not bad, '逐单核对：日期/状态/店铺/实付/运费，逐件：标题/规格/单价/数量/图片/退款/链接；件数对（推荐栏没混进来）',
           '\n          '.join(f'{no}: {x}' for no, b in bad.items() for x in b))
     check(m.evaluate('localStorage.length') == 0, '淘宝页（模拟页）自己的 localStorage 是空的', m.evaluate('Object.keys(localStorage)'))
+    hidden = {o['no'] for o in mock['orders'] if o.get('hideDefault')}
+    gone = wait_until(app, lambda: store('goneNos'), 5) or []
+    check(set(gone) == hidden | {NEVER['no']}, '订单列表上没有的（多半是删进回收站的）记成 goneNos，不再为它要发票', gone)
+    nos_home = {o['no'] for o in home_orders()}
+    check(set(NOT_IN_TABLE) <= nos_home, '订单表里没有、订单页上有的新订单按订单页建了单', sorted(set(NOT_IN_TABLE) - nos_home))
 
-    dead = [it['t'] for o in findable if o['no'] in visible for it in o['items'] if it.get('imgSaved') == '']
+    dead = [it['t'] for o in mock['orders'] if o['no'] in visible for it in o['items'] if it.get('imgSaved') == '']
     check(len(dead) == 1, '模拟页里有 1 件图全坏', dead)
     app.bring_to_front()
-    img_n = all_lines - sum(len(o['items']) for o in table if o['no'] in left) - len(dead)
-    foot = wait_until(app, lambda: (t := step0()) and f'有图 {img_n} / {all_lines} 件' in t and t, 5) or step0()
-    check(f'有图 {img_n} / {all_lines} 件' in foot, f'扩展主页显示「有图 {img_n} / {all_lines} 件」（图全坏的那件不算有图）', foot)
-    app.click('#seg-cat button[data-cat="all"]'); app.wait_for_timeout(300)
+    all_lines2 = sum(len(o['lines']) for o in home_orders())
+    no_img = sum(len(o['items']) for o in table if o['no'] in hidden | {NEVER['no']}) + len(dead)
+    img_n = all_lines2 - no_img
+    foot = wait_until(app, lambda: (t := step0()) and f'有图 {img_n} / {all_lines2} 件' in t and t, 5) or step0()
+    check(f'有图 {img_n} / {all_lines2} 件' in foot, f'主页显示「有图 {img_n} / {all_lines2} 件」（图全坏的那件不算有图）', foot)
+    app.click('.flow li[data-step="1"]'); app.wait_for_timeout(300)
     err = app.evaluate("t => { const e = [...document.querySelectorAll('.line')].find(x => x.textContent.includes(t)); const p = e && e.querySelector('.thumb'); return p ? [p.className, p.textContent, getComputedStyle(p).color] : null; }", dead[0])
     check(err and 'err' in err[0] and 'ERROR' in err[1] and err[2] == 'rgb(208, 2, 27)', '图全坏的那件：主页上是红色粗体 ERROR，不是灰色图', err)
     grey = app.evaluate("() => [...document.querySelectorAll('img.thumb')].filter(i => i.complete && i.naturalWidth === 1).map(i => i.src)")
     check(not grey, '主页上没有 1×1 灰点图', grey)
-    # 退款由插件判：显示「退款成功」的那一件就算退款（交易成功的单也一样，用户 2026-10-02 要求不用他核对），交易关闭的整单算
-    maybe = [it['t'] for o in table if o['no'] in visible and o['st'] == '交易成功' for it in o['items'] if it.get('refund')]
-    ref_n = sum(1 for o in table for it in o['items'] if o['st'] == '交易关闭') + len(maybe)
-    ref_cell = app.inner_text('#seg-cat button[data-cat="refund"] .c')
-    check(ref_cell.strip() == str(ref_n), f'「退款/关闭」{ref_n} 件（交易关闭的 + 交易成功单里显示退款成功的 {len(maybe)} 件）', ref_cell)
-    app.click('#seg-cat button[data-cat="refund"]'); app.wait_for_timeout(300)
-    inref = app.evaluate("t => t.map(x => [...document.querySelectorAll('.line')].some(e => e.textContent.includes(x)))", maybe)
-    check(len(maybe) == 2 and inref == [True, True], '交易成功的单里显示退款成功的两件：直接在「退款/关闭」里，不进待定', inref)
-    same = [o for o in table if o['no'] in visible and o['st'] == '交易成功' and any(it.get('refund') for it in o['items']) and len(o['items']) > 1]
+    # 退款由插件判：显示「退款成功」的那一件就算退款（交易成功的单也一样），交易关闭的整单算；退款的排在列表最后、标灰
+    homes = {o['no'] for o in home_orders()}
+    maybe = [it['t'] for o in mock['orders'] if o['no'] in visible and o['st'] == '交易成功' for it in o['items'] if it.get('refund')]
+    ref_n = sum(1 for o in mock['orders'] if o['no'] in homes for it in o['items'] if o['st'] == '交易关闭') + len(maybe)
+    refs = app.evaluate("() => [...document.querySelectorAll('#list .line')].map(l => l.classList.contains('is-ref'))")
+    check(refs.count(True) == ref_n and refs[-1], f'退款 / 交易关闭的 {ref_n} 件标灰；整单退款、关闭的订单排在列表最后', refs)
+    inref = app.evaluate("t => t.map(x => [...document.querySelectorAll('.line.is-ref')].some(e => e.textContent.includes(x)))", maybe)
+    check(len(maybe) == 2 and inref == [True, True], '交易成功的单里显示退款成功的两件：直接算退款，不进待定', inref)
+    same = [o for o in mock['orders'] if o['no'] in visible and o['st'] == '交易成功' and any(it.get('refund') for it in o['items']) and len(o['items']) > 1]
     kept = [it['t'] for o in same for it in o['items'] if not it.get('refund')]
-    app.click('#seg-cat button[data-cat="all"]'); app.wait_for_timeout(300)
     notref = app.evaluate("t => t.map(x => [...document.querySelectorAll('.line:not(.is-ref)')].some(e => e.textContent.includes(x)))", kept)
     check(all(notref), f'同一单里没退的 {len(kept)} 件照常分拣（只有退了的那件算退款）', list(zip(kept, notref)))
-    app.click('#seg-cat button[data-cat="unsure"]')
-
-    # 剩下几单在别处补上了图（往扩展存储的抓取数据里加上它们），主页写回空清单。
-    # 空清单 = 订单表里的都有图了，淘宝页面板不能改口成「没有订单表、抓全部」，再点开始也不该翻页
-    # scrapedAt：近期的单要定期回看退款，6 小时内看过的才算「已经看过」
-    rest = {o['no']: {'no': o['no'], 'time': o['d'], 'status': o['st'], 'shop': o['shop'], 'scrapedAt': time.strftime('%Y-%m-%dT%H:%M:%S.000Z', time.gmtime()),
-                      'lines': [{'title': it['t'], 'img': 'https://img.alicdn.com/imgextra/mock/filled.jpg'} for it in o['items']]}
-            for o in table if o['no'] in left}
-    app.evaluate('x => chrome.storage.local.get("scraped").then(r => chrome.storage.local.set({ scraped: Object.assign(r.scraped || {}, x) }))', rest)
-    only_dead = wait_until(app, lambda: (w := get_want()) and set(w['nos']) == dead_nos, 5)
-    check(bool(only_dead), '剩下几单补上图后，清单里只剩图全坏的那单', get_want())
-    m.wait_for_timeout(500)
-    txt = m.inner_text(PANEL)
-    check('1 单图片无法加载' in txt and '图片未补全' in txt and '均已有图' not in txt,
-          '有图打不开时，淘宝页面板写明「图片未补全」，不说「均已有图」（用户 2026-10-03 要求）', txt.replace('\n', ' | '))
-    # 那单后来换了能打开的图
-    fix = {no: dict(rest[next(iter(rest))], no=no, lines=[{'title': it['t'], 'img': 'https://img.alicdn.com/imgextra/mock/filled.jpg'} for it in o['items']])
-           for o in table for no in [o['no']] if no in dead_nos}
-    app.evaluate('x => chrome.storage.local.get("scraped").then(r => chrome.storage.local.set({ scraped: Object.assign(r.scraped || {}, x) }))', fix)
-    done = wait_until(app, lambda: (w := get_want()) and not w['nos'], 5)
-    check(bool(done), '图都补上后，主页写回空清单', get_want())
-    m.wait_for_timeout(500)
-    txt = m.inner_text(PANEL)
-    check('尚无订单表' not in txt and '均已有图' in txt, '清单为空时，淘宝页面板说「均已有图」，不改口成「尚无订单表」', txt.replace('\n', ' | '))
-    n_log = len(m.evaluate('window.__mock.log'))
-    m.click(PANEL + ' button[data-ot="auto"]')
-    m.wait_for_timeout(4000)
-    check(len(m.evaluate('window.__mock.log')) == n_log and len(get_scraped()) == len(visible) + len(left),
-          '清单为空时再点「开始补图片」：不翻页、不多存订单', m.evaluate('window.__mock.log')[n_log:])
-
-    # 主页「清除全部数据」后，淘宝页内存里的旧数据不能再写回去
-    app.evaluate('chrome.storage.local.clear()')
-    m.wait_for_timeout(500)
-    m.click(PANEL + ' button[data-ot="auto"]')
-    t0 = time.time()
-    while time.time() - t0 < 300 and '自动翻页中' not in m.inner_text(PANEL): m.wait_for_timeout(200)
-    while time.time() - t0 < 300 and '自动翻页中' in m.inner_text(PANEL): m.wait_for_timeout(300)
-    after = set(get_scraped())
-    check(after and not (after & left), '主页清空扩展存储后再补图：只存页面上看得到的单，不把内存里的旧数据（列表里没有的几单）写回',
-          f'写回了 {sorted(after & left)}')
 
     print('\n[3] 旧版模拟页（无参数）：回退到按文字特征猜')
     m.close()
@@ -391,12 +350,11 @@ def run(p, base, tmp):
            {'no': '5124000000000000012', 'shop': '某某3D打印', 'lines': [('金属 3D 打印加工服务 不锈钢 铝合金 手板打样', 120.0, 1, '')]},
            {'no': '5123000000000000001', 'shop': '某某五金工具', 'lines': [('304不锈钢内六角螺丝 杯头螺钉 M3', 19.8, 1, ''),
                                                                     ('数显游标卡尺 0-150mm 高精度', 68.8, 1, '退款成功')]}]
-    app.evaluate('w => chrome.storage.local.set({ want: w, scraped: {} })', {'nos': [o['no'] for o in old], 'from': '2026-07-10'})
+    app.evaluate("chrome.storage.local.set({ scraped: {}, readJob: { at: Date.now(), from: '2026-07-10' } })")
     m2 = watch(ctx.new_page(), '旧版模拟页')
     m2.goto(base + 'tools/mock-taobao.html')
-    m2.wait_for_selector(PANEL)
-    m2.click(PANEL + ' button[data-ot="auto"]')
-    s2 = wait_until(m2, lambda: (s := get_scraped()) and len(s) >= len(old) and s, 15) or get_scraped()
+    r2 = wait_until(m2, lambda: (r := store('readResult')) and r.get('from') == '2026-07-10' and r, 60) or {}
+    s2 = get_scraped()
     bad = []
     for o in old:
         g = s2.get(o['no'])
@@ -410,10 +368,9 @@ def run(p, base, tmp):
             bad.append(f'{o["no"]} 商品: {got_lines}')
         if not all(l['img'].startswith('https://img.alicdn.com/mock/item-') for l in g['lines']):
             bad.append(f'{o["no"]} 图片: {[l["img"] for l in g["lines"]]}')
-    check(not bad, '旧版页面第 1 页 3 单：店铺、标题、单价、数量、逐件退款、商品图都抓对', '\n          '.join(bad))
+    check(not bad and r2.get('why') == 'past' and set(s2) == {o['no'] for o in old}, '旧版页面：读到 07-10 为止（第 2 页更早就停），店铺、标题、单价、数量、逐件退款、商品图都抓对',
+          '\n          '.join(bad) or r2)
     check(m2.evaluate('localStorage.length') == 0, '旧版模拟页的 localStorage 也是空的')
-
-    # 「订单表之前的订单」（补图窗口填「提取到哪天」）已由「从淘宝读取订单」的截止日期取代，见上面的 [0]
     m2.close()
 
     print('\n[4] 杂项')

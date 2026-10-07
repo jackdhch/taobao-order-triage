@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/%E7%89%88%E6%9C%AC-0.15.0-1C6E8C?style=flat-square" alt="版本 0.15.0">
+  <img src="https://img.shields.io/badge/%E7%89%88%E6%9C%AC-0.16.0-1C6E8C?style=flat-square" alt="版本 0.16.0">
   <img src="https://img.shields.io/badge/Chrome%20%E6%89%A9%E5%B1%95-Manifest%20V3-4285F4?style=flat-square&logo=googlechrome&logoColor=white" alt="Chrome 扩展 Manifest V3">
   <img src="https://img.shields.io/badge/%E6%95%B0%E6%8D%AE-%E4%BB%85%E5%9C%A8%E6%9C%AC%E6%9C%BA-2F7D4F?style=flat-square" alt="数据仅在本机">
   <img src="https://img.shields.io/badge/%E5%88%A4%E6%96%AD-%E5%9B%BA%E5%AE%9A%E8%A7%84%E5%88%99%20%C2%B7%20%E6%97%A0%20AI-5F6C72?style=flat-square" alt="固定规则，无 AI">

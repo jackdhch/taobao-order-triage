@@ -95,19 +95,15 @@ def run(p, tmp):
     # 把两单「数据线、收纳盒」判成待定：词表里它们本来就是模糊词
     app.click('#btn-settings'); app.fill('#inv-title', '某大学'); app.fill('#inv-tax', '121000009999999996'); app.click('#rules-save'); app.wait_for_timeout(300)
 
-    print('\n[1] 选文件夹导入已整理的发票（插件自己读 PDF）')
-    app.click('#seg-cat button[data-cat="invoice"]')
+    print('\n[1] 「更多 → 导入已整理的发票文件夹」：插件自己读 PDF')
+    app.click('.flow li[data-step="2"]')
     app.set_input_files('#inv-have-dir', str(tmp / '已整理'))
     got = wait_until(app, lambda: (s := app.evaluate("JSON.parse(localStorage.getItem('orderTriage.app.v1')).haveIdx")) and len(s) >= 2 and s, 30) or []
     check(sorted(x['invNo'] for x in got) == ['11111111111111111111', '22222222222222222222'], '读出 2 张发票（说明.pdf 不是发票，没算进去）', got)
     check(any(x['date'] == '2026-08-05' and abs(x['amount'] - 19.9) < 0.01 for x in got), '日期、价税合计读对了（取最大的 ¥ 金额，不是金额或税额）', got)
 
-    print('\n[2] 核对下载的发票有没有重复')
-    app.set_input_files('#inv-check-dir', str(dl))
-    app.wait_for_selector('#dlg-dup[open]', timeout=30000)
-    txt = app.input_value('#dup-list')
-    check('下载_重复的.pdf' in txt and '下载_新的.pdf' not in txt, '按发票号码找出了重复的那一张，新的那张没列进去', txt)
-    app.click('#dup-close')
+    print('\n[2] 「核对已下载的发票」已去掉（用户 2026-10-07：「更多」只留四项）；下载的发票由插件自动核对，整理报销文件时标出与已整理重复的')
+    check(app.locator('#inv-check-dir, #dlg-dup').count() == 0, '界面上没有「核对已下载的发票」')
 
     print('\n[3] 卖家图片：先判断是不是二维码，是就读出内容')
     # 假装旺旺扫描过：订单 1 的店发来一张二维码、一张商品照片（先去掉订单 1 的已整理状态，让它显示聊天结果）
@@ -116,7 +112,7 @@ def run(p, tmp):
     app.evaluate("""() => chrome.storage.local.set({ chatScan: { at: Date.now(), convs: { '某某虚构五金': { orders: ['5195000000000000001'], first: '2026-08-01',
         asks: [{ time: '2026-08-02 09:00:00', text: '需要发票', nos: [] }], files: [], email: [],
         images: [{ time: '2026-08-03 10:00:00', src: 'https://img.alicdn.com/mock/photo.png' }, { time: '2026-08-03 10:01:00', src: 'https://img.alicdn.com/mock/qr.png' }] } } } })""")
-    app.reload(); app.wait_for_timeout(800); app.click('#seg-cat button[data-cat="invoice"]')
+    app.reload(); app.wait_for_timeout(800); app.click('.flow li[data-step="2"]')
     outs = wait_until(app, lambda: (o := app.evaluate("[...document.querySelectorAll('[data-qr-out]')].map(e => e.textContent)")) and all(o) and len(o) == 2 and o, 15) or []
     check(any('二维码内容' in o and 'https://example.invalid/fapiao/mock-001' in o for o in outs), '二维码图读出了里面的地址，只显示不打开', outs)
     check(any(o.startswith('不是二维码') for o in outs), '商品照片判成「不是二维码」', outs)
@@ -131,7 +127,7 @@ def run(p, tmp):
     print('\n[5] 备份数据 → 清除 → 从备份恢复：数据一致，进行中的任务不恢复')
     STORE = 'orderTriage.app.v1'
     # 先判一件，让判断不是空的；再放几条下载记录（要恢复的）和一批「进行中的任务 / 领活记录」（不该恢复的）
-    app.click('#seg-cat button[data-cat="unsure"]'); app.wait_for_timeout(300); app.keyboard.press('1'); app.wait_for_timeout(300)
+    app.click('.flow li[data-step="1"]'); app.wait_for_timeout(300); app.keyboard.press('1'); app.wait_for_timeout(300)
     TRANSIENT = {'applyJob': {'nos': ['5195000000000000002'], 'stage': 'running'}, 'applyResult': {'at': 1, 'stage': 'confirm'},
                  'cardJobs': {'5195000000000000002': {'at': 1, 'exp': 2, 'state': 'queued'}}, 'cardRun': {'id': 'x', 'no': '5195000000000000002', 'at': 1},
                  'chatQueue': {'at': 1, 'kind': 'compose', 'items': []}, 'chatAfter': 1, 'dlJobs': [{'id': 'j1', 'no': '5195000000000000002', 'kind': 'platform'}],
@@ -202,7 +198,7 @@ def run(p, tmp):
     check(keep and all(st1.get(k) == st0[k] for k in keep), f'扩展存储里的记录恢复一致（{len(keep)} 个键）', [k for k in keep if st1.get(k) != st0[k]])
     check(not [k for k in TRANSIENT if k != 'autoLast' and k in st1], '进行中的任务、领活记录、标签页编号都没有恢复', [k for k in TRANSIENT if k in st1])
     check(st1.get('autoLast') == app.evaluate('new Date().toDateString()'), '每日自动处理记成今天已运行，恢复后不会马上自动开始', st1.get('autoLast'))
-    check(app.evaluate("document.querySelectorAll('#seg-cat button').length") > 0 and str(n_orders) + ' 单' in app.inner_text('#summary'), '恢复后主页正常显示')
+    check(app.evaluate("document.querySelectorAll('.flow li').length") == 4 and str(n_orders) + ' 单' in app.inner_text('#summary'), '恢复后主页正常显示')
     app.remove_listener('dialog', on_dialog)
 
     print('\n[6] 杂项')

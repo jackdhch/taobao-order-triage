@@ -117,16 +117,16 @@ def run(p, tmp):
                          localStorage.setItem('orderTriage.app.v1', JSON.stringify(S)); }''', NO['N1'])
     app.reload(); app.wait_for_selector('#main:not([hidden])'); app.wait_for_timeout(800)
     # 已报销的订单号不再自动推断「上次报销到哪天」（用户 2026-10-07 去掉了这一步），全部订单照常参与判断
-    app.click('#seg-cat button[data-cat="invoice"]'); app.wait_for_timeout(500)
-    btn = app.inner_text('#inv-apply')
+    app.click('.flow li[data-step="2"]'); app.wait_for_timeout(500)       # 第 3 步「处理发票」
+    n_apply = app.evaluate('__otDev.lists()')['apply']
     rows = app.evaluate(r"[...document.querySelectorAll('.inv-table tbody tr')].map(tr => tr.innerText.replace(/\s+/g, ' ').slice(0, 90))")
-    check(btn == '申请平台开票（4 单）', '「申请平台开票」按钮显示 4 单（T1~T4；已有票的 N1、个人的 P1 不算）', btn + ' ｜ ' + ' ｜ '.join(rows))
+    check(n_apply == 4, '可在平台申请的 4 单（T1~T4；已有票的 N1、个人的 P1 不算）', str(n_apply) + ' ｜ ' + ' ｜ '.join(rows))
     nick = app.evaluate('chrome.storage.local.get("invWant").then(r => (r.invWant.orders || []).map(o => o.nick))')
     check(all(n.startswith('nick') for n in nick) and nick, '补图时记下的卖家旺旺名带进了 invWant', nick)
 
     print('\n[2] 申请平台开票')
     n0 = len(pages)
-    app.click('#inv-apply')
+    app.evaluate('() => { __otDev.apply(); }')
     res = lambda: app.evaluate('chrome.storage.local.get("applyResult").then(r => r.applyResult)')
     r = wait_until(lambda: (x := res()) and (x.get('stage') or x.get('error')) and x, 90, app) or res()
     bp = next((pg for pg in pages[n0:] if pg.url.startswith(BATCH_URL)), None)
@@ -169,7 +169,7 @@ def run(p, tmp):
     probe = ctx.new_page(); probe.goto(BATCH_URL); probe.evaluate("localStorage.setItem('mockTitle', '某别的大学')"); probe.close()
     app.evaluate('chrome.storage.local.set({ applyResult: null })')
     n1 = len(pages)
-    app.click('#inv-apply')
+    app.evaluate('() => { __otDev.apply(); }')
     r3 = wait_until(lambda: (x := res()) and (x.get('stage') or x.get('error')) and x, 90, app) or res()
     bp2 = next((pg for pg in pages[n1:] if pg.url.startswith(BATCH_URL)), None)
     check(r3 and '抬头' in (r3.get('error') or ''), '抬头对不上：停下并说明原因', r3)
@@ -182,9 +182,8 @@ def run(p, tmp):
         if pg != app: pg.close()
     app.bring_to_front(); app.reload(); app.wait_for_selector('#main:not([hidden])'); app.wait_for_timeout(800)
     app.evaluate('chrome.storage.local.remove("chatScan")')
-    app.click('#seg-cat button[data-cat="invoice"]'); app.wait_for_timeout(500)
-    app.evaluate("document.querySelector('details.more').open = true")
-    app.click('#inv-scan')
+    app.click('.flow li[data-step="2"]'); app.wait_for_timeout(500)
+    app.evaluate('() => { __otDev.scan(); }')
     scan = wait_until(lambda: app.evaluate('chrome.storage.local.get("chatScan").then(r => r.chatScan)'), 120, app) or {}
     convs = scan.get('convs', {})
     c1 = convs.get('nick207', {})
@@ -200,28 +199,18 @@ def run(p, tmp):
     check(all(v == '卖家发来开票申请入口' for v in got.values()), '三单状态都是「卖家发来开票申请入口」', got)
     s1 = st('C1') or {}
     check('tone-bad' in s1.get('cls', '') and s1.get('tag') == 'BUTTON' and '旺旺' in s1.get('title', ''), '这个状态是红色（需处理），可点击，悬停说明写着去旺旺聊天', s1)
-    btn = app.inner_text('#inv-card')
-    # 主按钮按流程顺序：还有可在平台申请的单时是「申请平台开票」，否则是这个
-    main = '#inv-apply' if not app.is_disabled('#inv-apply') else '#inv-card'
-    check(btn == '按卖家的开票入口申请（3 单）' and 'primary' in app.get_attribute(main, 'class') and app.locator('#inv-bar .btn.primary').count() == 1,
-          '发票栏有「按卖家的开票入口申请（3 单）」；主按钮按流程顺序只有一个', (btn, main))
-    check(bool(app.get_attribute('#inv-card', 'title')), '按钮有悬停说明')
+    check(app.evaluate('__otDev.lists()')['card'] == 3, '要按卖家开票入口申请的 3 单', app.evaluate('__otDev.lists()'))
+    check(app.locator('#summary .flow-acts .btn.primary').count() == 1, '处理发票这一步只有一个主按钮「自动处理发票」')
 
-    print('\n[6] 确认清单后逐单申请：等抬头加载出来再提交；抬头不对、加载不出来的不提交')
+    print('\n[6] 逐单按入口申请：等抬头加载出来再提交；抬头不对、加载不出来的不提交')
     n0 = len(pages)
-    app.click('#inv-card')
-    app.wait_for_selector('#dlg-list[open]', timeout=30000)
-    lst = app.inner_text('#list-rows')
-    check(all(O[k][2] in lst and NO[k] in lst and O[k][1] in lst and O[k][3].rstrip('0').rstrip('.') in lst for k in CARD) and '杜邦线 母对母 40P 20cm' in lst,
-          '确认窗口列出店铺全名、下单日期、商品、金额、订单号和卡片', lst[:300])
-    check(not reports and not [p for p in pages[n0:] if APPLY_URL in p.url], '确认之前什么都没做（没打开申请页）', reports)
-    app.click('#list-ok')
-    done = wait_until(lambda: app.evaluate("document.querySelector('#dlg-list[open]') && document.querySelector('#list-title').textContent.includes('完成') && document.querySelector('#list-rows').innerText"), 360, app)
-    print('  结果窗口：', (done or '').replace('\n', ' | '))
+    out = app.evaluate('__otDev.card()') or []
+    done = '\n'.join(x['text'] for x in out)
+    print('  结果：', done.replace('\n', ' | '))
     applied = app.evaluate('chrome.storage.local.get("cardApplied").then(r => r.cardApplied || {})')
     result = app.evaluate('chrome.storage.local.get("cardResult").then(r => r.cardResult || {})')
     by = lambda kind, k: [r for r in reports if r[0] == kind and r[1] == NO[k]]
-    check(bool(done) and '已提交' in done and done.count('未完成') == 2, '结果窗口：1 单已提交，2 单未完成并写明原因', done)
+    check(bool(done) and '已提交' in done and done.count('未完成') == 2, '结果：1 单已提交，2 单未完成并写明原因', done)
     check(set(applied) == {NO['C1']}, '只有抬头核对通过的 C1 记成已提交（cardApplied）', applied)
     op, sub = by('open', 'C1'), by('submit', 'C1')
     check(sub and by('confirm', 'C1') and by('detail', 'C1') and sub[0][3] == '某大学', 'C1：点了「提交申请」（完整点击）→「确认提交」→ 跳到发票详情页', [r[:2] for r in reports if r[1] == NO['C1']])
@@ -244,7 +233,6 @@ def run(p, tmp):
     check(len(chats) == 1, '旺旺聊天页始终只有一个', [p.url[:80] for p in chats])
     n1 = len(pages)
     app.bring_to_front()
-    app.click('#list-cancel')                                         # 先关掉结果窗口
     app.click(f'.inv-table tbody tr:has-text("{NO["C1"]}") button.st')
     opened = wait_until(lambda: [p for p in pages[n1:] if p.url.startswith(INV_DETAIL)], 10, app)
     check(bool(opened) and NO['C1'] in opened[0].url, '点「已申请淘宝开票」状态：打开这单的淘宝发票详情页', [p.url for p in pages[n1:]])
