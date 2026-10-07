@@ -21,7 +21,12 @@ WSL 里有 python3 3.12、node 18、git；在 WSL 里用 `python3`，不要用 `
   表里有的单以订单表为准（mergeExport），表里没有的按订单页建的单保留，只去掉示例订单。
   旧的「订单表之前的订单」（want.older / S.older）只剩网页版补图窗口在用
 - **能区分退款**：导出表里的「交易成功」不代表没退款（部分退款看不出来），退款要靠抓取的逐件文字或手动标记
-- **对外操作要用户确认**：提交开票申请、给卖家发消息这类会改变淘宝上状态的动作，每一批先列清单、用户点确认才执行；
+- **界面设计准则**（用户 2026-10-07 定，改界面前先对照）：① 一条主线，同一件事只有一个入口、一步里不给几条路选，可选功能才进「更多」；
+  ② 傻瓜使用，新人只看插件就能做完；③ 能自动化的都自动化；④ 不写大段说明（每步一行 ≤ 30 字，细节放 title）；
+  ⑤ 用颜色和标签区分状态；⑥ 只切换视图、滚动页面的按钮一律不要。
+  主线四步：读取订单 → 核对商品 → 处理发票 → 整理报销文件，每步一个主按钮；「更多」只有：导入已整理的发票文件夹、导入订单表、备份数据、从备份恢复
+- **对外操作要用户确认**：提交开票申请、给卖家发消息这类会改变淘宝上状态的动作，先列清单、用户点确认才执行
+  （「自动处理发票」把要平台申请 / 按入口申请 / 向卖家索要 / 请客服督促的合成一张分组清单，只确认一次）；
   Claude 自己不能在用户账号上点这类按钮（自动安全检查会拦，也不许绕过），真实账号上的这类测试由用户点
 - **判不清的交给用户**：宁可放进「待定」，也不要把实验室物品判成个人（反过来也一样）
 - **绝不改动其他目录**：用户的正式报销材料放在项目以外的目录里，
@@ -37,8 +42,8 @@ WSL 里有 python3 3.12、node 18、git；在 WSL 里用 `python3`，不要用 `
 ```
 manifest.json              Chrome 扩展说明（MV3）。项目根目录本身就是扩展：「加载已解压的扩展程序」选根目录
 extension/background.js    点扩展图标打开主页（chrome-extension://…/index.html）
-extension/taobao.js        淘宝订单页的内容脚本：有有效的 readJob 且向后台领到活时自动全部读取（进度 readProgress、结束 readDone）；
-                           否则读主页写的缺图清单 want 出「开始补图片」面板。结果写回 chrome.storage.local 的 scraped
+extension/taobao.js        淘宝订单页的内容脚本：只在有有效的 readJob 且向后台领到活时自动全部读取（进度 readProgress、结束 readDone），
+                           结果写回 chrome.storage.local 的 scraped；用户自己打开订单页时什么都不做（不出面板）
 extension/invoice-list.js  「全部发票」页（i.taobao.com/my_itaobao/invoice）：同步三个标签的开票记录 → invSync；按 dlJobs 点「下载到本地」
 extension/chat.js          旺旺网页版（market.m.taobao.com/app/im，内容在 iframe chat-core）：扫描卖家回复 → chatScan（开票卡片单独记 cards，不算图片）；
                            按 dlJobs 点「下载文件」；按 cardRun 点开票卡片的「去申请」
@@ -53,19 +58,21 @@ index.html                 页面（样式内联；扩展页不允许内联脚�
 js/xlsx-lite.js            零依赖 xlsx/csv 读取（DecompressionStream 解 zip，正则读 sheet XML）
 js/normalize.js            列名别名 → 统一订单结构；一单多件续行合并；抓取数据按订单号合并；退款判断
 js/classify.js             关键词打分 + 同店铺/同商品记忆；classifyAll 两遍扫描（补邮费链接跟随店铺）；suggest 根据手动判断推荐增删词
-js/app.js                  界面、状态（localStorage）、从淘宝读取订单、导入订单表、键盘操作。界面是一条线的 6 步（flowSteps，每步 help + how 分步说明，每步只有一个操作；用户 2026-10-07 要求主线不能有重复入口和分支，
-                           「上次报销截止点」一步已删，「导入已整理的发票文件夹」「导入订单表」在「更多」里），读取进度 / 结果在步骤条下方（readBar），
-                           没有订单时显示「开始使用」卡片（renderGuide），顶上进度条（renderDash），
+js/app.js                  界面、状态（localStorage）、读取订单、导入订单表、键盘操作。界面是一条线的 4 步（flowSteps：每步 title / hint / acts，
+                           选中的步骤决定下方显示商品列表还是发票表）；核对商品一张列表（visibleRows 待定排最前），「确认核对完成」= confirmSort；
+                           处理发票一个按钮 runInvoice（checkInvoices → confirmGroups 一次确认 → downloadAll → doAsk / runCards / doVip / doApply），
+                           window.__otDev 只给离线测试单独触发其中一段；读取 / 发票进度在步骤条下方（statusBar），
+                           没有订单时显示「开始使用」卡片（renderGuide），顶上进度条（renderDash，只显示不能点），
                            不常用的收在顶栏「更多」；不提供导出（「备份数据」除外）、不提供改词表（用户 2026-10-05 要求去掉多余的自由度）
 js/sample.js               虚构示例数据（给没有数据的人试用）
 scraper/taobao-scraper.js  在淘宝「已买到的宝贝」页控制台运行：按文字特征定位订单块，抓图片/逐件退款，可自动翻页，存本地 JSON
 tools/eval.mjs             node 评估分类效果：node tools/eval.mjs [订单表] [labels.json]
 tools/selftest.mjs         自检（虚构数据）：合并只补图片/退款/链接、不新增订单；关键词建议
 tools/mock-taobao.html     模拟订单页（数据虚构）：无参数 = 旧版结构（测回退解析）；?v=new = 2026-09 真实新版结构
-tools/e2e-mock.py          离线端到端测试：主页「从淘宝读取订单」（真实网址的请求回应模拟页）→ 自动翻页、关页、结果；导入订单表合并；
-                           导入虚构订单表 → 模拟页一键补图 → 逐单核对（不联网）
-tools/e2e-invoice.py       离线：全部发票同步、旺旺扫描、下载改名（含本机假阿里云 https）
-tools/e2e-extras.py        离线：选文件夹读发票 PDF、核对重复、二维码
+tools/e2e-mock.py          离线端到端测试：主页「从淘宝读取订单」（真实网址的请求回应模拟页）→ 自动翻页、关页、结果；界面准则检查（四步、
+                           每步至多一个主按钮、没有只滚动的按钮、「更多」四项）；导入订单表合并；新旧版模拟页逐单核对（不联网）
+tools/e2e-invoice.py       离线：全部发票同步、旺旺扫描、下载改名（含本机假阿里云 https）、自动处理发票只确认一次
+tools/e2e-extras.py        离线：选文件夹读发票 PDF、二维码、备份恢复
 tools/e2e-apply.py         离线：平台批量申请、按卖家的开票入口申请（mock-invoice-apply.html）、干活页用完关掉
 tools/index-invoices.py    （可选）用 pdftotext/pypdf 给发票文件夹做索引；插件里已能直接选文件夹读，这个留给命令行用
 tools/fixtures/            测试用的虚构二维码图、商品图
@@ -86,10 +93,10 @@ docs/assets/               README 横幅、功能图标、状态色块（图标�
   注意 WSL 里默认 python3 是系统的、没装 playwright，用装了 playwright 的那个 python3（比如 conda 里的）
 - Playwright 连着真实测试浏览器时会截走下载（存到 /tmp/playwright-artifacts-*，断开就没了）：测下载前先 Browser.setDownloadBehavior default，下载期间别连
 - 真实页面结构写在 `scraper/taobao-scraper.js` 的 parseBox 注释里；淘宝改版时先在真实页面核对，再同步改 mock 的 ?v=new
-- 补图链路有两条：扩展版（主页 persist 时把 want 写进 chrome.storage，淘宝页内容脚本抓完写 scraped，主页监听后合并）；
+- 读取链路有两条：扩展版（主页写 readJob，淘宝页内容脚本领活、抓完写 scraped，主页监听后合并）；
   网页版（「补图片 → 复制抓取脚本」生成 `(orderTriageScraper 源码)({nos, from})`，index.html 用 `<script data-no-run>` 只取函数不运行）
 - 扩展测试：Playwright 的 Chromium 用 `launch_persistent_context(channel='chromium', args=['--load-extension=项目根目录'])`；
-  manifest 里匹配了 `127.0.0.1/tools/mock-taobao.html`，模拟页会自动出面板
+  manifest 里匹配了 `127.0.0.1/tools/mock-taobao.html`；有 readJob 时模拟页会自动开始读取
 - README 图片：界面改动较大时 `env -u TMPDIR python3 tools/screenshots.py` 重新生成（要 Pillow；可只生成一类：`banner` / `shots` / `gifs`），
   生成后逐张看图、动图抽帧看，确认没有真实订单、店铺、抬头税号；按钮名、状态名改了要同步改 README 和脚本里的说明文字
 - 测完清掉测试浏览器里的 `localStorage`（键名 `orderTriage.app.v1`、`orderTriage.scraped.v1`），不要把用户数据留在浏览器里

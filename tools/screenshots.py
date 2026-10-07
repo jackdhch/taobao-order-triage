@@ -381,7 +381,7 @@ def band(y0, y1, w=W):
 
 
 def open_inv_sections(page):
-    page.click('#seg-cat [data-cat="invoice"]')
+    page.click('.flow li[data-step="2"]')              # 第 3 步「处理发票」：下方显示发票表
     page.wait_for_timeout(300)
     for d in page.query_selector_all('details.inv-sect:not([open]) summary'):
         d.click()
@@ -465,7 +465,7 @@ def make_shots(p, page, home, tmp):
 
 
 def gif_overview(page, home):
-    """主页总览：载入示例数据 → 进度条、六步流程亮起 → 查看各步说明 → 进入待定列表"""
+    """主页总览：载入示例数据 → 进度条、四步流程亮起 → 看看后两步 → 回到「核对商品」"""
     page.set_viewport_size({'width': GW, 'height': GH})
     reset(page, home)
     wrap_sample(page)
@@ -474,16 +474,15 @@ def gif_overview(page, home):
     r.snap(1200)
     r.click('#btn-sample', hold=1800, after=lambda: page.wait_for_selector('#main:not([hidden])'))
     r.inject()
-    # 六步流程：依次点开第 4、5 步看说明，再回到第 2 步「判断待定」
-    r.click('.flow li[data-step="3"]', hold=1300)
-    r.click('.flow li[data-step="4"]', hold=1500)
-    r.click('.flow li[data-step="1"]', hold=900)
-    r.click('.flow-acts [data-goto="unsure"]', hold=2600)
+    # 四步流程：点开第 3、4 步，再回到第 2 步「核对商品」（待定排在最前、标黄）
+    r.click('.flow li[data-step="2"]', hold=1500)
+    r.click('.flow li[data-step="3"]', hold=1500)
+    r.click('.flow li[data-step="1"]', hold=2600)
     r.save('demo-overview')
 
 
 def gif_sorting(page, home):
-    """键盘分拣：1 / 2 判断待定 → 全部确认为个人 → 全部确认为实验室 → 回到顶部看进度"""
+    """核对商品：按 1 / 2 判断两件待定 → 「确认核对完成」 → 进度和步骤条更新"""
     page.set_viewport_size({'width': GW, 'height': GH})
     reset(page, home)
     load_sample(page, home)
@@ -494,12 +493,9 @@ def gif_sorting(page, home):
     r.key('1', '判为实验室', hold=1500)
     r.key('2', '判为个人', hold=1600)
     r.note('')
-    r.click('#list [data-goto="personal"]', hold=1300)
-    r.click('#list [data-bulk="personal"]', hold=1100)
-    r.click('#list [data-goto="lab"]', hold=1500)
-    r.click('#list [data-bulk="lab"]', hold=1300)
-    r.glide(GW - 8, 330, 400)                      # 指针停到页边，不挡按钮
     r.scroll_to(0, 280)
+    r.click('#summary [data-flow="sort-done"]', hold=1800)
+    r.glide(GW - 8, 330, 400)                      # 指针停到页边，不挡按钮
     r.snap(3000)
     r.save('demo-sorting')
 
