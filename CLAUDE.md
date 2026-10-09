@@ -41,7 +41,7 @@ WSL 里有 python3 3.12、node 18、git；在 WSL 里用 `python3`，不要用 `
 
 ```
 manifest.json              Chrome 扩展说明（MV3）。项目根目录本身就是扩展：「加载已解压的扩展程序」选根目录
-extension/background.js    点扩展图标切到已开着的主页（focusHome，没有才新开）；下载改名记 dlDone；派活开的标签页编号记在 session 存储（jobTabs、workTabs）；
+extension/background.js    点扩展图标切到已开着的主页（focusHome，没有才新开）；下载改名记 dlDone（带 attach 的附件下载记 attDone）；派活开的标签页编号记在 session 存储（jobTabs、workTabs）；
                            旺旺页只留一个（顶掉正在干活的旧页时写 chatLost）；每天自动处理：主页开着发 autoRun（不刷新主页），主页正忙（homeBusy）就跳过
 extension/taobao.js        淘宝订单页的内容脚本：只在有有效的 readJob 且向后台领到活时自动全部读取（进度 readProgress、结束 readDone），
                            结果写回 chrome.storage.local 的 scraped；用户自己打开订单页时什么都不做（不出面板）
@@ -57,11 +57,16 @@ extension/batch.js         「批量开票」页（i.taobao.com/my_itaobao/price
 extension/batch-main.js    批量开票页自身环境（world MAIN）：替 batch.js 发日期框要的回车
 extension/vip.js           淘宝官方客服（ai.alimebot.taobao.com）：按 vipJob 转人工后逐单督促，之后回「OK」、点「提交投诉」
 extension/qr.js            税务局电子发票页（*.chinatax.gov.cn，卖家发的二维码）：核对购买方、税号、价税合计（应报金额，少 1 元以内放行）后下载 PDF；没通过写 qrFail
-extension/detail.js        订单详情页（trade.taobao.com/trade/detail、天猫重定向后的 trade.tmall.com/detail）：读卖家旺旺名、逐件退款
+extension/detail.js        订单详情页（trade.taobao.com/trade/detail、天猫重定向后的 trade.tmall.com/detail）：读卖家旺旺名、逐件退款、支付宝交易号和付款时间；
+                           按主页发的 otShot 逐段滚动（第二段起藏起固定栏），截图由主页 captureVisibleTab 截、拼接（manifest 的 <all_urls> 只为这个）
 extension/panel.js         各淘宝页脚本共用：右下角面板（otPanel）、领主页排的活（otTakeJob：invJobs + invClaim_*）、otLog 写本机调试日志、
                            otFail 干活没办成时写 jobFail（主页正等这一段就立即结束、红条写原因）并把本页切到前台（不用 alert）
 extension/home.js          插件运行的每个淘宝页面上的小按钮「← 订单分拣」（一般在右上角，旺旺页在左下角）：发 goHome，后台切回 / 新开主页
-js/invoice.js              发票纯逻辑：税号校验、发票文件名、聊天分析、每单状态、下载文件名、从 PDF 文字认发票（parseInvoiceText）
+js/invoice.js              发票纯逻辑：税号校验、发票文件名、聊天分析（docs = 卖家发来的表格 / Word）、每单状态、下载文件名、
+                           从 PDF 文字认发票（parseInvoiceText，含发票明细 items、销售方 seller）
+js/reimburse.js            报销规范（单位《报销规范手册》，用户 2026-10-09）纯逻辑：低值品判断（单价 > 200、无「模块」、设备词表 / 耗材词表，
+                           判断顺序写在注释里）、要补的材料（超过 1000 元、与科研无关的字样、3D 打印）、到账差额组合、历史批次文件夹名、报销文件夹名
+js/office.js               零依赖生成最小 xlsx（inlineStr）和 docx（内嵌图片），用 js/zip.js 打包
 extension/invoice-main.js  跑在「全部发票」页自身环境（world MAIN）：扩展下载期间截下「下载到本地」造的阿里云发票链接
 vendor/                    原样拷贝的开源库：jsQR（二维码）、PDF.js（读发票 PDF），版本见 vendor/README.md
 index.html                 页面（样式内联；扩展页不允许内联脚本，别加 <script> 内联代码）
@@ -77,7 +82,10 @@ js/app.js                  界面、状态（localStorage）、读取订单、�
                            window.__otDev 只给离线测试单独触发其中一段、逐单操作或改短时限（tmo）；读取进度也在步骤条下方，
                            没有订单时显示「开始使用」卡片（renderGuide），顶上进度条（renderDash，只显示不能点），
                            应报金额只有一个来源 dueOf（实付 − 退款，和 derive 共用 lineDue）；下载的票核对不通过是红色 badinv（不算已取得），
-                           旺旺会话没读成是 chatfail（不退回「需向卖家索要」）；整理报销后订单记进 S.packed（以后算「已整理」），
+                           旺旺会话没读成是 chatfail（不退回「需向卖家索要」）；整理报销后订单记进 S.packed（以后算「已整理（第 N 批）」），
+                           整理报销文件按手册结构输出（packPlan / makePack：不超过1k耗材 / 超过1k耗材 / 低值品、README.txt、报销清单.xlsx、用途说明 docx），
+                           每次记一个批次 S.batches（第 4 步说明区下方「报销记录」、填到账、差额组合）；低值品标签 lowPill（S.lowval 按标题记住）；
+                           附件（订单页面截图、手动添加的）存 IndexedDB orderTriage-att（不进备份，清除本机数据时清掉），旺旺下载的附件记在 attDone，
                            不常用的收在顶栏「更多」；不提供导出（「备份数据」除外）、不提供改词表（用户 2026-10-05 要求去掉多余的自由度）
 js/sample.js               虚构示例数据（给没有数据的人试用；「示例-」开头的订单只看界面，第 3、4 步主按钮置灰，不去淘宝页处理）
 js/zip.js                  零依赖 zip 打包（整理报销文件的压缩包；中文文件名带 UTF-8 标记）
@@ -93,6 +101,9 @@ tools/e2e-invoice.py       离线：刷新开票记录、旺旺扫描（含「�
                            每天自动处理不打断；[17] 下载的票核对（合开、挪单、不是发票、少 1 元以上、券前价、部分退款）和整理后记为已整理、读旺旺失败不退回索要
 tools/e2e-extras.py        离线：选文件夹读发票 PDF、二维码、备份恢复（autoLog 不进备份；清除本机数据前自动备份）、自动处理发票某段超时 + 只有一单需处理；
                            出错提示不自动消失、发票表为空写明原因、两个主页不互相覆盖、示例数据不处理发票
+tools/e2e-reimburse.py     离线：报销规范——低值品标签与切换、没填姓名先开设置、超过 1000 元自动截订单页面（模拟详情页分段拼接）、3D 打印订单的消息末尾追加一句、
+                           缺材料标签与「手动添加发票 / 附件」、整理结构（README.txt、报销清单.xlsx、用途说明 docx 用 openpyxl / python-docx 读回）、
+                           报销记录（填到账、差额组合）、导入文件夹认出历史批次、批次进备份
 tools/e2e-apply.py         离线：平台批量申请（批量开票页改版认不出订单时不记「平台开不了」）、按卖家的开票入口申请（mock-invoice-apply.html；
                            点 A 的卡片打开 B 的申请页时不提交）、干活页用完关掉
 tools/make-release.sh      打发布包 dist/order-triage-v<版本>.zip（见「发布」）
@@ -111,7 +122,7 @@ docs/assets/               README 横幅、功能图标、状态色块（图标�
   `http://localhost:8765/index.html?load=local-data/订单数据.xlsx` 直接载入本地数据（只允许同源相对路径）
 - 抓取脚本：打开 `tools/mock-taobao.html`，在页面里 `fetch('/scraper/taobao-scraper.js')` 后 `eval`，再调 `orderTriage.grab()` / `.auto()`
 - 分类：`node tools/eval.mjs`；自检：`node tools/selftest.mjs`
-- 改抓取脚本 / 扩展后必跑：`node tools/selftest.mjs`，`env -u TMPDIR python3 tools/e2e-mock.py`、`tools/e2e-invoice.py`、`tools/e2e-extras.py`、`tools/e2e-apply.py`
+- 改抓取脚本 / 扩展后必跑：`node tools/selftest.mjs`，`env -u TMPDIR python3 tools/e2e-mock.py`、`tools/e2e-invoice.py`、`tools/e2e-extras.py`、`tools/e2e-apply.py`、`tools/e2e-reimburse.py`
   （e2e-invoice 约 10 分钟，其余各几分钟；TMPDIR 太长 Chromium 会报 Socket path too long）。改开票申请（batch.js、apply-card.js、卡片）时 e2e-apply 一定要跑。
   注意 WSL 里默认 python3 是系统的、没装 playwright，用装了 playwright 的那个 python3（比如 conda 里的）
 - Playwright 连着真实测试浏览器时会截走下载（存到 /tmp/playwright-artifacts-*，断开就没了）：测下载前先 Browser.setDownloadBehavior default，下载期间别连
@@ -131,7 +142,8 @@ docs/assets/               README 横幅、功能图标、状态色块（图标�
 - 发票状态的名称在 js/invoice.js 的 LABEL；颜色七种（app.js TONE + index.html 的 --*-ink/--*-bg），进度区小圆点和 .inv-legend 图例用实心色块 --*-sw；
   灰色「无需开票」在发票栏不出现，图例里没有它
 - 备份 / 恢复在顶栏「更多」（app.js backupData / restoreData，文件格式见那里的注释）；恢复时丢掉的临时键列在 BACKUP_SKIP，新增「进行中的任务」类存储键时要加进去；
-  本机调试日志 autoLog 备份时也去掉
+  本机调试日志 autoLog 备份时也去掉；报销批次（S.batches）要进备份，IndexedDB 里的截图和附件不进备份
+- 报销材料标签（发票表、整理预览）：低值品深色 --low-*、待确认黄色（--uns）、缺材料橙色 --mat-*；整理报销文件的结构和关键词表以单位《报销规范手册》第三章为准
 - 面向用户的措辞：说「刷新发票情况」，不说「同步」（用户 2026-10-08；selftest 会查）；顶栏有「打开淘宝」（登录用）
 - 插件开的干活页按 tab.id 记在 background.js 的 workTabs，做完由页面发 closeMe 关掉；用户自己点开的页面不关；旺旺页只复用一个
 - 发给卖家的消息模板（js/invoice.js DEFAULT_TEMPLATE、催卖家用的 FOLLOW_TEMPLATE）、extension/vip.js 里发给客服的话术是用户定的，不要改
