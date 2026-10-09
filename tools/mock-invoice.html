@@ -24,6 +24,8 @@ tr[class*="group-header"] td{background:#f7f7f7;font-size:12px}
 <script>
 (() => {
   const DELAY = +(new URLSearchParams(location.search).get('delay') || 0);
+  // ?nonext=issued：这个标签的「下一页」按钮只剩箭头（模拟改版后认不出翻页）
+  const NONEXT = new URLSearchParams(location.search).get('nonext') || '';
   // 同一张表里每单一个 tbody。A~F、P 在分拣测试的虚构订单表里，其余（5180…）是订单表以外的旧订单
   const r = (no, shop, item, amount, more) => Object.assign({ no, shop, item, amount }, more);
   const TABS = [
@@ -79,7 +81,7 @@ tr[class*="group-header"] td{background:#f7f7f7;font-size:12px}
       + t.pages[page].map(x => body(t, x)).join('') + '</table>'
       + '<div class="next-pagination"><button type="button" class="next-prev"' + (page ? '' : ' disabled') + '>上一页</button>'
       + t.pages.map((_, i) => '<button type="button" class="next-pagination-item' + (i === page ? ' next-current' : '') + '">' + (i + 1) + '</button>').join('')
-      + '<button type="button" class="next-next"' + (page < n - 1 ? '' : ' disabled') + '>下一页</button></div>';
+      + '<button type="button" class="next-next"' + (page < n - 1 ? '' : ' disabled') + '>' + (NONEXT === t.key ? '›' : '下一页') + '</button></div>';
   }
   // 换标签、翻页都要等「接口」回来才换内容
   const later = fn => { loading = true; setTimeout(() => { fn(); loading = false; render(); }, 400); };
@@ -113,6 +115,13 @@ tr[class*="group-header"] td{background:#f7f7f7;font-size:12px}
     }
   });
   if (DELAY) setTimeout(render, DELAY); else render();
+  // localStorage.mockVerify = '1'：页面上弹出安全验证（插件要停下、报给主页，不能弹窗、不能绕过）
+  if (localStorage.getItem('mockVerify') === '1') {
+    const d = document.createElement('div');
+    d.setAttribute('role', 'dialog'); d.style.cssText = 'position:fixed;top:30%;left:30%;background:#fff;border:1px solid #ccc;padding:20px';
+    d.textContent = '安全验证：请完成验证，拖动下方滑块';
+    document.body.appendChild(d);
+  }
 })();
 </script>
 </body>

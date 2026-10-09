@@ -29,7 +29,8 @@
 // opts = { initial, sync(m, replace), olderDone(from) }：Chrome 扩展里用，抓到的数据交给扩展存储，不写进淘宝页面自己的 localStorage。
 // sync 默认是「合并进去」（可能同时开着几个订单页），replace 为 true 时才整份替换（清空）；
 // olderDone：订单表之前的那段翻完了（主页据此清掉「提取到哪天」，以后补图不用再翻回去）
-// 读取订单用：progress({ state: 'reading' | 'verify', page, stored })；finish(why, { nos, pages })，why = past / end / max / stuck / empty / stopped；
+// 读取订单用：progress({ state: 'reading' | 'verify', page, stored })；finish(why, { nos, seen, pages })，why = past / end / max / stuck / empty / stopped；
+//   nos 存下的订单，seen 页面上出现过的全部订单号（解析失败的也在内）；
 // resume：遇到安全验证时不弹窗，等用户在页面上完成验证后自动接着翻（读取任务没人守着点按钮）
 function orderTriageScraper(want, opts) {
   'use strict';
@@ -59,6 +60,8 @@ function orderTriageScraper(want, opts) {
   const fresh = o => o && Date.now() - new Date(o.scrapedAt || 0).getTime() < 6 * 3600e3;
   const missing = () => { if (!W || W.all) return []; const s = load(); return [...W.set].filter(no => !s[no] || (W.refresh.has(no) && !fresh(s[no]))); };
   const runNos = new Set();                          // 这一次自动翻页存下的订单（读取订单时报给主页）
+  // 这一次翻到的页上出现过的全部订单号（解析失败、没读出商品的也算）：主页只把根本没出现过的当成删进回收站
+  const seenNos = new Set();
   let pageNo = 0, waitingVerify = false;
   const isOlder = day => !!(W && W.older && day && day >= W.older.from && day < W.older.before);
   const olderCount = () => Object.values(load()).filter(o => isOlder((o.time || '').slice(0, 10))).length;
@@ -278,6 +281,7 @@ function orderTriageScraper(want, opts) {
     let n = 0;
     pageNewest = '';
     for (const b of blocks) {
+      seenNos.add(b.no);
       try {
         const o = b.parse(), day = o.time.slice(0, 10);
         if (day > pageNewest) pageNewest = day;
@@ -350,7 +354,7 @@ function orderTriageScraper(want, opts) {
   }
   async function auto(maxPages) {
     const id = ++runId;
-    running = true; seen = 0; pageNo = 0; runNos.clear(); render();
+    running = true; seen = 0; pageNo = 0; runNos.clear(); seenNos.clear(); render();
     try {
       let why;
       for (;;) {
@@ -364,7 +368,7 @@ function orderTriageScraper(want, opts) {
         await sleep(1500);
       }
       if (id !== runId) return;
-      if (opts.finish) await opts.finish(!seen ? 'empty' : why, { nos: [...runNos], pages: pageNo });
+      if (opts.finish) await opts.finish(!seen ? 'empty' : why, { nos: [...runNos], seen: [...seenNos], pages: pageNo });
       if (why === 'verify' && !opts.resume) alert('页面出现安全验证，请手动完成后再次点击「开始补图片」。');
       else if (!seen) console.warn('[订单分拣] 翻过的页一单都没认出来 —— 可能是淘宝改版了，请把这句话和页面截图发给维护者');
       // 实测漏掉的都是用户自己删掉的订单（删掉的连按订单号都搜不到），所以不再换列表重翻
@@ -458,7 +462,7 @@ function orderTriageScraper(want, opts) {
                          stop: () => {
                            const was = running;
                            running = false; waitingVerify = false; runId++; render();
-                           if (was && opts.finish) opts.finish('stopped', { nos: [...runNos], pages: pageNo });   // 读取订单：用户在淘宝页点了「停止」
+                           if (was && opts.finish) opts.finish('stopped', { nos: [...runNos], seen: [...seenNos], pages: pageNo });   // 读取订单：用户在淘宝页点了「停止」
                          } };
   console.log('[订单分拣] 已加载' + (W ? '，清单 ' + W.set.size + ' 单' : '') + '。右下角面板可用；也可以在控制台用 orderTriage.grab() / .auto(页数) / .download() / .missing()');
 }

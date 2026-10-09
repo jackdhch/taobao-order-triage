@@ -328,6 +328,8 @@ def run(p, tmp):
     check_status(AFTER_SYNC, '同步后主页状态：A 已开票待下载，B 抬头不符，C 已申请淘宝开票，D 可在淘宝平台申请，其余需向卖家索要发票')
     closed = wait_until(app, lambda: inv.is_closed(), 10)
     check(bool(closed), '插件开的「全部发票」页同步完自己关掉了')
+    jt = app.evaluate("chrome.storage.session.get('jobTabs').then(r => r.jobTabs || {})")
+    check(INV_URL in jt and store('jobTabs') is None, '派活开的标签页编号只记在 session 存储里（浏览器重启后不会拿旧编号去关用户的页面）', {'session': jt, 'local': store('jobTabs')})
 
     print('\n[3] 扫描旺旺里的发票回复（旺旺模拟页，聊天在 iframe 里）')
     with ctx.expect_page() as pi:
@@ -473,6 +475,35 @@ def run(p, tmp):
           '全部发票页 2 秒后才出表格：领到的同步活照样读全，不写回空结果',
           f'读到 {len(s2.get("rows", {}))} 单，应为 {len(rows_all)} 单；写回时页面渲染过的页 {slow.evaluate("window.__mock.log")}'
           '（是空的就说明 invoice-list.js 领到活马上就读，没等表格出来：找不到标签就跳过，最后把空结果写回 invSync）')
+
+    print('\n[6c] 「全部发票」页认不出「已开具」标签的「下一页」：这个标签按没读完处理，不整份覆盖；主页红色标签写明只读了几个标签')
+    for pg in [pg for pg in ctx.pages if pg.url.startswith(INV_URL)]: pg.close()
+    s_prev = store('invSync') or {}
+    app.evaluate('() => chrome.storage.local.get("invJobs").then(r => chrome.storage.local.set({ invJobs: Object.assign({}, r.invJobs, { sync: Date.now() }) }))')
+    pn = watch(ctx.new_page(), '认不出下一页的全部发票页')
+    pn.goto(INV_URL + '?nonext=issued')
+    s3 = wait_until(app, lambda: (s := store('invSync')) and s.get('at') != s_prev.get('at') and s, 90) or {}
+    kept = set(s_prev.get('rows', {})) - set(s3.get('rows', {}))
+    check(s3.get('partial') is True and s3.get('tabs') == 2 and not kept, '「已开具」只读了第 1 页：记为不完整（读完 2 / 3 个标签），上次读到的第 2 页以后的记录没被清掉',
+          {'partial': s3.get('partial'), 'tabs': s3.get('tabs'), '丢了': sorted(kept)})
+    app.bring_to_front(); app.click('.flow li[data-step="2"]'); app.wait_for_timeout(500)
+    note = app.inner_html('#inv-note')
+    check('tone-bad' in note and '仅读取 2 / 3 个标签' in note, '发票栏「上次刷新」旁边：红色标签「仅读取 2 / 3 个标签」', note)
+    if not pn.is_closed(): pn.close()
+
+    print('\n[6d] 「我的发票」页出现安全验证：页面上写明原因（不弹窗），报给主页，主页这一段立即结束、写明原因')
+    def inv_ls(js):
+        pr = ctx.new_page(); pr.goto(INV_URL + '?probe=1'); pr.wait_for_timeout(500); pr.evaluate(js); pr.close()
+    inv_ls("localStorage.setItem('mockVerify', '1')")
+    t_v = time.time()
+    rv = app.evaluate('__otDev.refresh()') or {}
+    jf = store('jobFail') or {}
+    check(rv.get('bad') and '安全验证' in rv.get('text', '') and time.time() - t_v < 90 and jf.get('stage') == 'sync',
+          '安全验证：「我的发票」页报回失败，主页不等满 3 分钟就结束这一段，写明原因', {'结果': rv, '用时': round(time.time() - t_v), 'jobFail': jf})
+    vp = next((pg for pg in ctx.pages if pg.url.startswith(INV_URL) and not pg.is_closed()), None)
+    check(vp is not None and '安全验证' in vp.inner_text('div[style*="2147483647"]'), '「我的发票」页留着给用户处理，面板上写着原因', vp and vp.inner_text('div[style*="2147483647"]'))
+    for pg in [pg for pg in ctx.pages if pg.url.startswith(INV_URL)]: pg.close()
+    inv_ls("localStorage.removeItem('mockVerify')")
 
     print('\n[6b] 自动处理发票：点一次，依次同步 → 看卖家回复 → 列一张确认清单（只确认一次）；取消则只下载，不提交、不发送')
     for pg in [pg for pg in ctx.pages if pg.url.startswith(INV_URL) or '/app/im/' in pg.url]: pg.close()
@@ -693,6 +724,9 @@ def run(p, tmp):
     for pg in [pg for pg in ctx.pages if '/app/im/' in pg.url or INV_URL in pg.url]: pg.close()
     app.bring_to_front(); app.reload(); app.wait_for_timeout(1500)
     app.click('.flow li[data-step="2"]'); app.wait_for_timeout(500)
+    # 上一轮排了这张票的下载、页面却没干完（关掉了）：半小时内再「自动处理」，照样派页面去下（以前说「没有需要下载的」，一直停在待下载）
+    queued = app.evaluate('no => __otDev.queue([no])', NO['F'])
+    check(queued == 1 and any(j.get('kind') == 'qr' for j in (store('dlJobs') or [])), '先排进下载清单、不开页面（模拟上一轮没下完）', store('dlJobs'))
     app.evaluate('() => { __otDev.download(); }')
     got = wait_until(app, lambda: (d := store('dlDone')) and d.get(NO['F']), 40) or []
     check(len(got) == 1 and got[0].get('from') == 'qr' and got[0].get('file') == save_name('F'), f'F 单按二维码下载，建议文件名 {save_name("F")}', got)
@@ -790,6 +824,28 @@ def run(p, tmp):
     t = wait_until(app, lambda: re.search('每天自动刷新发票情况', app.inner_text('#toast')) and app.inner_text('#toast'), 15)
     check(bool(t), '打开 #auto 的主页后自动开始刷新发票情况', app.inner_text('#toast'))
     check('#auto' not in app.url, '跑过以后地址里的 #auto 去掉了（刷新不会再跑一次）', app.url)
+
+    print('\n[14b] 每天自动处理到点：主页正在处理时跳过（不记今天已运行）；主页开着时不刷新页面，直接在主页上开始')
+    app.goto(f'chrome-extension://{eid}/index.html'); app.wait_for_selector('#main:not([hidden])'); app.wait_for_timeout(1000)
+    alarm = app.evaluate("chrome.alarms.get('daily')")
+    check(alarm and alarm.get('periodInMinutes') == 60, '每小时检查一次的定时器在', alarm)
+    app.evaluate("chrome.storage.local.set({ autoDaily: { on: true, hour: 0 }, autoLast: '' })")
+    app.evaluate("chrome.storage.session.set({ homeBusy: { t: Date.now() + 120000, run: 'other' } })")       # 定时器可能晚几十秒才响，别让「正忙」先过期
+    app.evaluate('window.__mark = 1')
+    t_a = app.evaluate('Date.now()')
+    daily = lambda ev: [e for e in (store('autoLog') or []) if e.get('src') == 'background' and e.get('stage') == 'daily' and e.get('ev') == ev and e.get('t', 0) >= t_a]
+    # 定时器最快可能要等几十秒才响（浏览器对 alarms 的最短间隔）
+    app.evaluate("chrome.alarms.create('daily', { when: Date.now() + 300, periodInMinutes: 60 })")
+    skipped = wait_until(app, lambda: daily('skip'), 70)
+    check(bool(skipped) and store('autoLast') == '' and app.evaluate('window.__mark') == 1, '主页正忙：这次跳过，不记今天已运行，也不刷新主页', store('autoLast'))
+    app.evaluate("chrome.storage.session.remove('homeBusy')")
+    n0 = len(ctx.pages)
+    app.evaluate("chrome.alarms.create('daily', { when: Date.now() + 300, periodInMinutes: 60 })")
+    t = wait_until(app, lambda: '每天自动刷新发票情况' in app.inner_text('#toast') and app.inner_text('#toast'), 70)
+    check(bool(t) and app.evaluate('window.__mark') == 1 and store('autoLast') == app.evaluate('new Date().toDateString()')
+          and not [pg for pg in ctx.pages[n0:] if pg.url.startswith(f'chrome-extension://{eid}/index.html')],
+          '主页开着：没有刷新、没有另开主页，直接在这里开始刷新发票情况', {'提示': t, 'autoLast': store('autoLast')})
+    app.evaluate("chrome.storage.local.set({ autoDaily: { on: false, hour: 10 } })")
 
     print('\n[15] 天猫店：点旺旺图标时不知道旺旺名，订单详情页被重定向到 trade.tmall.com，照样读到旺旺名、打开聊天页（不是订单页）')
     app.evaluate('''no => { const S = JSON.parse(localStorage.getItem('orderTriage.app.v1')); const o = S.orders.find(o => o.no === no); delete o.nick;

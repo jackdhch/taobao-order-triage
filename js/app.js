@@ -63,9 +63,13 @@
   // 已经开好票、平台申请中、已下载的店就别去打开了
   // 还要卖家回复的单（旺旺要看的范围）：需向卖家索要 / 已索要 / 卖家已回 / 卖家发来开票卡片 / 已索要后又找客服督促过的
   const needsChat = st => ['ask', 'asked', 'replied', 'card', 'chatfail'].includes(st.key) || (st.key === 'urged' && st.base === 'asked');
+  // 试用的示例订单（「示例-」开头，全部虚构）：只看界面，不去淘宝页面上处理（以前点「自动处理发票」会为虚构订单打开真实的淘宝页）
+  const isSample = no => /^示例-/.test(no);
+  const hasSample = () => S.orders.some(o => isSample(o.no));
+  const SAMPLE_TIP = '示例数据仅供试用界面，不处理发票；读取真实订单后可用';
   function invWant() {
     if (!derived) return null;
-    const list = invOrders();
+    const list = invOrders().filter(x => !isSample(x.o.no));
     const pick = xs => xs.map(x => ({ no: x.o.no, shop: x.o.shop, nick: x.o.nick || '', time: x.o.time, amount: x.o.pay }));
     const first = xs => xs.map(x => (x.o.time || '').slice(0, 10)).filter(Boolean).sort()[0] || '';
     const chat = list.filter(x => needsChat(invStatus(x)));
@@ -249,7 +253,10 @@
     // 客服给的「填写开票申请」入口如果打开的也是淘宝「开具发票」页，由 extension/apply-card.js 按这份任务核对后提交（待真实页面验证）
     await addCardJobs(xs.map(x => x.o), 'vip');
     chrome.runtime.sendMessage({ type: 'openWorkTab', url: VIP_URL });
-    await until(() => xs.every(x => ((X.vipSent || {})[x.o.no] || 0) >= now), tmo('vip', 6 * 60000));
+    // 客服页报了失败（没加载出来、安全验证、转不到人工）就不再等，原因写进结果
+    let why = '';
+    await until(async () => xs.every(x => ((X.vipSent || {})[x.o.no] || 0) >= now) || !!(why = await jobFailSince(now, ['vip'])), tmo('vip', 6 * 60000));
+    doVip.why = why;
     return xs.filter(x => ((X.vipSent || {})[x.o.no] || 0) >= now).length;
   }
 
@@ -405,7 +412,7 @@
   // 发票的三类：还没开 / 开好了还没下载 / 已开好并下载
   // badinv：下载的票核对不通过（少 1 元以上、金额不符、读不出等），不算已取得；chatfail：旺旺会话没能读取（不退回「需向卖家索要」）
   const INV_GROUP = { apply: 'todo', ask: 'todo', asked: 'todo', applying: 'todo', urged: 'todo', card: 'todo', wrong: 'todo', check: 'todo',
-                      badinv: 'todo', chatfail: 'todo', ready: 'ready', replied: 'ready', paper: 'ready', done: 'done', have: 'done' };
+                      badinv: 'todo', chatfail: 'todo', gone: 'gone', ready: 'ready', replied: 'ready', paper: 'ready', done: 'done', have: 'done' };
   function invCounts() {
     const c = { todo: 0, ready: 0, done: 0 };
     for (const x of invOrders()) { const g = INV_GROUP[invStatus(x).key]; if (g) c[g]++; }
@@ -464,11 +471,11 @@
         text: J.busy ? '处理中…' : ic ? '已取得 ' + ic.done + ' / ' + (ic.todo + ic.ready + ic.done) + ' 单' : '需安装为 Chrome 扩展',
         tip: EXT ? '需在本浏览器中保持淘宝登录，并已在「设置」中填写抬头和税号' : '发票功能需安装为 Chrome 扩展后使用',
         hint: EXT ? '自动检查、申请、索要并下载发票；对外操作先确认' : '需安装为 Chrome 扩展',
-        acts: EXT ? pb('data-flow="inv-run"', J.busy ? '正在处理…' : '自动处理发票', RUN_TIP, true, J.busy) : '' },
+        acts: EXT ? pb('data-flow="inv-run"', J.busy ? '正在处理…' : '自动处理发票', hasSample() ? SAMPLE_TIP : RUN_TIP, true, J.busy || hasSample()) : '' },
       { id: 'pack', title: '整理报销文件', list: 'invoice', done: !!pack && pack.done, text: pack ? pack.text : '需安装为 Chrome 扩展',
         tip: '结果存入下载文件夹的「订单分拣-报销」：按序号重命名的发票、汇总表和压缩包，单张超过 200 元的放入「低值品」；原文件不变',
         hint: EXT ? '选择下载文件夹里的「订单分拣-发票」' : '需安装为 Chrome 扩展',
-        acts: EXT ? pb('data-pick="inv-pack-dir"', '选择发票文件夹并整理', '选择下载文件夹里的「订单分拣-发票」（浏览器询问「上传」时确认即可，文件只在本机读取），预览新文件名后生成报销文件夹和压缩包') : '' },
+        acts: EXT ? pb('data-pick="inv-pack-dir"', '选择发票文件夹并整理', hasSample() ? SAMPLE_TIP : '选择下载文件夹里的「订单分拣-发票」（浏览器询问「上传」时确认即可，文件只在本机读取），预览新文件名后生成报销文件夹和压缩包', true, hasSample()) : '' },
     ];
   }
   const RUN_TIP = '依次自动：刷新发票情况（淘宝开票记录、卖家旺旺回复）、下载已开具的发票；需要申请开票、向卖家索要、请客服督促的，先列一张清单，确认一次后自动完成';
@@ -481,14 +488,11 @@
   }
   // 读取订单、处理发票的进度和结果：放在步骤条和说明区之间，不随选中的步骤切换消失；结果一直留着，直到点「关闭」或下次再做
   function statusBar() {
-    const one = (t, busy, bad, close, id) => '<div class="read-bar' + (busy ? ' busy' : bad ? ' bad' : '') + '" data-bar="' + id + '"><span>' + esc(t) + '</span>'
-      + (busy ? '' : '<button class="linkbtn" data-flow="' + close + '" title="关闭这条提示">关闭</button>') + '</div>';
+    const one = (t, busy, bad, close, id, running) => '<div class="read-bar' + (busy ? ' busy' : bad ? ' bad' : '') + '" data-bar="' + id + '"><span>' + esc(t) + '</span>'
+      + (busy || running ? '' : '<button class="linkbtn" data-flow="' + close + '" title="关闭这条提示">关闭</button>') + '</div>';
     let h = '';
     const t = EXT ? readNote() : '';
-    if (t) {
-      const busy = readBusy(), bad = !busy && R.result && (!(R.result.nos || []).length || ['stopped', 'verify', 'stuck', 'max'].includes(R.result.why));
-      h += one(t, busy, bad, 'read-close', 'read');
-    }
+    if (t) { const s = readTone(); h += one(t, s.busy, s.bad, 'read-close', 'read', readBusy()); }
     // 处理发票时显示当前第几段、在等什么、等了多久（每秒更新，见 showProgress）；结束后是每段的结果
     if (J.busy || J.note) h += one(J.busy ? progressText() : J.note, J.busy, J.bad, 'inv-close', 'inv');
     return h;
@@ -557,6 +561,7 @@
   const detailA = (no, inner, cls) => '<a class="' + (cls || 'lk') + '" href="' + esc(detailUrl(no)) + '" target="_blank" rel="noopener noreferrer" data-detail="'
     + esc(no) + '" title="在淘宝打开本单订单详情">' + inner + '</a>';
   function openDetail(no) {
+    if (isSample(no)) { toast('示例订单是虚构的，淘宝上没有这一单'); return; }
     if (EXT) chrome.tabs.create({ url: detailUrl(no), active: true });
     else window.open(detailUrl(no), '_blank', 'noopener');
   }
@@ -568,6 +573,7 @@
   async function openChat(no) {
     const o = S.orders.find(x => x.no === no);
     if (!o) return;
+    if (isSample(no)) { toast('示例订单是虚构的，淘宝上没有这一单'); return; }
     if (!EXT) { window.open(o.nick ? chatUrl(o.nick) : detailUrl(o.no), '_blank', 'noopener'); return; }
     // 旺旺页只有一个：「自动处理发票」正在用它时，打开别家会话会把正在干活的页面带走
     if (J.busy) { toast('「自动处理发票」正在使用旺旺页，请等它结束后再打开聊天'); return; }
@@ -757,15 +763,20 @@
     if (el) el.scrollIntoView({ block: 'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
   }
 
+  // 出错、没办成的提示（导入时丢掉的订单号、二维码发票没下成的原因）不自动消失，点「关闭」才收起；其余按字数多留一会儿，最多 12 秒
   let toastTimer = null;
+  const STICKY = /⚠|出错|失败|未导入|未下载/;
   function toast(msg, withUndo) {
-    const t = $('toast');
-    t.innerHTML = '<span>' + esc(msg) + '</span>' + (withUndo ? '<button id="toast-undo" title="撤销上一步操作（Ctrl+Z）">撤销</button>' : '');
+    const t = $('toast'), sticky = STICKY.test(msg);
+    t.innerHTML = '<span>' + esc(msg) + '</span>' + (withUndo ? '<button id="toast-undo" title="撤销上一步操作（Ctrl+Z）">撤销</button>' : '')
+      + (sticky ? '<button id="toast-x" title="关闭这条提示">关闭</button>' : '');
     t.hidden = false;
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => { t.hidden = true; }, 3200);
+    if (!sticky) toastTimer = setTimeout(() => { t.hidden = true; }, Math.min(12000, Math.max(3200, String(msg).length * 120)));
     const b = $('toast-undo');
     if (b) b.onclick = () => { t.hidden = true; undo(); };
+    const x = $('toast-x');
+    if (x) x.onclick = () => { t.hidden = true; };
   }
 
   // ── 导入 ──
@@ -843,14 +854,28 @@
   // 要开发票的：实验室的、没退掉的、上次报销之后的；还要「交易成功」（用户 2026-10-05：右上角写交易成功的才报销，没确认收货的先不算），
   // 补图时在订单列表里找不到的（多半是删进回收站了，没有交易争议）也不要发票
   const doneDeal = o => /交易成功|交易完成/.test(o.statusLive || o.status || '');
-  function invOrders() {
+  // wantGone：只要被当成删进回收站的那几单（发票表里单独一组灰色「已视为删除」，不开票）
+  function invOrders(wantGone) {
     const by = new Map(), gone = new Set(X.goneNos || []);
     for (const x of derived.rows) {
-      if (effCat(x) !== 'lab' || x.ref || x.past || !doneDeal(x.o) || gone.has(x.o.no)) continue;
+      if (effCat(x) !== 'lab' || x.ref || x.past || !doneDeal(x.o) || gone.has(x.o.no) !== !!wantGone) continue;
       const g = by.get(x.o.no) || { o: x.o, lines: [] };
       g.lines.push(x.l); by.set(x.o.no, g);
     }
     return [...by.values()];
+  }
+  // 发票表空着时说清楚为什么：实验室订单还没点确认收货（不是「交易成功」）、已退款的都不进发票表，新人会以为漏读了
+  function emptyInvWhy() {
+    const why = new Map();
+    for (const x of derived.rows) {
+      if (x.past || effCat(x) !== 'lab') continue;
+      const r = why.get(x.o.no) || { ref: true, deal: doneDeal(x.o) };
+      if (!x.ref) r.ref = false;
+      why.set(x.o.no, r);
+    }
+    if (!why.size) return '暂无判为实验室的订单（在「核对商品」中判断）';
+    const rs = [...why.values()], nDeal = rs.filter(r => !r.deal && !r.ref).length, nRef = rs.filter(r => r.ref).length;
+    return '实验室订单 ' + why.size + ' 单：' + [nDeal ? nDeal + ' 单尚未交易成功（确认收货后才报销）' : '', nRef ? nRef + ' 单已退款或关闭' : ''].filter(Boolean).join('，');
   }
   const shopKey = s => String(s || '').replace(/\s+/g, '');
   // 这单的聊天：右侧「我的订单」里有这个订单号的会话优先，否则店名完全一样的会话（会话名是聊天窗口顶上的全名）。
@@ -1001,7 +1026,7 @@
   //   ok 绿 已取得 / info 紫 已开具待取得 / plat 蓝 已进入淘宝开票流程 / wait 黄 等待卖家回复 / urge 青 已由淘宝客服督促 / bad 红 需处理 / off 灰 无需开票
   //   off 只给退款的单用，invOrders 已排除退款商品，发票栏里实际不出现，所以图例里没有它
   const TONE = { have: 'ok', done: 'ok', ready: 'info', paper: 'info', replied: 'info', applying: 'plat', asked: 'wait', urged: 'urge',
-                 card: 'bad', apply: 'bad', ask: 'bad', wrong: 'bad', check: 'bad', badinv: 'bad', chatfail: 'bad', none: 'off' };
+                 card: 'bad', apply: 'bad', ask: 'bad', wrong: 'bad', check: 'bad', badinv: 'bad', chatfail: 'bad', none: 'off', gone: 'off' };
   const WAIT_TONES = ['plat', 'wait', 'urge'];
   // 下载的票读出来有问题，要用户核对：少了 1 元以上、金额对不上、分不清、抬头不符、读不出金额（扫描版的真发票也读不出，所以不直接判成「不是发票」）、没能取回核对
   const BAD_CHECK = ['short', 'amount', 'many', 'title', 'unread', 'error'];
@@ -1073,6 +1098,7 @@
   async function rowAct(act, no) {
     const x = invOrders().find(g => g.o.no === no);
     if (!x) return;
+    if (isSample(no)) { toast(SAMPLE_TIP); return; }
     if (J.busy) { toast('「自动处理发票」正在进行，请等它结束后再操作单个订单'); return; }
     if (['ask', 'nudge', 'vip', 'card', 'apply'].includes(act) && needInvoiceInfo()) return;
     const o = x.o, who = o.shop + '（' + (o.time || '').slice(0, 10) + '，' + yuan(+o.pay) + '）';
@@ -1096,7 +1122,7 @@
       const r = invReminder(), e = r && [...r.g.platform, ...r.g.seller, ...r.g.you].find(y => y.o.no === no);
       const days = e && e.days != null ? e.days : daysSince(o.time);
       toast('已打开淘宝官方客服：转人工后发送 ' + who + ' 的督促消息');
-      doVip([{ o, lines: x.lines, st: invStatus(x), days }]).then(n => toast(n ? '已请淘宝客服督促：' + who : '督促消息未发出（未能转接人工客服或超时），可稍后再试'));
+      doVip([{ o, lines: x.lines, st: invStatus(x), days }]).then(n => toast(n ? '已请淘宝客服督促：' + who : '督促消息未发出（' + (doVip.why || '未能转接人工客服或超时') + '），可稍后再试'));
       return;
     }
     if (act === 'card') {
@@ -1118,21 +1144,26 @@
     if (s.tip) return one(s.detail, s.tip);
     return s.detail ? '<div class="detail">' + esc(s.detail) + '</div>' : '';
   }
-  const invOpen = { todo: true, ready: true, done: false };      // 已下载的默认收起
+  const invOpen = { todo: true, ready: true, done: false, gone: false };      // 已下载的、已视为删除的默认收起
+  // 读订单时这次翻过的日期范围里、订单列表上根本没出现过的单（goneNos）：多半已删进回收站，不开票；单独一组灰色标签，便于核对
+  const GONE_ST = { key: 'gone', label: '已视为删除', detail: '读取订单时订单列表中未出现这一单（多半已删除进回收站），不开票' };
   function renderInvoice() {
     if (!EXT) {
       $('list').innerHTML = '<div class="none">发票功能需安装为 Chrome 扩展后使用：扩展读取淘宝「全部发票」和旺旺中的开票情况并下载发票，详见 README。</div>';
       return;
     }
     const q = view.q.trim().toLowerCase();
-    const list = invOrders().filter(x => {
-      return !q || (x.o.no + ' ' + x.o.shop + ' ' + x.lines.map(l => l.title).join(' ')).toLowerCase().includes(q);
-    }).sort((a, b) => (b.o.time || '').localeCompare(a.o.time || ''));
-    const st = new Map(list.map(x => [x.o.no, invStatus(x)]));
+    const hit = x => !q || (x.o.no + ' ' + x.o.shop + ' ' + x.lines.map(l => l.title).join(' ')).toLowerCase().includes(q);
+    const goneList = invOrders(true).filter(hit);
+    const list = invOrders().filter(hit).concat(goneList).sort((a, b) => (b.o.time || '').localeCompare(a.o.time || ''));
+    const st = new Map(list.map(x => [x.o.no, goneList.includes(x) ? GONE_ST : invStatus(x)]));
     // 主线按钮「自动处理发票」在上方步骤说明里；这里放颜色图例和上次刷新的时间，每行的「操作」列按状态给一个主要操作
     $('inv-note').innerHTML = (S.invoice.title && S.invoice.taxId ? '' : '<span class="warn">请先在「设置」中填写发票抬头和税号。</span>')
-      + (X.invSync ? '上次刷新 ' + esc(whenShort(X.invSync.at)) : '尚未刷新发票情况');
-    if (!list.length) { $('list').innerHTML = '<div class="none">没有需报销的实验室订单</div>'; return; }
+      + (X.invSync ? '上次刷新 ' + esc(whenShort(X.invSync.at)) : '尚未刷新发票情况')
+      // 「我的发票」页有标签没读完（改版、加载慢）：红色标签说明，这次的结果不完整
+      + (X.invSync && X.invSync.partial ? ' <span class="pill tone-bad" title="「我的发票」页的已开具、申请中、未申请三个标签没有全部读完，未读完的沿用上次结果；可能是页面改版或加载慢">仅读取 '
+        + (X.invSync.tabs != null ? X.invSync.tabs : '部分') + ' / 3 个标签</span>' : '');
+    if (!list.length) { $('list').innerHTML = '<div class="none">' + esc(q ? '没有符合条件的订单' : emptyInvWhy()) + '</div>'; return; }
     const late = new Set(((invReminder() || {}).late || []).map(r => r.o.no));
     // 几张表列宽一样，上下对得齐；订单号 19 位一行放下
     const HEAD = '<div class="tbl-wrap"><table class="inv-table"><colgroup><col style="width:72px"><col style="width:104px"><col style="width:200px"><col>'
@@ -1142,7 +1173,7 @@
         const acts = [], a = rowAction(x, s, late.has(o.no));
         if (a) acts.push('<button type="button" class="btn sm" data-act="' + a.act + '" data-no="' + esc(o.no) + '" title="' + esc(a.tip) + '">' + a.label + '</button>');
         // 卖家发到邮箱的发票只能用户自己挂上：次要操作，小字链接
-        acts.push('<label class="add" title="选择 PDF 文件（如卖家发送到邮箱的发票），按本单命名复制到下载文件夹的「订单分拣-发票」">手动添加发票<input type="file" accept=".pdf,.ofd,.xml" data-inv="attach" data-no="' + esc(o.no) + '" hidden></label>');
+        if (s.key !== 'gone') acts.push('<label class="add" title="选择 PDF 文件（如卖家发送到邮箱的发票），按本单命名复制到下载文件夹的「订单分拣-发票」">手动添加发票<input type="file" accept=".pdf,.ofd,.xml" data-inv="attach" data-no="' + esc(o.no) + '" hidden></label>');
         const okImg = u => /^https:\/\/([\w-]+\.)*(alicdn|taobao|tbcdn|tmall)\.com\//.test(u);
         const imgs = s.key === 'replied' && c && !c.files.length && c.images.length
           ? c.images.slice(-2).filter(im => okImg(im.src)).map(im => '<div><img class="qr" alt="卖家发送的图片" referrerpolicy="no-referrer" crossorigin="anonymous" data-qr="1" src="' + esc(im.src) + '"><div class="detail" data-qr-out></div></div>').join('') : '';
@@ -1156,7 +1187,7 @@
           + '<td class="st-cell">' + stPill(o, s) + stDetail(s) + imgs + '</td>'
           + '<td><div class="acts">' + acts.join('') + '</div></td></tr>';
     };
-    const SECT = [['todo', '未开票'], ['ready', '已开票，待下载'], ['done', '已下载']];
+    const SECT = [['todo', '未开票'], ['ready', '已开票，待下载'], ['done', '已下载'], ['gone', '已视为删除']];
     $('list').innerHTML = SECT.map(([g, name]) => {
       const xs = list.filter(x => INV_GROUP[st.get(x.o.no).key] === g);
       if (!xs.length) return '';
@@ -1431,7 +1462,9 @@
     const busy = new Set(keep.map(j => j.id));
     const add = jobs.filter(j => !busy.has(j.id)).map(j => Object.assign(j, { at: now }));
     await chrome.storage.local.set({ dlJobs: keep.concat(add) });
-    return { add, busy: jobs.length - add.length };
+    // again：这次要下的、半小时内已经排过还没下完的（上一轮的页面可能没干完就关了）
+    const again = keep.filter(j => jobs.some(x => x.id === j.id));
+    return { add, again, busy: again.length };
   }
   const sleepMs = ms => new Promise(r => setTimeout(r, ms));
   // 卖家发的图片 → 二维码里的地址（认不出就是空）
@@ -1537,7 +1570,8 @@
     let refunded = 0, partial = 0;
     for (const o of os) {
       toast('正在读取订单详情：' + o.shop + '（' + (o.time || '').slice(0, 10) + '，' + yuan(+o.pay) + '）');
-      const tab = await chrome.tabs.create({ url: detailUrl(o.no), active: true });
+      // 每天自动处理（后台模式）时不抢用户当前的页面
+      const tab = await chrome.tabs.create({ url: detailUrl(o.no), active: !J.quiet });
       for (let t = 0; t < 25000; t += 800) {
         await sleepMs(800);
         const { detailFound } = await chrome.storage.local.get('detailFound');
@@ -1575,8 +1609,11 @@
   }
   const resolveNicks = os => inspectOrders(os.filter(o => !o.nick));
 
-  async function startDownloads(nos, all) {
-    const { add: jobs, busy } = await queueDownloads(nos, all);
+  // redo：「自动处理发票」用。上一轮排过、还没下完的也再派一次页面去下（以前半小时内再点，主页说「没有需要下载的」，发票一直停在待下载）；
+  // 发票表里逐单点「下载」时不重派（那一单正在下）
+  async function startDownloads(nos, all, redo) {
+    const { add, again, busy } = await queueDownloads(nos, all);
+    const jobs = redo ? add.concat(again) : add;
     if (!jobs.length) return { n: 0, busy, ids: [] };
     // 二维码发票：逐张打开税务局页面（各自核对后下载、下完自己关掉）
     const qrs = jobs.filter(j => j.kind === 'qr');
@@ -1584,6 +1621,7 @@
     const plat = jobs.some(j => j.kind === 'platform'), chat = jobs.some(j => j.kind === 'chat');
     // 淘宝页面在后台标签里不干活（常常一片空白），两个页面同时开只有前台那个在下：
     // 两种都有时先开「全部发票」页，它下完平台票后由后台再打开旺旺页（extension/background.js 看 chatAfter）
+    // chatAfter 记的是这一次的时间：主页只认这一次排的，后台过了半小时也不再认（留下的旧信号不让以后的下载空等）
     if (plat && chat) await chrome.storage.local.set({ chatAfter: Date.now() });
     if (plat) invJob('download', INV_URL);
     else if (chat) invJob('chatDownload', CHAT_URL);
@@ -1674,13 +1712,23 @@
     return { text: '已读取 ' + (miss.length + part.length) + ' 单' + (still ? '，' + still + ' 单未读到卖家旺旺名' : ''), bad: !!still };
   }
   // 2 刷新淘宝开票记录（「我的发票」页）。超时就沿用上次的结果
+  // 干活页报来的失败（jobFail，panel.js otFail 写）：这一段开始之后、属于这几段的
+  async function jobFailSince(t0, stages) {
+    const { jobFail } = await chrome.storage.local.get('jobFail');
+    return jobFail && jobFail.at >= t0 && stages.includes(jobFail.stage) ? jobFail.why : '';
+  }
   async function refreshSync(w) {
     const t0 = Date.now(), lim = tmo('sync', 180000);
     invJob('sync', INV_URL);
     w('等待「我的发票」页面读取开票记录');
-    if (await until(() => X.invSync && X.invSync.at >= t0, lim))
-      return { text: '完成，共 ' + Object.keys(X.invSync.rows || {}).length + ' 单开票记录' + (X.invSync.partial ? '（部分标签未读到，其余沿用上次结果）' : '') };
-    return { timeout: true, text: '超时：' + mmss(lim) + '内未读到开票记录（可能未登录淘宝或页面空白），沿用' + (X.invSync ? '上次（' + whenShort(X.invSync.at) + '）的结果' : '空结果') };
+    let why = '';
+    const got = await until(async () => (X.invSync && X.invSync.at >= t0) || !!(why = await jobFailSince(t0, ['sync'])), lim);
+    if (got && X.invSync && X.invSync.at >= t0)
+      return { text: '完成，共 ' + Object.keys(X.invSync.rows || {}).length + ' 单开票记录' + (X.invSync.partial ? '（仅读取 ' + (X.invSync.tabs != null ? X.invSync.tabs : '部分') + ' / 3 个标签，其余沿用上次结果）' : ''),
+               bad: !!X.invSync.partial };
+    const keep = '，沿用' + (X.invSync ? '上次（' + whenShort(X.invSync.at) + '）的结果' : '空结果');
+    if (why) return { bad: true, text: '未完成：' + why + keep };
+    return { timeout: true, text: '超时：' + mmss(lim) + '内未读到开票记录（可能未登录淘宝或页面空白）' + keep };
   }
   // 3 读取卖家旺旺回复：只看还需要卖家回复的店。超时就停掉旺旺页上的扫描（后面下载、发消息也要用这个旺旺页），沿用上次结果
   async function refreshChat(w) {
@@ -1705,8 +1753,8 @@
   const newFiles = t0 => Object.values(X.dlDone || {}).reduce((a, l) => a + l.filter(g => (g.at || 0) >= t0).length, 0);
   async function downloadAll(w) {
     const t0 = Date.now();
-    const r = await startDownloads(invOrders().map(x => x.o.no), true);
-    if (!r.n) return { skip: true, text: r.busy ? r.busy + ' 个文件已在下载中' : '没有可下载的发票' };
+    const r = await startDownloads(invOrders().map(x => x.o.no), true, true);
+    if (!r.n) return { skip: true, text: '没有可下载的发票' };
     const lim = tmo('download', 5 * 60000), idleMax = tmo('downloadIdle', 120000);
     let last = null, idle = Date.now(), left = [], why = '', reopened = false;
     for (;;) {
@@ -1716,8 +1764,15 @@
       if (key !== last) { last = key; idle = Date.now(); }
       w('等待淘宝页面下载：已处理 ' + (r.n - left.length) + ' / ' + r.n + ' 个');
       if (!left.length) { if (chatAfter) await chrome.storage.local.remove('chatAfter'); break; }
+      // 干活页报了失败（安全验证、页面没加载出来）：旺旺页失败、或平台票失败而且没有卖家的文件要下，就不再等，写明原因；
+      // 平台票失败、还有卖家的文件要下：接着去旺旺页下（下面 chatAfter 那条）
+      const { jobFail: jf } = await chrome.storage.local.get('jobFail');
+      const fail = jf && jf.at >= t0 && ['download', 'chatDownload', 'chat'].includes(jf.stage) ? jf : null;
+      const chatLeft = left.some(j => j.kind === 'chat');
+      if (fail && (fail.stage !== 'download' || !chatLeft)) { why = fail.why; break; }
       // 「我的发票」页没把平台票下完（页面空白、没登录）时，后台不会接着开旺旺页：90 秒没进展，主页自己开旺旺页下卖家发的文件
-      if (chatAfter && !reopened && Date.now() - idle > 90000 && left.some(j => j.kind === 'chat')) {
+      // （只认这一次排的 chatAfter：以前留下的旧信号不算）
+      if (chatAfter && chatAfter >= t0 && !reopened && (Date.now() - idle > 90000 || fail) && chatLeft) {
         reopened = true; idle = Date.now();
         await chrome.storage.local.remove('chatAfter');
         alog('info', 'download', '「我的发票」页 90 秒没有进展，直接打开旺旺页下载卖家发送的文件');
@@ -1788,12 +1843,16 @@
       + (a ? ' → 点该行的「' + a.label + '」' : '');
   }
   async function runInvoice(checkOnly) {
-    if (J.busy) return;
+    if (J.busy || hasSample()) return;
     if (!checkOnly && needInvoiceInfo()) return;
     const tRun = Date.now();
-    Object.assign(J, { busy: true, note: '', bad: false, run: 'r' + Date.now().toString(36), cur: null, idx: 0, total: checkOnly ? 4 : 9, results: [] });
+    Object.assign(J, { busy: true, quiet: !!checkOnly, note: '', bad: false, run: 'r' + Date.now().toString(36), cur: null, idx: 0, total: checkOnly ? 4 : 9, results: [] });
     alog('start', 'run', checkOnly ? '每天自动刷新发票情况' : '自动处理发票');
-    const tick = setInterval(showProgress, 1000);
+    // 告诉后台主页正在处理（homeBusy，session 存储，每 15 秒续一次）：每天自动处理到点时看到主页正忙就跳过这一次，不打断
+    const beat = () => chrome.storage.session.set({ homeBusy: { t: Date.now(), run: J.run } }).catch(() => {});
+    beat();
+    let nBeat = 0;
+    const tick = setInterval(() => { showProgress(); if (++nBeat % 15 === 0) beat(); }, 1000);
     let waitUser = false;                                             // 平台申请停在淘宝确认页等用户点：结束时别把主页切到前台盖住它
     try {
       await stage('detail', '读取订单详情', readDetails);
@@ -1821,7 +1880,8 @@
           if (!sel.length) return { skip: true, text: '无' };
           w('等待官方客服转人工并发送 ' + sel.length + ' 单的督促消息');
           const n = await doVip(sel);
-          return { text: '已发送 ' + n + ' / ' + sel.length + ' 单' + (n < sel.length ? '（' + mmss(tmo('vip', 6 * 60000)) + '内未全部发出，可能未转接到人工客服）' : ''), timeout: n < sel.length };
+          return { text: '已发送 ' + n + ' / ' + sel.length + ' 单' + (n < sel.length ? '（' + (doVip.why || mmss(tmo('vip', 6 * 60000)) + '内未全部发出，可能未转接到人工客服') + '）' : ''),
+                   timeout: n < sel.length && !doVip.why, bad: n < sel.length };
         });
         await stage('apply', '申请平台开票', async w => {
           const sel = pick.apply || [];
@@ -1841,7 +1901,8 @@
       }
     } finally {
       clearInterval(tick);
-      J.busy = false; J.cur = null;
+      chrome.storage.session.remove('homeBusy').catch(() => {});
+      J.busy = false; J.quiet = false; J.cur = null;
       // 结束时按最新数据重算一遍状态、刷新整个界面（顶上的计数、发票表、需处理的单）
       derive();
       const bad = invOrders().filter(x => invTone(x.o, invStatus(x)) === 'bad');
@@ -1860,10 +1921,12 @@
   // 离线测试用（tools/e2e-*.py）：单独触发「自动处理发票」里的某一段、逐单操作，或把某段的时限改短（tmo）；界面上没有这些入口
   window.__otDev = {
     tmo: null,
-    sync: () => invJob('sync', INV_URL), scan: () => invJob('scan', CHAT_URL), download: () => startDownloads(invOrders().map(x => x.o.no), true),
+    sync: () => invJob('sync', INV_URL), scan: () => invJob('scan', CHAT_URL), download: () => startDownloads(invOrders().map(x => x.o.no), true, true),
+    queue: nos => queueDownloads(nos).then(r => r.add.length),
     lists: () => ({ ask: askList().items.length + askList().noNick.length, card: cardList().length, vip: vipList().length, apply: applyList().length }),
     ask: async auto => doAsk((await prepareAsk()).items, auto), card: () => runCards(cardList()), vip: () => doVip(vipList()), apply: () => doApply(applyList()),
     cards: nos => runCards(cardList().filter(x => nos.includes(x.o.no))),
+    refresh: () => refreshSync(() => {}),
     row: (act, no) => rowAct(act, no),
     inspect: nos => inspectOrders(nos.map(no => S.orders.find(o => o.no === no)).filter(Boolean)),
     due: no => { const o = S.orders.find(x => x.no === no); return o ? dueOf(o) : null; },
@@ -1907,6 +1970,12 @@
       return '已打开淘宝「已买到的宝贝」，等待登录淘宝…未登录时请在打开的页面用手机淘宝 App 扫码，或输入账号密码登录，登录后自动开始读取。';
     }
     return R.result ? readResultText(R.result) : '';
+  }
+  // 读取进度 / 结果的颜色（步骤条下方和「开始使用」卡片共用）：进行中蓝；等安全验证、没读到、中途停下红（要用户去淘宝页处理）；读完绿
+  function readTone() {
+    const busy = readBusy(), p = R.progress;
+    if (busy) return { busy: !(p && p.state === 'verify'), bad: !!(p && p.state === 'verify') };
+    return { busy: false, bad: !!(R.result && (!(R.result.nos || []).length || ['stopped', 'verify', 'stuck', 'max'].includes(R.result.why))) };
   }
   function readResultText(r) {
     const when = new Date(r.done).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -1963,11 +2032,14 @@
     // 读取结果在步骤条下方一直显示（statusBar），并用提示条报一次
     chrome.storage.local.get('scraped').then(x => {
       mergeFromExt(x.scraped);
-      // 完整翻过的日期范围里、订单列表上却没有的订单：多半是用户删进回收站的（没有交易争议），不再为它要发票（goneNos）
-      if (r.from && ['past', 'end'].includes(r.why) && (r.nos || []).length) {
-        const seen = new Set(r.nos), day = o => (o.time || '').slice(0, 10);
-        const hi = S.orders.filter(o => seen.has(o.no)).map(day).sort().pop() || '';
-        chrome.storage.local.set({ goneNos: S.orders.filter(o => { const d = day(o); return d && d >= r.from && d <= hi && !seen.has(o.no) && !/^示例-/.test(o.no); }).map(o => o.no) });
+      // 这次真正翻过的日期范围（读到的最早一天到最晚一天）里、订单列表上却根本没出现过的订单：多半是用户删进回收站的
+      // （没有交易争议），不再为它要发票（goneNos）。范围只算读到的那几天：认不出「下一页」只读了第 1 页时，后面的订单不会被当成删除；
+      // 只读了 1 页就结束的不算；页面上出现过、只是没解析出来的（seen）也不算删除
+      if (r.from && ['past', 'end'].includes(r.why) && (r.nos || []).length && !(r.why === 'end' && (r.pages || 0) <= 1)) {
+        const seen = new Set((r.seen || []).concat(r.nos)), day = o => (o.time || '').slice(0, 10);
+        const ds = S.orders.filter(o => seen.has(o.no)).map(day).filter(Boolean).sort();
+        const lo = [r.from, ds[0] || ''].sort().pop(), hi = ds[ds.length - 1] || '';
+        chrome.storage.local.set({ goneNos: S.orders.filter(o => { const d = day(o); return d && d >= lo && d <= hi && !seen.has(o.no) && !/^示例-/.test(o.no); }).map(o => o.no) });
       }
       const cur = flowSteps().findIndex(st => !st.done);
       view.step = cur >= 0 ? cur : null;
@@ -1986,9 +2058,10 @@
     const li = document.querySelector('#guide > li[data-g="info"]');
     li.classList.toggle('is-done', ok);
     li.querySelector('.g-n').textContent = ok ? '✓' : '1';
-    const el = $('g-read'), note = EXT ? readNote() : '';
+    const el = $('g-read'), note = EXT ? readNote() : '', s = note ? readTone() : {};
     el.hidden = !note;
     el.textContent = note;
+    el.className = 'g-note' + (s.busy ? ' busy' : s.bad ? ' bad' : '');
   }
   function guideAction(k) {
     if (k === 'settings') openSettings();
@@ -2038,7 +2111,7 @@
     $('inv-email').value = S.invoice.email || '';
     $('remind-days').value = remindDays();
     const ad = S.prefs.autoDaily || {};
-    $('auto-daily').checked = !!ad.on; $('auto-hour').value = ad.hour || 10;
+    $('auto-daily').checked = !!ad.on; $('auto-hour').value = ad.hour != null ? ad.hour : 10;
     $('inv-tax-err').textContent = '';
     $('rules-err').textContent = '';
     $('dlg-settings').showModal();
@@ -2050,7 +2123,8 @@
                   template: $('inv-tpl').value.trim() === I.DEFAULT_TEMPLATE ? '' : $('inv-tpl').value.trim(),
                   email: $('inv-email').value.trim() };
     S.prefs.remindDays = Math.max(1, Math.min(60, +$('remind-days').value || 7));
-    S.prefs.autoDaily = { on: $('auto-daily').checked, hour: Math.max(0, Math.min(23, +$('auto-hour').value || 10)) };
+    const hr = $('auto-hour').value.trim() === '' || isNaN(+$('auto-hour').value) ? 10 : +$('auto-hour').value;     // 0 点也是合法的设置
+    S.prefs.autoDaily = { on: $('auto-daily').checked, hour: Math.max(0, Math.min(23, hr)) };
     if (EXT) chrome.storage.local.set({ autoDaily: S.prefs.autoDaily });
     persist(); derive(); render();
     $('dlg-settings').close(); toast('设置已保存');
@@ -2189,10 +2263,16 @@
     $('rules-cancel').onclick = () => $('dlg-settings').close();
     $('data-backup').onclick = () => backupData().catch(e => toast('备份出错：' + e.message));
     $('backup-file').onchange = e => { const f = e.target.files[0]; e.target.value = ''; if (f) restoreData(f).catch(err => alert('恢复出错：' + err.message)); };
-    $('data-clear').onclick = () => {
-      if (!confirm('清除本浏览器中保存的全部订单、判断和发票记录？下载文件夹中的发票不受影响。\n\n清除后无法找回，建议先备份数据（更多 → 备份数据）。')) return;
+    $('data-clear').onclick = async () => {
+      if (!confirm('清除本浏览器中保存的全部订单、判断和发票记录？下载文件夹中的发票不受影响。\n\n清除前会自动备份一份到下载文件夹的「订单分拣-备份」，需要时可从备份恢复。')) return;
+      // 先自动备份（点错了还能找回）；备份不成就不清
+      if (S.orders.length) { try { await backupData(); } catch (e) { toast('自动备份失败，未清除：' + e.message); return; } }
       try { localStorage.removeItem(STORE); } catch (e) { /* 忽略 */ }
-      if (EXT) chrome.storage.local.clear();
+      if (EXT) {
+        await chrome.storage.local.clear();
+        // 设置里的「每天自动刷新」开关存在 S.prefs，清除后仍保留：扩展存储里这份也写回，免得设置显示开着、实际已不运行
+        if (S.prefs.autoDaily) await chrome.storage.local.set({ autoDaily: S.prefs.autoDaily });
+      }
       S = { orders: [], decisions: {}, refunds: {}, rules: null, prefs: S.prefs, invoice: { title: I.DEFAULT_TITLE, taxId: I.DEFAULT_TAX, template: '', email: '' }, invFiles: {}, haveIdx: [] };
       Object.assign(R, { job: null, progress: null, result: null });
       $('dlg-settings').close(); derive(); render();
@@ -2249,8 +2329,21 @@
   }
 
   restore();
+  // 另一个主页标签改写了数据：本页的数据已经旧了，不再写回（不然会把那边的判断、读到的旺旺名和退款金额盖掉），提示后刷新
+  window.addEventListener('storage', e => {
+    if (e.key !== STORE || restoring) return;
+    restoring = true;
+    toast('数据已在另一个主页标签中更改，正在刷新本页');
+    setTimeout(() => location.reload(), 1500);
+  });
   if (EXT) {
     document.body.classList.add('is-ext');
+    // 每天自动处理到点（background.js）：主页开着就直接在这里开始，不刷新页面（刷新会丢掉正在弹出的清单和读到的数据）
+    chrome.runtime.onMessage.addListener((m, sender, reply) => {
+      if (!(m && m.type === 'autoRun')) return;
+      reply(true);
+      if (!J.busy && S.orders.length) { toast('每天自动刷新发票情况：开始'); runInvoice(true); }
+    });
     chrome.storage.onChanged.addListener((ch, area) => {
       if (area !== 'local' || restoring) return;
       if (ch.scraped) mergeFromExt(ch.scraped.newValue);

@@ -48,7 +48,8 @@
         progress: prog.replace(/下载到本地.*/, '').trim(),
         // 申请中的单：页面上写着「商家还有8天57分37秒处理时间」时一并记下（2026-10-05 在发票详情页上见过，列表上不一定有）
         remain: (/商家还有[^，,。；;\s]{1,20}处理时间/.exec(text(tb)) || [])[0] || '',
-        canDownload: [...tb.querySelectorAll('button')].some(b => /下载到本地/.test(text(b))),
+        // 按钮改名（「下载」「下载发票」…）也认；纸质还要看类型里有没有「电子」（js/invoice.js status）
+        canDownload: [...tb.querySelectorAll('button')].some(b => /下载/.test(text(b))),
       };
     }).filter(Boolean);
   }
@@ -83,12 +84,13 @@
   // 页面刚打开时标签和表格都还没渲染出来
   const pageReady = () => window.otWaitFor(() => tabEls().length && (pageKey() || emptyShown()), 20000);
 
+  const VERIFY = '「我的发票」页出现安全验证，请在该页面手动完成后，在分拣主页重新点「自动处理发票」';
   const one = window.otQueue();
   const sync = (kind, fromJob) => one('sync', async () => {
     try {
       if (!await pageReady()) {
         if (fromJob && await window.otRetryBlank('sync')) return;
-        panel.set('页面未加载完成（淘宝页面偶尔整页空白），请刷新本页后点击「刷新发票情况」'); window.otLog('sync', 'fail', '页面未加载完成'); return;
+        window.otFail('sync', '「我的发票」页面未加载完成（淘宝页面偶尔整页空白，或未登录），请刷新该页面后重试'); return;
       }
       const { invWant, invSync } = await chrome.storage.local.get(['invWant', 'invSync']);
       const since = ((invWant && invWant.since) || '').slice(0, 10);
@@ -97,14 +99,20 @@
         if (!await openTab(re)) continue;
         let ok = true;
         for (let p = 0; p < 60; p++) {
-          if (window.otNeedsVerify()) { alert('页面出现安全验证，请手动完成后在分拣主页重新操作。'); ok = false; break; }
+          if (window.otNeedsVerify()) { window.otFail('sync', VERIFY); return; }
           const rs = readRows(tab);
           rs.forEach(r => { got[r.no] = got[r.no] || r; });    // 同一单在前一个标签里出现过就以前一个为准（已开具优先）
           panel.set('正在读取「' + re.source + '」第 ' + (p + 1) + ' 页，已读取 ' + Object.keys(got).length + ' 单');
           // 列表从新到旧：整页都早于订单表最早日期，后面只会更早（开票、申请日期不会早于下单日期）
           if (since && rs.length && rs.every(r => r.date && r.date < since)) break;
           const b = nextBtn();
-          if (!b) break;
+          if (!b) {
+            // 认不出「下一页」：翻页栏里有好几个页码、却找不到「下一页」，或第 1 页读满 10 单却连翻页栏都没有——多半是改版了，
+            // 这个标签按没读完处理，不拿它整份覆盖上次的结果（以前第 2 页以后的开票记录会被清掉）
+            const hasNext = pagerBtns().some(x => /下一页/.test(text(x)));
+            if (!hasNext && (pagerBtns().filter(x => /^\d+$/.test(text(x))).length > 1 || (p === 0 && rs.length >= 10 && !pagerBtns().length))) ok = false;
+            break;
+          }
           const before = pageKey();
           b.click();
           if (!await waitChange(before, 15000)) { ok = false; break; }
@@ -112,36 +120,51 @@
         }
         if (ok) okTabs.push(tab);
       }
-      if (!okTabs.length) { panel.set('未能读取任何标签，保留上次结果'); window.otLog('sync', 'fail', '未能读取任何标签'); if (fromJob) window.otCloseLater(10000); return; }
-      // 三个标签都读完才整份替换；有标签没读成，就只补新读到的，别把上次的好数据清掉
+      if (!okTabs.length) { window.otFail('sync', '「我的发票」页三个标签都没能读完（页面可能已改版），保留上次结果'); if (fromJob) window.otCloseLater(10000); return; }
+      // 三个标签都读完才整份替换；有标签没读成，就只补新读到的，别把上次的好数据清掉。tabs：读完了几个标签（主页红标签「仅读取 N / 3 个标签」）
       const full = okTabs.length === TABS.length;
       const rows = full ? got : Object.assign({}, invSync && invSync.rows, got);
-      await chrome.storage.local.set({ invSync: { at: Date.now(), rows, partial: !full } });
-      window.otLog('sync', 'end', (full ? '' : '部分标签，') + Object.keys(rows).length + ' 单');
-      panel.set((full ? '刷新完成' : '仅读取 ' + okTabs.length + ' 个标签，其余保留上次结果') + '：共 ' + Object.keys(rows).length + ' 单开票记录，已送回分拣主页'
+      await chrome.storage.local.set({ invSync: { at: Date.now(), rows, partial: !full, tabs: okTabs.length } });
+      window.otLog('sync', full ? 'end' : 'fail', (full ? '' : '仅读完 ' + okTabs.length + ' / ' + TABS.length + ' 个标签，') + Object.keys(rows).length + ' 单');
+      panel.set((full ? '刷新完成' : '仅读取 ' + okTabs.length + ' / ' + TABS.length + ' 个标签，其余保留上次结果') + '：共 ' + Object.keys(rows).length + ' 单开票记录，已送回分拣主页'
         + (fromJob ? '。本页 3 秒后关闭。' : ''));
       if (fromJob) { window.otCloseLater(3000); return; }               // 主页派活开的页：干完就关（用户 2026-10-05：标签页太多）
       await openTab(TABS[0][1]);
     } catch (e) {
-      panel.set('刷新出错：' + e.message); window.otLog('sync', 'error', e.message);
+      window.otFail('sync', '刷新开票记录出错：' + e.message);
     }
   });
 
   // 下载：翻「已开具」标签找到那一单，点「下载到本地」
-  const download = (kind, fromJob) => one('download', async () => { try {
-    const { dlJobs } = await chrome.storage.local.get('dlJobs');
-    const jobs = (dlJobs || []).filter(j => j.kind === 'platform');
-    if (!jobs.length) { panel.set('没有待下载的发票'); if (fromJob) window.otCloseLater(5000); return; }
-    if (!await pageReady() || !await openTab(TABS[0][1])) {
-      if (fromJob && await window.otRetryBlank('download')) return;
-      panel.set('页面未加载完成（淘宝页面偶尔整页空白），请刷新本页后点击「下载已开具的发票」'); window.otLog('download', 'fail', '页面未加载完成'); return;
+  // 每个退出口都发一次 jobsDone（没下成的就是空清单）：后台据此接着开旺旺页下载卖家发的文件（chatAfter），
+  // 以前没活、页面没加载出来、出错时不发，主页要空等到超时
+  const download = (kind, fromJob) => one('download', async () => {
+    const done = [];
+    try {
+      const { dlJobs } = await chrome.storage.local.get('dlJobs');
+      const jobs = (dlJobs || []).filter(j => j.kind === 'platform');
+      if (!jobs.length) { panel.set('没有待下载的发票'); await window.otSend({ type: 'jobsDone', ids: [] }).catch(() => {}); if (fromJob) window.otCloseLater(5000); return; }
+      if (!await pageReady() || !await openTab(TABS[0][1])) {
+        if (fromJob && await window.otRetryBlank('download')) return;
+        window.otFail('download', '「我的发票」页面未加载完成（淘宝页面偶尔整页空白，或未登录），平台发票未下载');
+        await window.otSend({ type: 'jobsDone', ids: [] }).catch(() => {});
+        return;
+      }
+      await platformDownload(jobs, done, fromJob);
+    } catch (e) {
+      delete document.documentElement.dataset.otDl;
+      window.otFail('download', '下载平台发票出错：' + e.message);
+      await window.otSend({ type: 'jobsDone', ids: done }).catch(() => {});
     }
-    const left = new Map(jobs.map(j => [j.no, j])), done = [];
+  });
+  async function platformDownload(jobs, done, fromJob) {
+    const left = new Map(jobs.map(j => [j.no, j]));
+    let verify = false;
     for (let p = 0; p < 60 && left.size; p++) {
-      if (window.otNeedsVerify()) { alert('页面出现安全验证，请手动完成后在分拣主页重新操作。'); break; }
+      if (window.otNeedsVerify()) { window.otFail('download', VERIFY); verify = true; break; }
       for (const tb of bodies()) {
         const j = left.get(noOf(tb));
-        const btn = j && [...tb.querySelectorAll('button')].find(b => /下载到本地/.test(text(b)));
+        const btn = j && [...tb.querySelectorAll('button')].find(b => /下载/.test(text(b)));
         if (!btn) continue;
         await window.otSend({ type: 'expectDownload', job: j });
         // 淘宝点下载时造的是指向阿里云的链接，扩展代点浏览器不认：invoice-main.js 在页面里把地址截下来发给这里，交给后台去存
@@ -167,10 +190,11 @@
       await sleep(1200);
     }
     await window.otSend({ type: 'jobsDone', ids: done });   // 交给后台统一删，别和旺旺页互相盖
+    if (verify) return;                                     // 安全验证：页面留着给用户处理，面板上的原因不覆盖
     window.otLog('download', 'end', '平台发票 ' + done.length + ' / ' + jobs.length + ' 单');
     panel.set('已下载 ' + done.length + ' 单' + (left.size ? '，' + left.size + ' 单在已开具发票中未找到' : '') + (fromJob ? '。本页 8 秒后关闭。' : ''));
     if (fromJob) window.otCloseLater(8000);                        // 留几秒让最后一张下完（下载归浏览器管，关页面不影响已开始的下载）
-  } catch (e) { delete document.documentElement.dataset.otDl; panel.set('下载出错：' + e.message); window.otLog('download', 'error', e.message); } });
+  }
 
   const panel = window.otPanel('我的发票', [['sync', '刷新发票情况', '读取已开具、申请中、未申请三类开票记录，送回分拣主页'],
     ['dl', '下载已开具的发票', '下载分拣主页中已排队的平台发票，按订单命名存入「订单分拣-发票」']], id => id === 'sync' ? sync() : download());

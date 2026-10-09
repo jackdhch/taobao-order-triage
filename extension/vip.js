@@ -33,7 +33,7 @@
     follow.job = job;
     await chrome.storage.local.remove('vipJob');            // 领走：刷新页面也不会再来一遍
     const panel = window.otPanel('淘宝客服督促开票', [], () => {}, { top: true });
-    if (!await window.otWaitFor(() => box(), 30000)) { panel.set('客服页面未加载完成，未发送消息。本页 15 秒后关闭。'); window.otCloseLater(15000); return; }
+    if (!await window.otWaitFor(() => box(), 30000)) { window.otFail('vip', '淘宝官方客服页面 30 秒内未加载出输入框（可能未登录或页面已改版），督促消息未发送'); window.otCloseLater(15000); return; }
     await sleep(2500);                                       // 等历史消息加载完
     const start = msgs().length;
     if (job.follow) return follow(0, start);
@@ -46,14 +46,14 @@
       (/\bleft\b/.test(m.className) && !/小蜜/.test(text(m)) && /很高兴为您服务|人工客服.{0,6}为您服务|我是.{0,16}客服/.test(text(m)))));
     let asks = 0;
     for (let k = 0; k < 40 && !human(); k++) {
-      if (window.otNeedsVerify()) { panel.set('页面出现安全验证，已暂停。完成验证后，请在分拣主页该单的操作中点「找客服督促」重试。'); return; }
+      if (window.otNeedsVerify()) { window.otFail('vip', '淘宝客服页出现安全验证，已暂停。完成验证后，请在分拣主页该单的操作中点「找客服督促」重试'); return; }
       // 机器人给了「立即联系」人工的按钮：点它（只点开始之后新出现的）
       const btn = fresh().flatMap(m => [...m.querySelectorAll('button')]).reverse().find(b => /立即联系|联系人工|转人工|人工客服/.test(text(b)) && !b.disabled && !b.dataset.otClicked);
       if (btn) { btn.dataset.otClicked = '1'; fullClick(btn); panel.set('已点击「' + text(btn) + '」，等待人工客服接入…'); await sleep(6000); continue; }
       if (asks < 8 && k % 3 === 0) { asks++; await say('人工'); panel.set('正在转接人工客服：已发送「人工」' + asks + ' 次'); }
       await sleep(3000);
     }
-    if (!human()) { panel.set('未能转接人工客服（已发送「人工」' + asks + ' 次），督促消息未发送。请稍后在分拣主页该单的操作中点「找客服督促」重试。本页 15 秒后关闭。'); window.otCloseLater(15000); return; }
+    if (!human()) { window.otFail('vip', '未能转接人工客服（已发送「人工」' + asks + ' 次），督促消息未发送，可稍后在发票表该单的操作中点「找客服督促」重试'); window.otCloseLater(15000); return; }
     panel.set('已转接人工客服，正在发送督促消息…');
     await sleep(3000);
     const urgeStart = msgs().length;

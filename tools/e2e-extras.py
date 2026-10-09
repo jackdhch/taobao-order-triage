@@ -165,10 +165,17 @@ def run(p, tmp):
         d.accept() if mode[0] == 'accept' else d.dismiss()
     mode = ['accept']
     app.on('dialog', on_dialog)
-    app.click('#btn-settings'); app.wait_for_timeout(200); app.click('#data-clear'); app.wait_for_timeout(800)
-    check(msgs and '建议先备份数据' in msgs[-1], '「清除本机数据」的确认框提示先备份', msgs[-1:] )
+    app.click('#btn-settings'); app.wait_for_timeout(200)
+    pos = app.evaluate("(() => { const r = id => document.getElementById(id).getBoundingClientRect(); const c = document.getElementById('data-clear');"
+                       " return { gap: r('rules-cancel').left - r('data-clear').right, color: getComputedStyle(c).color, cancel: getComputedStyle(document.getElementById('rules-cancel')).color }; })()")
+    check(pos['gap'] > 100 and pos['color'] != pos['cancel'], '「清除本机数据」是红色的，和「取消」隔开（不再紧挨着、样式一样）', pos)
+    n_bk = len([x for x in bdir.iterdir() if x.suffix == '.json'])
+    app.click('#data-clear')
+    more_bk = wait_until(app, lambda: len([x for x in bdir.iterdir() if x.suffix == '.json']) > n_bk, 15)
+    app.wait_for_timeout(800)
+    check(msgs and '自动备份' in msgs[-1] and bool(more_bk), '「清除本机数据」清除前自动备份了一份（确认框里写明）', msgs[-1:])
     left = app.evaluate('chrome.storage.local.get(null).then(r => Object.keys(r))')
-    check(app.evaluate(f"localStorage.getItem('{STORE}')") is None and set(left) <= {'invWant'}, '已清空（invWant 是主页随时按当前订单重写的发票范围）', left)
+    check(app.evaluate(f"localStorage.getItem('{STORE}')") is None and set(left) <= {'invWant', 'autoDaily'}, '已清空（invWant 是主页随时按当前订单重写的发票范围；autoDaily 按设置里的开关写回，和设置显示一致）', left)
     app.evaluate("document.querySelector('details.more').open = true")
     check(app.is_visible('#more') and app.is_visible('[data-pick="backup-file"]') and not app.is_visible('#data-backup'),
           '没有数据时「更多」仍在，可以「从备份恢复」（「备份数据」等需要数据的项隐藏）')
@@ -243,6 +250,51 @@ def run(p, tmp):
     tabs = app.evaluate('chrome.tabs.getCurrent().then(t => t.active)')
     check(tabs, '处理结束后主页切回前台')
     blocked[:] = [u for u in blocked if 'taobao.com' not in u]      # 上面「自动处理发票」去开的淘宝页面（离线，全被拦下）
+
+    print('\n[5c] 界面：出错提示不自动消失；发票表为空时写明原因；示例数据不去淘宝页面上处理')
+    bad_csv = tmp / '缺商品名.csv'
+    with open(bad_csv, 'w', newline='', encoding='utf-8') as f:
+        w = csv.writer(f)
+        w.writerow(['订单号', '订单提交时间', '订单状态', '店铺名称', '商品名称', '型号款式', '商品数量', '商品金额', '实付金额'])
+        w.writerow(['5195000000000000009', '2026-08-09 10:00:00', '交易成功', '某某虚构百货', '', '', 1, '5.00', '5.00'])
+    app.set_input_files('#file', str(bad_csv))
+    app.wait_for_timeout(6000)
+    t = app.evaluate("(() => { const t = document.getElementById('toast'); return t.hidden ? '' : t.innerText; })()")
+    check('未导入' in t and '5195000000000000009' in t and '关闭' in t, '「N 单无法读取商品，未导入：订单号…」6 秒后仍在，带「关闭」按钮', t)
+    app.click('#toast-x')
+    check(app.evaluate("document.getElementById('toast').hidden"), '点「关闭」后提示收起')
+    # 实验室订单都还没确认收货：发票表空着时写明原因（以前只写「没有需报销的实验室订单」，新人以为漏读了）
+    app.evaluate('''() => { const S = JSON.parse(localStorage.getItem('orderTriage.app.v1'));
+        for (const o of S.orders) { o.status = '卖家已发货'; delete o.statusLive; }
+        localStorage.setItem('orderTriage.app.v1', JSON.stringify(S)); }''')
+    app.reload(); app.wait_for_selector('#main:not([hidden])'); app.click('.flow li[data-step="2"]'); app.wait_for_timeout(500)
+    empty = app.inner_text('#list')
+    check(re.search(r'实验室订单 \d+ 单：\d+ 单尚未交易成功', empty), '发票表为空时写明原因：实验室订单几单、几单尚未交易成功', empty)
+    # 两个主页标签：一个改了数据，另一个不再把旧数据写回，提示后刷新
+    app.evaluate('window.__mark = 1')
+    app2 = ctx.new_page(); app2.goto(f'chrome-extension://{eid}/index.html'); app2.wait_for_selector('#main:not([hidden])')
+    app2.click('#btn-settings'); app2.fill('#remind-days', '9'); app2.click('#rules-save'); app2.wait_for_timeout(300)
+    def unmarked():
+        try: return app.evaluate('window.__mark') is None
+        except Exception: return False                      # 正在刷新
+    reloaded = wait_until(app, unmarked, 10)
+    st9 = app.evaluate("JSON.parse(localStorage.getItem('orderTriage.app.v1')).prefs.remindDays")
+    check(bool(reloaded) and st9 == 9, '另一个主页标签改了数据：本页刷新、不把旧数据写回（改动保留）', st9)
+    app2.close()
+    app.wait_for_selector('#main:not([hidden])'); app.wait_for_timeout(500)
+    # 示例数据：第 3、4 步主按钮置灰，不排淘宝页的活；点旺旺图标不去打开淘宝页
+    app.evaluate("() => { localStorage.clear(); return chrome.storage.local.clear(); }")
+    app.reload(); app.wait_for_selector('#empty:not([hidden])')
+    app.click('#btn-sample'); app.wait_for_selector('#main:not([hidden])'); app.wait_for_timeout(500)
+    btns = app.evaluate("""() => [2, 3].map(i => { document.querySelector('.flow li[data-step="' + i + '"]').click();
+        const b = document.querySelector('#summary .flow-acts .btn.primary'); return b ? [b.disabled, b.title] : null; })""")
+    check(all(b and b[0] and '示例' in b[1] for b in btns), '载入示例数据后，「自动处理发票」「选择发票文件夹并整理」置灰，悬停说明写明原因', btns)
+    want = app.evaluate('chrome.storage.local.get("invWant").then(r => r.invWant)') or {}
+    check(not [o for o in want.get('orders', []) + want.get('chat', []) if o['no'].startswith('示例')], '示例订单不进给淘宝页的范围（invWant）', want.get('orders'))
+    n_pages = len(ctx.pages)
+    app.click('.flow li[data-step="1"]'); app.wait_for_timeout(300)
+    app.click('article.order button[data-ww]'); app.wait_for_timeout(1500)
+    check(len(ctx.pages) == n_pages, '示例订单点旺旺图标：不打开淘宝页面', [x.url for x in ctx.pages])
 
     print('\n[6] 杂项')
     check(not errors, '页面没有报错', errors)

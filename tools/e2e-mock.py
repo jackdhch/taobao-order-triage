@@ -135,6 +135,16 @@ def read_section(ctx, base, eid, mock, watch, tmp):
         check(bool(back), '点「← 订单分拣」切回已打开的主页')
     tbo.close()
 
+    # 「开始使用」卡片里的读取进度：进行中蓝色，等安全验证红色（以前都是绿底，像是成功了）
+    def g_read(progress):
+        a0.evaluate("p => chrome.storage.local.set({ readJob: { at: Date.now(), from: '2026-08-15' }, readProgress: Object.assign({ at: 1, t: Date.now() }, p) })", progress)
+        a0.wait_for_timeout(500)
+        return a0.evaluate("(() => { const g = document.getElementById('g-read'); return g.hidden ? null : [g.className, g.textContent]; })()")
+    gv, gr = g_read({'state': 'verify'}), g_read({'state': 'reading', 'page': 0, 'stored': 0})
+    check(gv and 'bad' in gv[0] and '安全验证' in gv[1] and gr and 'busy' in gr[0] and 'bad' not in gr[0],
+          '「开始使用」卡片：等待安全验证标红，正在读取标蓝（不再一律绿底）', [gv, gr])
+    a0.evaluate("chrome.storage.local.remove(['readJob', 'readProgress'])"); a0.wait_for_timeout(300)
+
     a0.click('#empty [data-guide="read"]')
     a0.wait_for_selector('#dlg-read[open]')
     check(a0.locator('#dlg-read input').count() == 1, '读取窗口只有一个问题：上次报销到哪天（没有「读取全部订单」等分支）')
@@ -359,6 +369,24 @@ def run(p, base, tmp):
     kept = [it['t'] for o in same for it in o['items'] if not it.get('refund')]
     notref = app.evaluate("t => t.map(x => [...document.querySelectorAll('.line:not(.is-ref)')].some(e => e.textContent.includes(x)))", kept)
     check(all(notref), f'同一单里没退的 {len(kept)} 件照常分拣（只有退了的那件算退款）', list(zip(kept, notref)))
+
+    print('\n[2b] 认不出「下一页」只读了第 1 页：不把后面几页的订单当成删除；页面上出现过、只是没读出商品的订单也不算删除')
+    def reread(q):
+        app.evaluate("chrome.storage.local.set({ goneNos: [] }).then(() => chrome.storage.local.remove('readResult'))"
+                     ".then(() => chrome.storage.local.set({ readJob: { at: Date.now(), from: '2026-07-01' } }))")
+        pg = watch(ctx.new_page(), '模拟页（' + q + '）')
+        pg.goto(base + 'tools/mock-taobao.html?v=new&' + q)
+        r = wait_until(app, lambda: store('readResult'), 300) or {}
+        app.wait_for_timeout(1500)
+        pg.close()
+        return r, store('goneNos')
+    r3, gone3 = reread('nonext=1')
+    check(r3.get('why') == 'end' and r3.get('pages') == 1 and gone3 == [], '只读了第 1 页就结束：不计算「删进回收站」，第 2 页以后的订单不会从发票表里消失',
+          {'结果': {k: r3.get(k) for k in ('why', 'pages')}, 'goneNos': gone3})
+    noitem = mock['lists']['default'][0][1]
+    r4, gone4 = reread('noitems=' + noitem)
+    check(r4.get('why') == 'end' and noitem in (r4.get('seen') or []) and noitem not in (gone4 or []) and set(gone4 or []) == hidden | {NEVER['no']},
+          '页面上出现过、没读出商品的那单：报回主页（seen），不当成删进回收站；根本没出现过的照常算', {'seen 里有': noitem in (r4.get('seen') or []), 'goneNos': gone4})
 
     print('\n[3] 旧版模拟页（无参数）：回退到按文字特征猜')
     m.close()

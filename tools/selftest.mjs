@@ -365,6 +365,16 @@ assert.equal(I.detailRefund('某商品 退款完成 ￥12.25 x1').refunded, true
   assert.ok(html.includes('每天自动刷新发票情况') && appJs.includes("'上次刷新 '"));
   // 调试日志不进备份：恢复时丢掉，备份时也去掉
   assert.ok(/const BACKUP_SKIP = \[[^\]]*'autoLog'/.test(appJs) && appJs.includes('delete b.storage.autoLog'));
+  // 进行中的一次性信号（自动发送的主页心跳、旺旺页被顶掉、干活页失败）不恢复
+  for (const k of ['askBeat', 'chatLost', 'jobFail']) assert.ok(new RegExp("const BACKUP_SKIP = \\[[^\\]]*'" + k + "'").test(appJs), k + ' 要在 BACKUP_SKIP 里');
+  // 后台：定时器已存在就不重建（每次唤醒都重建会让计时清零，一天都跑不了）；点扩展图标切到已开着的主页；派活标签页编号只记在 session 存储
+  const bg = fs.readFileSync(new URL('../extension/background.js', import.meta.url), 'utf8');
+  assert.ok(/chrome\.alarms\.get\('daily'\)\.then\(a => \{ if \(!a\) chrome\.alarms\.create\('daily'/.test(bg) && !/^chrome\.alarms\.create\(/m.test(bg));
+  assert.ok(/chrome\.action\.onClicked\.addListener\(\(\) => \{ focusHome\(\)/.test(bg));
+  assert.ok(bg.includes("chrome.storage.session.get('jobTabs')") && !bg.includes("chrome.storage.local.get('jobTabs')"));
+  // 干活页不用 alert（后台标签页里的弹窗用户看不到），失败一律经 otFail 报给主页
+  for (const f of ['chat.js', 'invoice-list.js', 'vip.js', 'batch.js', 'apply-card.js', 'qr.js'])
+    assert.ok(!/\balert\(/.test(fs.readFileSync(new URL('../extension/' + f, import.meta.url), 'utf8')), f + ' 里还有 alert');
 }
 // 「催卖家」的跟进话术：一句简短的催促；首次索要的模板不变
 {

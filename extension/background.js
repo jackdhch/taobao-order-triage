@@ -1,5 +1,7 @@
-// 点工具栏上的扩展图标：打开分拣主页
-chrome.action.onClicked.addListener(() => chrome.tabs.create({ url: chrome.runtime.getURL('index.html') }));
+// 点工具栏上的扩展图标：已开着主页就切过去，没有才新开（两个主页各自把整份数据写回同一个键，会互相盖掉）
+chrome.action.onClicked.addListener(() => { focusHome().catch(e => console.warn('[订单分拣] 打开主页失败', e)); });
+// 旧版本把派活开的标签页编号存在持久存储里（浏览器重启后编号会重新分配）：现在改记在 session 存储，旧的删掉
+chrome.storage.local.remove('jobTabs').catch(() => {});
 
 // ── 发票下载改名 ──
 // 页面脚本点「下载到本地 / 下载文件」之前先发来 job = { no, saveAs, kind, file }。
@@ -54,7 +56,7 @@ chrome.runtime.onMessage.addListener((m, sender, reply) => {
       const { chatAfter, invJobs } = await chrome.storage.local.get(['chatAfter', 'invJobs']);
       if (chatAfter) {
         await chrome.storage.local.remove('chatAfter');
-        if (Date.now() - chatAfter < 2 * 3600e3 && left.some(j => j.kind === 'chat')) {
+        if (Date.now() - chatAfter < 30 * 60e3 && left.some(j => j.kind === 'chat')) {
           await chrome.storage.local.set({ invJobs: Object.assign({}, invJobs, { chatDownload: Date.now() }) });
           await chrome.tabs.create({ url: 'https://market.m.taobao.com/app/im/chat/index.html' });
         }
@@ -101,14 +103,22 @@ chrome.runtime.onMessage.addListener((m, sender, reply) => {
         } catch (e) { /* 那个页面已经关了：照常新开 */ }
       }
     }
-    const { jobTabs } = await chrome.storage.local.get('jobTabs');
+    // 派活开的标签页编号只记在 session 存储里：浏览器重启后编号会重新分配，记在持久存储里可能把用户自己的页面关掉。
+    // 关之前再核对一次：还是本次浏览器会话里插件开的干活页（workTabs），读得到网址的话网址也还是这个任务的
+    const { jobTabs } = await chrome.storage.session.get('jobTabs');
     const map = Object.assign({}, jobTabs && !Array.isArray(jobTabs) ? jobTabs : {});
-    if (map[m.url] != null) { try { await chrome.tabs.remove(map[m.url]); } catch (e) { /* 用户已经关了 */ } }
+    const old = map[m.url];
+    if (old != null) {
+      const { workTabs: ids = [] } = await chrome.storage.session.get('workTabs');
+      const t0 = await chrome.tabs.get(old).catch(() => null);
+      const same = t0 && (!t0.url || t0.url.split(/[?#]/)[0] === m.url.split(/[?#]/)[0]);
+      if (t0 && ids.includes(old) && same) { try { await chrome.tabs.remove(old); } catch (e) { /* 用户已经关了 */ } }
+    }
     const t = await chrome.tabs.create({ url: m.url });
     // 旺旺页（还没开着时新开的）不算干活页：它始终只留一个、反复复用，不关
     if (!/^https:\/\/market\.m\.taobao\.com\/app\/im\//.test(m.url)) await trackTab(t.id);
     map[m.url] = t.id;
-    await chrome.storage.local.set({ jobTabs: map });
+    await chrome.storage.session.set({ jobTabs: map });
   }).then(() => reply(true), e => reply(String(e)));
   return true;
 });
@@ -162,19 +172,22 @@ chrome.storage.onChanged.addListener((ch, area) => { if (area === 'local' && ch.
 
 // 每天自动刷新发票情况（设置里打开；浏览器开着时才会跑）：每小时看一眼，过了设定的钟点、今天还没跑过，
 // 就打开分拣主页（已开着就在它上面）带 #auto，主页读完数据后自己刷新发票情况并下载（不提交、不发送）
-chrome.alarms.create('daily', { periodInMinutes: 60 });
+// 后台每次被唤醒都会重跑这一段：已有这个定时器就不重建（以前每次重建，计时清零，整天开着浏览器干活的人一天都跑不了一次）
+chrome.alarms.get('daily').then(a => { if (!a) chrome.alarms.create('daily', { periodInMinutes: 60 }); });
 chrome.alarms.onAlarm.addListener(async a => {
   if (a.name !== 'daily') return;
   const { autoDaily, autoLast } = await chrome.storage.local.get(['autoDaily', 'autoLast']);
   if (!autoDaily || !autoDaily.on) return;
   const now = new Date(), today = now.toDateString();
-  if (now.getHours() < (autoDaily.hour || 10) || autoLast === today) return;
+  if (now.getHours() < (autoDaily.hour != null ? autoDaily.hour : 10) || autoLast === today) return;
+  // 主页正在「自动处理发票」（homeBusy，主页处理期间每 15 秒写一次）：这次跳过，不记今天已运行，下个钟点再看
+  const { homeBusy } = await chrome.storage.session.get('homeBusy');
+  if (homeBusy && Date.now() - homeBusy.t < 60000) { bgLog('daily', 'skip', '主页正在处理发票，这次跳过'); return; }
   await chrome.storage.local.set({ autoLast: today });
-  const url = chrome.runtime.getURL('index.html');
-  const ctxs = chrome.runtime.getContexts ? await chrome.runtime.getContexts({ contextTypes: ['TAB'] }) : [];
-  const tab = ctxs.find(c => (c.documentUrl || '').startsWith(url));
-  if (tab) await chrome.tabs.update(tab.tabId, { url: url + '#auto' }).then(() => chrome.tabs.reload(tab.tabId));
-  else await chrome.tabs.create({ url: url + '#auto', active: false });
+  // 主页开着：不刷新页面（会丢掉正在弹出的清单、读到的数据），让它自己开始；没开着才在后台新开一个带 #auto 的主页
+  const ok = await chrome.runtime.sendMessage({ type: 'autoRun' }).catch(() => false);
+  bgLog('daily', 'start', ok ? '主页已开着，在主页上开始' : '新开主页开始');
+  if (!ok) await chrome.tabs.create({ url: chrome.runtime.getURL('index.html') + '#auto', active: false });
 });
 
 // ── 从淘宝读取订单（用户 2026-10-07）：主页写 readJob = { at, from } 并开一个「已买到的宝贝」干活页 ──
@@ -207,6 +220,16 @@ chrome.runtime.onMessage.addListener((m, sender, reply) => {
 let logChain = Promise.resolve();
 const p2 = n => String(n).padStart(2, '0');
 const stamp = d => d.getFullYear() + '-' + p2(d.getMonth() + 1) + '-' + p2(d.getDate()) + ' ' + p2(d.getHours()) + ':' + p2(d.getMinutes()) + ':' + p2(d.getSeconds());
+// 后台自己的日志（每天自动处理跳过 / 开始）
+function bgLog(stage, ev, msg) {
+  const now = new Date();
+  logChain = logChain.then(async () => {
+    const { autoLog } = await chrome.storage.local.get('autoLog');
+    const list = Array.isArray(autoLog) ? autoLog : [];
+    list.push({ t: now.getTime(), at: stamp(now), src: 'background', run: '', stage, ev, msg });
+    await chrome.storage.local.set({ autoLog: list.slice(-300) });
+  }).catch(() => {});
+}
 chrome.runtime.onMessage.addListener((m, sender, reply) => {
   if (!(m && m.type === 'autoLog' && m.e && typeof m.e === 'object')) return;
   const url = (sender && (sender.url || (sender.tab && sender.tab.url))) || '';
@@ -237,7 +260,7 @@ chrome.runtime.onMessage.addListener((m, sender, reply) => {
     }
     if (readJob.tab !== sender.tab.id) return false;
     await chrome.storage.local.remove(['readJob', 'readProgress']);
-    await chrome.storage.local.set({ readResult: { at: readJob.at, from: readJob.from || '', why: m.why, nos: m.nos || [], pages: m.pages || 0, done: Date.now() } });
+    await chrome.storage.local.set({ readResult: { at: readJob.at, from: readJob.from || '', why: m.why, nos: m.nos || [], seen: m.seen || m.nos || [], pages: m.pages || 0, done: Date.now() } });
     // 停下的、一单都没读到的（可能没登录好、页面没出来）：页面留着给用户看；读到了就关掉干活页，回主页看结果
     if (m.why !== 'stopped' && m.why !== 'verify' && (m.nos || []).length) {
       await focusHome().catch(e => console.warn('[订单分拣] 切回主页失败', e));

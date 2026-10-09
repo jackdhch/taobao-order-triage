@@ -166,6 +166,8 @@ if (NEW) (function () {
     search: chunk(ORDERS, [4, 6, 2, 2, 2]),                     // 每页单数不固定，一单不漏
   };
   window.__mock = { orders: ORDERS, lists: { default: LISTS.default.map(p => p.map(o => o.no)), search: LISTS.search.map(p => p.map(o => o.no)) }, log: [] };
+  // ?nonext=1：「下一页」按钮只剩一个箭头（模拟改版后认不出翻页）；?noitems=订单号：这一单不显示商品（模拟解析不出商品）
+  const QS = new URLSearchParams(location.search), NONEXT = QS.get('nonext') === '1', NOITEMS = QS.get('noitems') || '';
 
   const price = (v, label, extra) => {
     const [i, d] = String(v).split('.');
@@ -209,7 +211,7 @@ if (NEW) (function () {
       + (o.purchase ? '<span class="' + h('shopInfoPurchase') + '">采购订单</span>' : '')
       + '<a class="' + h('shopInfoFlag') + '" href="#"' + bg(IMG + 'flag.png') + '></a></div></div>'
       + '<div class="trade-container type-of-row">'
-      + '<div class="trade-container type-of-normal">' + o.items.map(it => row(o, it)).join('')
+      + '<div class="trade-container type-of-normal">' + (o.no === NOITEMS ? '' : o.items.map(it => row(o, it)).join(''))
       + (o.label ? '<div><span><a class="' + h('label') + '" href="#"><span class="' + h('labelTitle') + '">' + o.label[0] + '</span><span class="' + h('labelSubTitle') + '">' + o.label[1] + '</span></a></span></div>' : '')
       + '</div>'
       + '<div class="trade-container type-of-normal"><div class="' + h('payment') + '">' + price(o.pay, '实付款') + price(o.ship, '含运费:')
@@ -234,7 +236,7 @@ if (NEW) (function () {
     // 「‹ 上一页」「下一页 ›」：文字直接在 div 里，箭头是子 span 里的 svg（所以抓取脚本找翻页按钮时候选元素要包括 div）
     const arrow = d => '<span class="trade-button-icon"><svg width="8" height="8" viewBox="0 0 8 8"><path d="' + d + '"/></svg></span>';
     $pager.innerHTML = '<div class="' + off(page > 0, ' mock-prev') + '">' + arrow('M6 0L2 4l4 4') + '上一页</div>'
-      + '<div class="' + off(page < pages.length - 1, ' mock-next') + '">下一页' + arrow('M2 0l4 4-4 4') + '</div>';
+      + '<div class="' + off(page < pages.length - 1, ' mock-next') + '">' + (NONEXT ? '' : '下一页') + arrow('M2 0l4 4-4 4') + '</div>';
   }
   const show = (m, p) => { mode = m; page = p; render(); window.__mock.log.push(m + ':' + (p + 1)); };
   // 不能点的按钮点了也没反应（和真实页面一样）；能点的等 0.5 秒（假装请求服务器）再换页

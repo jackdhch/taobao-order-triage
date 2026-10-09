@@ -19,7 +19,7 @@ chrome.storage.local.get(['scraped', 'readJob']).then(async ({ scraped, readJob 
       : chrome.runtime.sendMessage({ type: 'scrapedMerge', m }),
     resume: true,
     progress,
-    finish: (why, r) => chrome.runtime.sendMessage({ type: 'readDone', at: job.at, why, nos: r.nos, pages: r.pages }).catch(() => {}),
+    finish: (why, r) => chrome.runtime.sendMessage({ type: 'readDone', at: job.at, why, nos: r.nos, seen: r.seen, pages: r.pages }).catch(() => {}),
   });
   chrome.storage.onChanged.addListener(ch => {
     if (ch.scraped && window.orderTriage) window.orderTriage.adopt(ch.scraped.newValue);   // 主页清空了：内存跟着存储走，别把旧数据写回去

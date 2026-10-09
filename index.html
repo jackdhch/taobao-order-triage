@@ -95,6 +95,8 @@ button{font:inherit; color:inherit}
 .btn:disabled:hover{background:var(--surface)}
 .btn.primary:disabled:hover{background:var(--accent); filter:none}
 .btn.sm{padding:3px 9px; font-size:12.5px}
+.btn.danger{color:var(--bad-ink); border-color:currentColor}
+.btn.danger:hover{background:var(--bad-bg)}
 .lk{color:var(--link); text-decoration:underline; text-decoration-thickness:1px; text-underline-offset:2px; cursor:pointer}
 .lk:hover{text-decoration-thickness:2px}
 .linkbtn{appearance:none; border:0; background:none; padding:0; cursor:pointer; color:var(--link); font-size:12.5px; text-decoration:underline; text-underline-offset:2px}
@@ -296,6 +298,9 @@ kbd{font-family:var(--mono); font-size:11px; border:1px solid var(--line); borde
 .g-act{align-self:center; display:flex; gap:8px}
 .g-note{grid-column:2 / -1; padding:6px 10px; border-radius:6px; background:var(--ok-bg); color:var(--ok-ink); font-size:12.5px}
 .g-note b{font-weight:600; word-break:break-all}
+/* 读取进行中蓝、等安全验证或没读到红（和步骤条下方的进度条同一套颜色，app.js readTone） */
+.g-note.busy{background:var(--plat-bg); color:var(--plat-ink)}
+.g-note.bad{background:var(--bad-bg); color:var(--bad-ink)}
 .guide-alt{display:flex; flex-direction:column; gap:6px; font-size:13px; color:var(--muted)}
 .guide-alt .btn{margin:0 6px; vertical-align:baseline}
 .none{padding:24px; text-align:center; color:var(--faint); background:var(--surface); border:1px solid var(--line); border-radius:var(--r)}
@@ -463,8 +468,9 @@ footer p{margin:0 0 4px; max-width:90ch}
       <p>自动判断基于关键词，仅供参考；是否属于可报销的实验室物品，以报销规定为准。</p>
     </details>
     <div class="row">
+      <!-- 危险操作放在最左、红色，离「取消」「保存」远一点（以前紧挨「取消」、样式一样，容易点错） -->
+      <button class="btn danger" id="data-clear" title="删除本浏览器中保存的订单、判断和发票记录；清除前自动备份到下载文件夹的「订单分拣-备份」">清除本机数据</button>
       <span class="err" id="rules-err"></span>
-      <button class="btn" id="data-clear" title="删除本浏览器中保存的订单、判断和发票记录">清除本机数据</button>
       <button class="btn" id="rules-cancel" title="关闭设置，不保存修改">取消</button>
       <button class="btn primary" id="rules-save" title="保存设置">保存</button>
     </div>
