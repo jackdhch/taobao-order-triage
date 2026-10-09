@@ -148,8 +148,8 @@ def run(p, tmp):
     check(pills.get('数字万用表') == '低值品' and pills.get('电子秤') == '低值品', '数字万用表 452、电子秤 432.20：深色「低值品」', pills)
     check(pills.get('碳纤维板 CNC 加工 3mm') == '非低值品' and pills.get('杜邦线 公对母 40P') == '', '碳纤维板 1200（耗材词）：「非低值品」；200 元以下的没有标签', pills)
     check(pills.get('某某说不清的器件') == '是否低值品？' and pills.get('某某说不清的部件') == '是否低值品？', '关键词判断不出的：黄色「是否低值品？」', pills)
-    first2 = app.evaluate("[...document.querySelectorAll('.line')].slice(0, 2).map(l => l.className + ' ' + l.querySelector('.title').textContent.trim())")
-    check(all('is-uns' in x and '说不清' in x for x in first2), '待确认的排在最前、整行标黄（和待定一样）', first2)
+    asked = app.evaluate("[...document.querySelectorAll('.line')].filter(l => l.querySelector('.title').textContent.includes('说不清')).map(l => l.className)")
+    check(len(asked) == 2 and all('is-uns' in x for x in asked), '待确认是否低值品的整行标黄（和待定一样，位置按下单日期）', asked)
     check(app.is_disabled('#summary [data-flow="sort-done"]') and '是否低值品' in app.inner_text('#summary .fd-hint'),
           '还有待确认的时「确认核对完成」不能点，提示一行点黄色标签', app.inner_text('#summary .fd-hint'))
     asks = app.evaluate('''() => [...document.querySelector('.line .low-ask').querySelectorAll('button')].map(b => b.textContent + '|' + (b.title ? 'tip' : ''))''')

@@ -209,19 +209,20 @@
 
   // ── 筛选 ──
   // 「核对商品」一张列表（用户 2026-10-07：不再分待定 / 个人 / 实验室三个视图来回切）：
-  // 待定的、待确认是否低值品的排最前，其次自动判断、还没确认的，再是已确认的，退款的放最后；同一组里新的在前
-  const rankOf = x => x.ref ? 3 : effCat(x) === 'unsure' || lowAsk(x) ? 0 : S.decisions[x.l.key] ? 2 : 1;
+  // 一律按下单日期排（新的在前）；退款的放最后。待定、待确认是否低值品的不挪位置，整行标黄（用户 2026-10-09：
+  // 「应该先自动判断有一个总表，然后有两种分类的筛选，用户可以验看」，按是否已判断重排会打乱日期顺序）
+  const rankOf = x => x.ref ? 1 : 0;
   // 第 2 步的分类筛选（用户 2026-10-09：筛出全部判为「实验室」或「个人」的，从上往下扫一遍商品图，没错就一次确认）：
-  // 待定 / 实验室 / 个人 / 全部；退款的只在「全部」里。没选过时：有待定选「待定」，否则「实验室」
-  const CATS = ['unsure', 'lab', 'personal', 'all'];
+  // 全部（总表）/ 实验室 / 个人 / 待定（有待定时才显示）；退款的只在「全部」里。没选过时显示「全部」
+  const CATS = ['all', 'lab', 'personal', 'unsure'];
   const SORT_NAME = { unsure: '待定', lab: '实验室', personal: '个人', all: '全部' };
   const inCat = (x, c) => c === 'all' || (!x.ref && effCat(x) === c);
   const unconf = x => !x.ref && effCat(x) !== 'unsure' && S.decisions[x.l.key] !== effCat(x);
   const catRows = c => derived.rows.filter(x => !x.past && inCat(x, c));
   // 这一类还要用户处理的件数：待定是还没判的；实验室 / 个人是自动判断、还没确认的
   const catLeft = c => c === 'unsure' ? catRows('unsure').length : c === 'all' ? 0 : catRows(c).filter(unconf).length;
-  const curCat = () => view.cat || (catRows('unsure').length ? 'unsure' : 'lab');
-  const nextCat = () => ['unsure', 'lab', 'personal'].find(c => catLeft(c) > 0) || 'all';
+  const curCat = () => view.cat || 'all';
+  const nextCat = () => ['lab', 'personal'].find(c => catLeft(c) > 0) || 'all';
   function visibleRows() {
     const q = view.q.trim().toLowerCase(), cat = view.sortStep ? curCat() : 'all';
     return derived.rows.filter(x => {
@@ -574,7 +575,8 @@
     const seg = $('cat-seg'), cat = curCat();
     seg.hidden = inv || !view.sortStep;
     $('list').classList.toggle('is-sort', !inv && view.sortStep);
-    if (!seg.hidden) seg.innerHTML = CATS.map(c => {
+    // 没有待定时不显示「待定」这一格
+    if (!seg.hidden) seg.innerHTML = CATS.filter(c => c !== 'unsure' || c === cat || catRows('unsure').length).map(c => {
       const n = catRows(c).length, left = catLeft(c);
       const tip = c === 'unsure' ? '只看待定的商品（' + n + ' 件），按 1 / 2 逐件判断'
         : c === 'all' ? '看全部商品（' + n + ' 件，含退款、交易关闭的）'

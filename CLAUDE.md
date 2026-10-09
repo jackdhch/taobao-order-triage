@@ -75,7 +75,7 @@ js/xlsx-lite.js            零依赖 xlsx/csv 读取（DecompressionStream 解 z
 js/normalize.js            列名别名 → 统一订单结构；一单多件续行合并；抓取数据按订单号合并；退款判断
 js/classify.js             关键词打分 + 同店铺/同商品记忆；classifyAll 两遍扫描（补邮费链接跟随店铺）；suggest 根据手动判断推荐增删词
 js/app.js                  界面、状态（localStorage）、读取订单、导入订单表、键盘操作。界面是一条线的 4 步（flowSteps：每步 title / hint / acts，
-                           选中的步骤决定下方显示商品列表还是发票表）；核对商品一张列表（visibleRows 待定排最前），上方分类筛选 view.cat（待定 / 实验室 / 个人 / 全部），主按钮「这 N 件都是…，确认」= confirmCat，「全部」时「确认核对完成」= confirmSort；
+                           选中的步骤决定下方显示商品列表还是发票表）；核对商品一张列表（visibleRows 按下单日期排，待定标黄不挪位置），上方分类筛选 view.cat（全部 / 实验室 / 个人 / 待定，默认全部），主按钮「这 N 件都是…，确认」= confirmCat，「全部」时「确认核对完成」= confirmSort；
                            处理发票一个按钮 runInvoice：九段依次做（stage：读订单详情 → 刷新开票记录 → 读旺旺回复 → 下载并核对 PDF → confirmGroups 一次确认
                            （插件做不了的「需处理」单也列出）→ doAsk / runCards / doVip / doApply），每段有超时、超时或出错写明原因接着下一段，
                            进度（第几段、等什么、已等多久，带「停止」= stopRun）和结束时的逐段总结在步骤条下方（statusBar）；每天自动刷新（J.quiet）遇到用户操作就停（freeForUser），手动的一轮做完记 autoLast；每段写进 autoLog（alog，后台排队追加，最多 300 条，不进备份）；

@@ -248,7 +248,7 @@ def read_section(ctx, base, eid, mock, watch, tmp):
 
 
 def sort_filter_section(app, STORE):
-    """第 2 步「核对商品」的分类筛选（用户 2026-10-09）：待定 / 实验室 / 个人 / 全部，主按钮随筛选一次确认这一类"""
+    """第 2 步「核对商品」的分类筛选（用户 2026-10-09）：全部（总表，按下单日期）/ 实验室 / 个人 / 待定，主按钮随筛选一次确认这一类"""
     print('\n[1b] 核对商品的分类筛选：计数、切换后只剩这一类、一次确认这一类里未确认的、撤销整批、确认完自动切到下一类')
     S = lambda: app.evaluate(f"JSON.parse(localStorage.getItem('{STORE}'))")
     dec0 = S()['decisions']
@@ -259,8 +259,11 @@ def sort_filter_section(app, STORE):
         return [p ? p.textContent : '', !!(p && p.classList.contains('auto')), l.classList.contains('is-ref')]; })""")
     btn = lambda: app.evaluate("(() => { const b = document.querySelector('#summary .flow-acts .btn.primary'); return b ? [b.textContent, b.disabled, b.title, b.dataset.flow] : null; })()")
     sg = seg()
-    check(app.is_visible('#cat-seg') and [x[0] for x in sg] == ['unsure', 'lab', 'personal', 'all'] and sg[0][2],
-          '第 2 步列表上方一排「待定 / 实验室 / 个人 / 全部」，有待定时默认选「待定」', sg)
+    check(app.is_visible('#cat-seg') and [x[0] for x in sg] == ['all', 'lab', 'personal', 'unsure'] and sg[0][2],
+          '第 2 步列表上方一排「全部 / 实验室 / 个人 / 待定」，默认是「全部」总表', sg)
+    times = app.evaluate("[...document.querySelectorAll('#list .order:not(:has(.line.is-ref))')].map(o => (o.querySelector('.o-date, .date, .ohead') || o).textContent.match(/\d{4}-\d{2}-\d{2}/)?.[0] || '')")
+    check(times and times == sorted(times, reverse=True), '总表按下单日期排，新的在前（待定的不挪到最前）', times[:8])
+    app.click('#cat-seg [data-cat="unsure"]'); app.wait_for_timeout(200)
     check(len({x[3] for x in sg}) == 4, '四个筛选颜色各不相同（待定黄、实验室蓝、个人粉）', [x[3] for x in sg])
     n = {x[0]: x[1] for x in sg}
     ls = lines()
@@ -287,7 +290,9 @@ def sort_filter_section(app, STORE):
     check(len(newly) == n_conf and all(d1[k] == 'lab' for k in newly) and set(newly) <= set(lab_keys),
           f'点确认：只把当前筛选里 {n_conf} 件未确认的写成「实验室」，个人、待定的不动', (len(newly), n_conf))
     cur = [x[0] for x in seg() if x[2]]
-    check(cur == ['unsure'], '确认完自动切到下一个还有未确认的分类（还有待定，切到「待定」）', cur)
+    # 确认成实验室后，「同店默认实验室」可能让同店另一件变成新的自动判断（未确认），这时留在「实验室」显示它
+    left_lab = [l for l in lines() if l[1]] if cur == ['lab'] else []
+    check(cur in (['personal'], ['all']) or (cur == ['lab'] and left_lab), '确认完自动切到下一个还有未确认的分类（确认引出同店新判断时留在「实验室」，否则去「个人」或「全部」）', (cur, left_lab))
     app.keyboard.press('Control+z'); app.wait_for_timeout(300)
     d2 = S()['decisions']
     check(d2 == moved and [x[0] for x in seg() if x[2]] == ['lab'], 'Ctrl+Z 一次撤销整批确认，回到「实验室」', [k for k in set(d2) | set(moved) if d2.get(k) != moved.get(k)][:5])
@@ -303,6 +308,10 @@ def sort_filter_section(app, STORE):
     app.click('#cat-seg [data-cat="unsure"]'); app.wait_for_timeout(200)
     for _ in range(n['unsure']):
         app.keyboard.press('1'); app.wait_for_timeout(150)
+    for _ in range(4):                                     # 判完待定可能引出同店的新自动判断：逐类确认，直到回到「全部」
+        cur = [x[0] for x in seg() if x[2]]
+        if cur == ['all'] or not (b := btn()) or b[1]: break
+        app.click('#summary [data-flow="sort-cat"]'); app.wait_for_timeout(300)
     cur = [x[0] for x in seg() if x[2]]
     st = app.evaluate("[...document.querySelectorAll('.flow li')][1].className")
     check(cur == ['all'] and 'is-done' in st, '待定都判完、各类都已确认：自动切到「全部」，第 2 步完成', (cur, st))
@@ -378,8 +387,8 @@ def run(p, base, tmp):
     step0 = lambda: app.get_attribute('.flow li[data-step="0"]', 'title') or ''
     check(f'有图 0 / {all_lines} 件' in step0(), f'第 1 步的悬停说明显示「有图 0 / {all_lines} 件」', step0())
     check(app.get_attribute('.flow li.is-cur', 'data-step') == '1' and '核对商品' in app.inner_text('.flow li.is-cur'), '导入后当前步骤是「核对商品」')
-    first = app.evaluate("(() => { const l = document.querySelector('#list .line'); return l ? [l.className, l.innerText] : null; })()")
-    check(first and 'is-uns' in first[0] and '待定' in first[1], '商品列表里待定的排在最前，整行标黄、带「待定」标签', first)
+    uns = app.evaluate("[...document.querySelectorAll('#list .line.is-uns')].map(l => l.innerText.includes('待定'))")
+    check(uns and all(uns), '商品列表里待定的整行标黄、带「待定」标签（位置按下单日期，不挪到最前）', uns)
     sort_filter_section(app, STORE)
 
     print('\n[2] 新版模拟页：主页排读取任务，订单页自动翻页读取（订单、图片、退款）')
