@@ -157,8 +157,8 @@ function showBadge(p) {
 chrome.storage.local.get('invPending').then(r => showBadge(r.invPending));
 chrome.storage.onChanged.addListener((ch, area) => { if (area === 'local' && ch.invPending) showBadge(ch.invPending.newValue); });
 
-// 每天自动处理一次发票（设置里打开；浏览器开着时才会跑）：每小时看一眼，过了设定的钟点、今天还没跑过，
-// 就打开分拣主页（已开着就在它上面）带 #auto，主页读完数据后自己点「一键处理发票」
+// 每天自动刷新发票情况（设置里打开；浏览器开着时才会跑）：每小时看一眼，过了设定的钟点、今天还没跑过，
+// 就打开分拣主页（已开着就在它上面）带 #auto，主页读完数据后自己刷新发票情况并下载（不提交、不发送）
 chrome.alarms.create('daily', { periodInMinutes: 60 });
 chrome.alarms.onAlarm.addListener(async a => {
   if (a.name !== 'daily') return;
@@ -187,6 +187,38 @@ async function focusHome() {
   await chrome.tabs.update(c.tabId, { active: true });
   if (c.windowId != null && c.windowId >= 0) await chrome.windows.update(c.windowId, { focused: true }).catch(() => {});
 }
+// 淘宝页面上的「← 订单分拣」（extension/home.js）：切回已打开的主页，没有就新开（用户 2026-10-08）。
+// focusMe：主页自己要到前台（「自动处理发票」弹确认清单、处理结束时；主页可能开了好几个，要切的是发消息的那一个）
+chrome.runtime.onMessage.addListener((m, sender, reply) => {
+  if (m && m.type === 'goHome') { focusHome().then(() => reply(true), e => reply(String(e))); return true; }
+  if (m && m.type === 'focusMe' && sender.tab) {
+    chrome.tabs.update(sender.tab.id, { active: true })
+      .then(() => sender.tab.windowId >= 0 ? chrome.windows.update(sender.tab.windowId, { focused: true }) : null)
+      .then(() => reply(true), e => reply(String(e)));
+    return true;
+  }
+});
+
+// 本机调试日志 autoLog（主页「自动处理发票」每段的开始 / 结束 / 超时 / 出错，淘宝页面上的扫描、下载出错等）：
+// 几个页面同时写会互相盖掉，统一在这里排队追加，只留最近 300 条。界面上没有入口；不进备份（app.js backupData、BACKUP_SKIP）
+let logChain = Promise.resolve();
+const p2 = n => String(n).padStart(2, '0');
+const stamp = d => d.getFullYear() + '-' + p2(d.getMonth() + 1) + '-' + p2(d.getDate()) + ' ' + p2(d.getHours()) + ':' + p2(d.getMinutes()) + ':' + p2(d.getSeconds());
+chrome.runtime.onMessage.addListener((m, sender, reply) => {
+  if (!(m && m.type === 'autoLog' && m.e && typeof m.e === 'object')) return;
+  const url = (sender && (sender.url || (sender.tab && sender.tab.url))) || '';
+  let src = 'home';
+  if (!url.startsWith(chrome.runtime.getURL(''))) { try { src = new URL(url).host; } catch (e) { src = '?'; } }
+  const now = new Date();
+  logChain = logChain.then(async () => {
+    const { autoLog } = await chrome.storage.local.get('autoLog');
+    const list = Array.isArray(autoLog) ? autoLog : [];
+    list.push(Object.assign({ t: now.getTime(), at: stamp(now), src }, m.e));
+    await chrome.storage.local.set({ autoLog: list.slice(-300) });
+  }).then(() => reply(true), e => reply(String(e)));
+  return true;
+});
+
 chrome.runtime.onMessage.addListener((m, sender, reply) => {
   if (!(m && (m.type === 'readClaim' || m.type === 'readDone') && sender.tab)) return;
   readChain = readChain.then(async () => {

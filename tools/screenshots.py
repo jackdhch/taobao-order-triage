@@ -545,7 +545,7 @@ def gif_invoice(page, home):
             r.scroll_to(y, 360)
         r.snap(hold)
 
-    step('同步开票记录：已提交平台申请',
+    step('刷新发票情况：已提交平台申请',
          '''() => chrome.storage.local.get('invSync').then(({ invSync }) => { invSync.rows['示例-1011'] = { tab: 'applying', progress: '申请中', date: '2026-10-05' };
              return chrome.storage.local.set({ invSync }); })''')
     step('商家开具后：已开票，待下载',

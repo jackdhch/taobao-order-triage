@@ -133,7 +133,8 @@ def run(p, tmp):
                  'chatQueue': {'at': 1, 'kind': 'compose', 'items': []}, 'chatAfter': 1, 'dlJobs': [{'id': 'j1', 'no': '5195000000000000002', 'kind': 'platform'}],
                  'invJobs': {'sync': 1}, 'invClaim_sync': {'at': 1, 'by': 'x'}, 'invClaim_scan': {'at': 1, 'by': 'y'}, 'otReload_sync': 1,
                  'jobTabs': {'https://i.taobao.com/x': 12}, 'nickWant': {'5195000000000000002': 1}, 'vipJob': {'at': 1, 'orders': []},
-                 'olderDone': {'from': '2026-01-01', 'at': 1}, 'autoLast': 'Mon Jan 01 2001'}
+                 'olderDone': {'from': '2026-01-01', 'at': 1}, 'autoLast': 'Mon Jan 01 2001',
+                 'autoLog': [{'t': 1, 'at': '2001-01-01 00:00:00', 'src': 'home', 'run': 'x', 'stage': 'sync', 'ev': 'start', 'msg': ''}]}
     app.evaluate("""t => chrome.storage.local.set(Object.assign({ dlDone: { '5195000000000000003': [{ file: '2026-08-03_8.00_某某虚构百货_5195000000000000003.pdf', path: '', at: 1, from: 'platform', src: '', url: '' }] },
         askSent: { '5195000000000000002': 1759000000000 }, autoDaily: { on: true, hour: 23 } }, t))""", TRANSIENT)
     app.wait_for_timeout(500)
@@ -156,6 +157,7 @@ def run(p, tmp):
     check((bk.get('localStorage') or {}).get(STORE) == ls0 and all(k.startswith('orderTriage.') for k in bk.get('localStorage') or {}),
           '主页数据（localStorage）原样存成字符串，只带本插件的键')
     check(bk.get('storage', {}).get('dlDone') == st0['dlDone'] and 'dlJobs' in bk.get('storage', {}), '扩展存储整份存下（chrome.storage.local.get(null)）')
+    check('autoLog' in st0 and 'autoLog' not in bk.get('storage', {}), '本机调试日志 autoLog 不进备份')
 
     msgs = []
     def on_dialog(d):
@@ -200,6 +202,47 @@ def run(p, tmp):
     check(st1.get('autoLast') == app.evaluate('new Date().toDateString()'), '每日自动处理记成今天已运行，恢复后不会马上自动开始', st1.get('autoLast'))
     check(app.evaluate("document.querySelectorAll('.flow li').length") == 4 and str(n_orders) + ' 单' in app.inner_text('#summary'), '恢复后主页正常显示')
     app.remove_listener('dialog', on_dialog)
+
+    print('\n[5b] 自动处理发票：某段超时也接着做完；「需处理」只有一单（插件做不了的）时清单照样弹出并列出它；结束后刷新界面')
+    # 三单都是实验室的：1 抬头不符（红，插件做不了，只能用户去换开）、2 刚申请淘宝开票（等待中）、3 已下载。淘宝页面全部打不开（离线），
+    # 「刷新淘宝开票记录」这段把时限改成 4 秒，必然超时；之后几段照常做完
+    app.evaluate('''() => { const S = JSON.parse(localStorage.getItem('orderTriage.app.v1'));
+        for (const o of S.orders) for (const l of o.lines) S.decisions[l.key] = 'lab';
+        S.haveIdx = []; localStorage.setItem('orderTriage.app.v1', JSON.stringify(S)); }''')
+    today = app.evaluate("new Date().toISOString().slice(0, 10)")
+    app.evaluate('''t => chrome.storage.local.set({ invSync: { at: Date.now() - 864e5, rows: {
+        '5195000000000000001': { no: '5195000000000000001', tab: 'issued', title: '企业-某某虚构公司', type: '电子普通发票', date: '2026-08-05', amount: 19.9, canDownload: true },
+        '5195000000000000002': { no: '5195000000000000002', tab: 'applying', title: '企业-某大学', type: '电子普通发票', date: t, progress: '申请中' } } },
+        chatScan: null, autoLog: [] })''', today)
+    app.reload(); app.wait_for_selector('#main:not([hidden])'); app.wait_for_timeout(800)
+    app.click('.flow li[data-step="2"]'); app.wait_for_timeout(300)
+    red = app.evaluate("[...document.querySelectorAll('.inv-table .st.tone-bad')].map(s => s.closest('tr').innerText.match(/\\d{19}/)[0])")
+    check(red == ['5195000000000000001'], '准备好的数据：发票表里只有一单标红（抬头不符）', red)
+    app.evaluate('() => { __otDev.tmo = { sync: 4000 }; }')
+    app.click('#summary [data-flow="inv-run"]')
+    prog = wait_until(app, lambda: (t := app.inner_text('#summary')) and '第 2 / 9 段：刷新淘宝开票记录' in t and re.search(r'已等 \d+ 秒', t) and t, 15) or ''
+    check(bool(prog), '处理中显示「第 2 / 9 段：刷新淘宝开票记录 · 等什么 · 已等几秒」', app.inner_text('#summary')[:200])
+    dlg = wait_until(app, lambda: app.locator('#dlg-list[open]').count() and app.inner_text('#dlg-list'), 40) or ''
+    check('需手动处理' in dlg and '5195000000000000001' in dlg and '换开发票' in dlg and app.inner_text('#list-ok') == '知道了' and not app.is_visible('#list-cancel'),
+          '只有一单需处理、而且插件做不了：清单照样弹出，列出这一单和该点的操作（「知道了」）', dlg[:300])
+    if dlg:
+        app.click('#list-ok')
+    fin = wait_until(app, lambda: (t := app.inner_text('#summary')) and '发票处理完成' in t and t, 30) or app.inner_text('#summary')
+    check('发票处理完成' in fin and '② 刷新淘宝开票记录：超时：4 秒内未读到开票记录' in fin and '沿用上次' in fin and '⑨ 申请平台开票' in fin,
+          '「刷新淘宝开票记录」超时：写明原因，接着做完后面几段，总结逐段列出结果', fin[:600])
+    check('仍需处理 1 单：某某虚构五金（已开票，抬头不符）' in fin, '总结里列出仍需处理的那一单', fin[:300])
+    dash = app.inner_text('#remind')
+    check(re.search(r'需处理\s*1', dash) and app.locator('.read-bar.busy').count() == 0 and app.locator('#summary .flow-acts button').inner_text() == '自动处理发票',
+          '结束后界面刷新：顶上「需处理 1」，按钮恢复成「自动处理发票」', dash[:200])
+    rb = app.locator('.inv-table tbody tr:has-text("5195000000000000001") button[data-act]')
+    check(rb.count() == 1 and rb.inner_text() == '换开发票', '那一单在发票表里的操作是「换开发票」', rb.count() and rb.inner_text())
+    log = app.evaluate('chrome.storage.local.get("autoLog").then(r => r.autoLog || [])')
+    evs = [(e.get('stage'), e.get('ev')) for e in log]
+    check(('sync', 'timeout') in evs and ('confirm', 'end') in evs and evs[-1] == ('run', 'end') and all(e.get('src') == 'home' for e in log),
+          'autoLog 记下了这一段超时，以及之后各段和结束', evs)
+    tabs = app.evaluate('chrome.tabs.getCurrent().then(t => t.active)')
+    check(tabs, '处理结束后主页切回前台')
+    blocked[:] = [u for u in blocked if 'taobao.com' not in u]      # 上面「自动处理发票」去开的淘宝页面（离线，全被拦下）
 
     print('\n[6] 杂项')
     check(not errors, '页面没有报错', errors)

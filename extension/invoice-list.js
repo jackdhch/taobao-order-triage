@@ -1,6 +1,6 @@
 // 淘宝「我的发票 → 全部发票」页（i.taobao.com/my_itaobao/invoice）
 //
-// 同步：依次读「已开具发票 / 申请中发票 / 未申请」三个标签里每单的抬头、类型、日期、进度，存进扩展存储 invSync，
+// 刷新发票情况：依次读「已开具发票 / 申请中发票 / 未申请」三个标签里每单的抬头、类型、日期、进度，存进扩展存储 invSync，
 //       主页据此算每单发票状态。只点标签、页码和翻页按钮。
 // 下载：主页里点了「下载」的订单排在 dlJobs 里，这里找到那一单点「下载到本地」；下载前告诉后台存成什么名字。
 //
@@ -88,7 +88,7 @@
     try {
       if (!await pageReady()) {
         if (fromJob && await window.otRetryBlank('sync')) return;
-        panel.set('页面未加载完成（淘宝页面偶尔整页空白），请刷新本页后点击「同步开票状态」'); return;
+        panel.set('页面未加载完成（淘宝页面偶尔整页空白），请刷新本页后点击「刷新发票情况」'); window.otLog('sync', 'fail', '页面未加载完成'); return;
       }
       const { invWant, invSync } = await chrome.storage.local.get(['invWant', 'invSync']);
       const since = ((invWant && invWant.since) || '').slice(0, 10);
@@ -112,17 +112,18 @@
         }
         if (ok) okTabs.push(tab);
       }
-      if (!okTabs.length) { panel.set('未能读取任何标签，保留上次同步结果'); if (fromJob) window.otCloseLater(10000); return; }
+      if (!okTabs.length) { panel.set('未能读取任何标签，保留上次结果'); window.otLog('sync', 'fail', '未能读取任何标签'); if (fromJob) window.otCloseLater(10000); return; }
       // 三个标签都读完才整份替换；有标签没读成，就只补新读到的，别把上次的好数据清掉
       const full = okTabs.length === TABS.length;
       const rows = full ? got : Object.assign({}, invSync && invSync.rows, got);
       await chrome.storage.local.set({ invSync: { at: Date.now(), rows, partial: !full } });
-      panel.set((full ? '同步完成' : '仅读取 ' + okTabs.length + ' 个标签，其余保留上次结果') + '：共 ' + Object.keys(rows).length + ' 单开票记录，已送回分拣主页'
+      window.otLog('sync', 'end', (full ? '' : '部分标签，') + Object.keys(rows).length + ' 单');
+      panel.set((full ? '刷新完成' : '仅读取 ' + okTabs.length + ' 个标签，其余保留上次结果') + '：共 ' + Object.keys(rows).length + ' 单开票记录，已送回分拣主页'
         + (fromJob ? '。本页 3 秒后关闭。' : ''));
       if (fromJob) { window.otCloseLater(3000); return; }               // 主页派活开的页：干完就关（用户 2026-10-05：标签页太多）
       await openTab(TABS[0][1]);
     } catch (e) {
-      panel.set('同步出错：' + e.message);
+      panel.set('刷新出错：' + e.message); window.otLog('sync', 'error', e.message);
     }
   });
 
@@ -133,7 +134,7 @@
     if (!jobs.length) { panel.set('没有待下载的发票'); if (fromJob) window.otCloseLater(5000); return; }
     if (!await pageReady() || !await openTab(TABS[0][1])) {
       if (fromJob && await window.otRetryBlank('download')) return;
-      panel.set('页面未加载完成（淘宝页面偶尔整页空白），请刷新本页后点击「下载已开具的发票」'); return;
+      panel.set('页面未加载完成（淘宝页面偶尔整页空白），请刷新本页后点击「下载已开具的发票」'); window.otLog('download', 'fail', '页面未加载完成'); return;
     }
     const left = new Map(jobs.map(j => [j.no, j])), done = [];
     for (let p = 0; p < 60 && left.size; p++) {
@@ -166,12 +167,13 @@
       await sleep(1200);
     }
     await window.otSend({ type: 'jobsDone', ids: done });   // 交给后台统一删，别和旺旺页互相盖
+    window.otLog('download', 'end', '平台发票 ' + done.length + ' / ' + jobs.length + ' 单');
     panel.set('已下载 ' + done.length + ' 单' + (left.size ? '，' + left.size + ' 单在已开具发票中未找到' : '') + (fromJob ? '。本页 8 秒后关闭。' : ''));
     if (fromJob) window.otCloseLater(8000);                        // 留几秒让最后一张下完（下载归浏览器管，关页面不影响已开始的下载）
-  } catch (e) { delete document.documentElement.dataset.otDl; panel.set('下载出错：' + e.message); } });
+  } catch (e) { delete document.documentElement.dataset.otDl; panel.set('下载出错：' + e.message); window.otLog('download', 'error', e.message); } });
 
-  const panel = window.otPanel('我的发票', [['sync', '同步开票状态', '读取已开具、申请中、未申请三类开票记录，送回分拣主页'],
+  const panel = window.otPanel('我的发票', [['sync', '刷新发票情况', '读取已开具、申请中、未申请三类开票记录，送回分拣主页'],
     ['dl', '下载已开具的发票', '下载分拣主页中已排队的平台发票，按订单命名存入「订单分拣-发票」']], id => id === 'sync' ? sync() : download());
-  panel.set('等待分拣主页分配任务；也可点击「同步开票状态」读取开票记录');
+  panel.set('等待分拣主页分配任务；也可点击「刷新发票情况」读取开票记录');
   window.otTakeJob(['sync', 'download'], (kind, fromJob) => kind === 'sync' ? sync(kind, fromJob) : download(kind, fromJob));
 })();

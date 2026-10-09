@@ -127,7 +127,8 @@ details.more > summary::after{content:"▾"; font-size:10px; color:var(--muted)}
 .dc:first-child{border-left:0}
 .dc:hover{background:var(--sunk)}
 .dc .k{font-size:12px; color:var(--muted)}
-.dc .v{font-size:20px; font-weight:650; line-height:1.25; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+/* 行高留足：Windows 上的微软雅黑上下留白比别的字体大，行高太紧时 overflow:hidden 会把字的上沿裁掉 */
+.dc .v{font-size:20px; font-weight:650; line-height:1.4; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
 .dc .v small{font-size:13px; font-weight:500; color:var(--muted)}
 .dc .s{font-size:12px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
 .meter{display:block; height:5px; border-radius:3px; background:var(--sunk); overflow:hidden; margin-top:3px}
@@ -157,6 +158,7 @@ details.more > summary::after{content:"▾"; font-size:10px; color:var(--muted)}
 /* 读取订单、处理发票的进度 / 结果（app.js statusBar）：在步骤条和说明区之间，切换步骤也一直在 */
 .read-bar{display:flex; gap:6px 14px; align-items:center; justify-content:space-between; flex-wrap:wrap; margin:0 0 10px; padding:7px 12px;
           border-radius:8px; background:var(--ok-bg); color:var(--ok-ink); font-size:13px}
+.read-bar > span{white-space:pre-line}
 .read-bar.busy{background:var(--plat-bg); color:var(--plat-ink)}
 .read-bar.bad{background:var(--bad-bg); color:var(--bad-ink)}
 .flow-detail{display:flex; gap:10px 18px; align-items:center; justify-content:space-between; flex-wrap:wrap; padding:2px 2px 0}
@@ -171,7 +173,7 @@ details.more > summary::after{content:"▾"; font-size:10px; color:var(--muted)}
 
 kbd{font-family:var(--mono); font-size:11px; border:1px solid var(--line); border-bottom-width:2px; border-radius:4px; padding:0 5px; background:var(--sunk); color:var(--muted)}
 
-/* 发票栏：图例旁的同步时间 */
+/* 发票栏：图例旁的上次刷新时间 */
 .inv-note{color:var(--muted); font-size:12.5px}
 .inv-note .warn{color:var(--bad-ink)}
 .inv-legend .inv-note{margin-left:auto}
@@ -251,7 +253,10 @@ kbd{font-family:var(--mono); font-size:11px; border:1px solid var(--line); borde
 .inv-table .detail.one{white-space:nowrap; overflow:hidden; text-overflow:ellipsis; overflow-wrap:normal}
 .inv-table .inv-thumb{width:52px; height:52px; object-fit:cover; border-radius:6px; display:block; background:var(--sunk)}
 .inv-table .inv-thumb.ph{display:flex; align-items:center; justify-content:center; font-size:11px; color:var(--faint)}
-.inv-table .acts{display:flex; gap:6px; flex-wrap:wrap}
+/* 操作列：按状态只有一个主要操作；「手动添加发票」是小字链接，不和主要操作抢位置 */
+.inv-table .acts{display:flex; flex-direction:column; align-items:flex-start; gap:5px}
+.inv-table .acts .add{color:var(--muted); font-size:11.5px; cursor:pointer; text-decoration:underline; text-underline-offset:2px}
+.inv-table .acts .add:hover{color:var(--link)}
 .inv-table img.qr{width:120px; height:120px; object-fit:contain; border:1px solid var(--line); border-radius:6px; margin-top:4px}
 .inv-table .st{display:inline-block; padding:1px 9px; border-radius:10px; font-size:12px; font-weight:500; white-space:normal; max-width:100%}
 .tone-ok{background:var(--ok-bg); color:var(--ok-ink)}
@@ -263,8 +268,9 @@ kbd{font-family:var(--mono); font-size:11px; border:1px solid var(--line); borde
 .inv-table button.st{appearance:none; border:0; font:inherit; font-size:12px; font-weight:500; cursor:pointer; text-align:left; white-space:normal; line-height:1.5}
 .inv-table button.st:hover{text-decoration:underline; text-underline-offset:2px}
 .inv-table button.st::after{content:" ›"; opacity:.7}
-/* 状态颜色图例 */
-.inv-legend{display:flex; flex-wrap:wrap; gap:4px 14px; font-size:12px; color:var(--muted); padding:0 0 12px; margin-top:-6px}
+/* 状态颜色图例。不要用负的上外边距往上提：上面的工具条是 sticky、有背景色、层级更高，提上去的那几像素会被它盖住，
+   Windows 上微软雅黑的字身更靠上，每个字的上沿就被裁掉一截（用户 2026-10-08 反馈）。行高也留足，不设固定高度、不裁切 */
+.inv-legend{display:flex; flex-wrap:wrap; gap:4px 14px; font-size:12px; line-height:1.7; color:var(--muted); padding:2px 0 12px}
 .inv-legend span{display:inline-flex; align-items:center; gap:5px; white-space:nowrap; color:var(--text)}
 .inv-legend span:last-child{color:var(--muted)}
 .inv-legend i{width:11px; height:11px; border-radius:3px; display:inline-block}
@@ -360,6 +366,8 @@ footer p{margin:0 0 4px; max-width:90ch}
 <div class="wrap">
   <header class="top">
     <div class="brand"><h1>订单分拣</h1><span>淘宝订单报销整理：实验室采购分拣、发票申请与归档</span></div>
+    <!-- 登录淘宝用（用户 2026-10-08：主页没有打开淘宝的入口，只能自己在地址栏输网址） -->
+    <button class="btn" id="btn-taobao" title="在新标签页打开淘宝「已买到的宝贝」；未登录时会先打开登录页。读取订单、发票和旺旺消息都需要在本浏览器中登录淘宝">打开淘宝</button>
     <!-- 「更多」只放可选功能（用户 2026-10-07：主线一条线，同一件事只有一个入口） -->
     <details class="more" id="more">
       <summary class="btn" title="可选功能：导入以前整理好的发票、导入订单表，备份与恢复数据">更多</summary>
@@ -370,7 +378,7 @@ footer p{margin:0 0 4px; max-width:90ch}
         <button data-pick="backup-file" title="选择以前备份的 JSON 文件，核对后用其覆盖当前全部数据；进行中的任务（申请、发消息、下载等）不恢复">从备份恢复</button>
       </div>
     </details>
-    <button class="btn" id="btn-settings" title="发票抬头、税号、邮箱、消息模板、每日自动处理、关于">设置</button>
+    <button class="btn" id="btn-settings" title="发票抬头、税号、邮箱、消息模板、每天自动刷新发票情况、关于">设置</button>
   </header>
 
   <!-- 选文件用的输入框：都藏起来，由按钮触发 -->
@@ -443,9 +451,9 @@ footer p{margin:0 0 4px; max-width:90ch}
       <label>未开票超过几天请客服督促<input id="remind-days" type="number" min="1" max="60" step="1" title="1～60 天，默认 7 天"></label>
       <label class="wide">索要发票的消息模板<textarea id="inv-tpl" spellcheck="false" title="向卖家索要发票时发送的消息。可用 {订单号} {日期} {金额} {抬头} {税号} {邮箱}；同一店铺多单时自动合并为一条"></textarea></label>
     </div>
-    <h4>每日自动处理</h4>
+    <h4>每天自动刷新发票情况</h4>
     <div class="inv-set">
-      <label class="wide inline" title="浏览器保持开启时生效：同步开票记录、读取卖家回复、下载已开具的发票；不提交申请、不发消息"><input type="checkbox" id="auto-daily"> 每天 <input id="auto-hour" type="number" min="0" max="23" step="1" title="0～23 点"> 点后自动检查并下载发票</label>
+      <label class="wide inline" title="浏览器保持开启时生效：刷新淘宝开票记录、读取卖家回复、下载已开具的发票；不提交申请、不发消息"><input type="checkbox" id="auto-daily"> 每天 <input id="auto-hour" type="number" min="0" max="23" step="1" title="0～23 点"> 点后自动刷新发票情况并下载已开具的发票</label>
     </div>
     <details class="about">
       <summary title="数据和隐私说明">关于</summary>

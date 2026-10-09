@@ -119,6 +119,22 @@ def read_section(ctx, base, eid, mock, watch, tmp):
           '没有读取任务时（用户自己打开订单页），不自动翻页，也不出面板', [m0.evaluate('window.__mock.log'), m0.locator(PANEL).count()])
     m0.close()
 
+    # 顶栏「打开淘宝」（用户 2026-10-08：为了登录只能自己在地址栏输网址）：打开「已买到的宝贝」，不排读取任务
+    tip = a0.get_attribute('#btn-taobao', 'title') or ''
+    with ctx.expect_page(timeout=10000) as pi:
+        a0.click('#btn-taobao')
+    tbo = pi.value
+    ok = wait_until(a0, lambda: 'buyertrade.taobao.com/trade/itemlist/list_bought_items.htm' in tbo.url and tbo, 10)
+    check(bool(ok) and '登录' in tip and store(a0, 'readJob') is None, '顶栏「打开淘宝」打开「已买到的宝贝」（悬停说明写明未登录会先到登录页），不自动读取', [tbo.url, tip])
+    tbo.wait_for_timeout(1500)
+    hb = tbo.locator('#ot-home')
+    check(hb.count() == 1 and hb.inner_text() == '← 订单分拣' and tbo.locator(PANEL).count() == 0, '淘宝订单页右上角有小按钮「← 订单分拣」（不是大面板）')
+    if hb.count():
+        hb.click()
+        back = wait_until(a0, lambda: a0.evaluate('chrome.tabs.getCurrent().then(t => t.active)'), 10)
+        check(bool(back), '点「← 订单分拣」切回已打开的主页')
+    tbo.close()
+
     a0.click('#empty [data-guide="read"]')
     a0.wait_for_selector('#dlg-read[open]')
     check(a0.locator('#dlg-read input').count() == 1, '读取窗口只有一个问题：上次报销到哪天（没有「读取全部订单」等分支）')

@@ -20,7 +20,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 from playwright.sync_api import sync_playwright
 
@@ -67,6 +67,21 @@ CONV_OPEN = {'某某虚构电子元器件专营店', '某某虚构传感器店',
 PAGE_OK = re.compile(r'^(已开具发票|申请中发票|未申请|下一页|上一页|\d+|下载到本地)$')
 
 F_HINT = 'F 不对多半和上面「二维码图片」那条是同一个原因'
+# 发票栏图例和小标签有没有被裁字：图例不能被上面 sticky 的工具条盖住（没有负外边距），图例里没有裁切；
+# 主页上设了 overflow 的元素，文字高度不能超过它自己的高度
+CLIP_JS = '''() => { const out = [], lg = document.getElementById('inv-legend'), bar = document.getElementById('bar');
+    window.scrollTo(0, 0);
+    const b = bar.getBoundingClientRect(), l = lg.getBoundingClientRect();
+    if (l.top < b.bottom - 0.5) out.push('图例顶部 ' + l.top.toFixed(1) + ' 在工具条底部 ' + b.bottom.toFixed(1) + ' 之上');
+    if (parseFloat(getComputedStyle(lg).marginTop) < 0) out.push('图例的上外边距是负的');
+    for (const s of lg.querySelectorAll('span')) { if (!s.textContent.trim()) continue; const r = s.getBoundingClientRect();
+      const hit = document.elementFromPoint(r.left + Math.min(r.width / 2, 30), r.top + 1);
+      if (!hit || !lg.contains(hit)) out.push(s.textContent.trim() + '：上沿被 ' + (hit ? (hit.id || hit.className || hit.tagName) : '空白') + ' 盖住'); }
+    for (const el of [lg, ...lg.querySelectorAll('*')]) { const cs = getComputedStyle(el); if (cs.overflowY !== 'visible') out.push(el.tagName + ' 裁切 overflow=' + cs.overflowY); }
+    for (const el of document.querySelectorAll('#main *, header *')) { const cs = getComputedStyle(el);
+      if (cs.overflowY === 'visible' || !el.textContent.trim() || !el.offsetParent || el.matches('.tbl-wrap, .list, .ask-list')) continue;
+      if (el.scrollHeight > el.clientHeight + 1) out.push((el.className || el.tagName) + '：文字高 ' + el.scrollHeight + '，框高 ' + el.clientHeight); }
+    return out; }'''
 fails = []
 
 
@@ -284,6 +299,8 @@ def run(p, tmp):
           and [k['time'] for k in e.get('asks', [])] == ['2026-08-06 09:30:00'] and [k['nos'] for k in e.get('asks', [])] == [[NO['E']]] and e.get('first') == '2026-07-20 10:00:00' and e.get('orders') == [NO['E']],
           '长会话往上滚到订单表最早日期之前：认出要发票的消息，只收之后卖家发的发票文件（之前发的驱动说明不算），读到右侧订单号',
           {k: e.get(k) for k in ('first', 'asks', 'files', 'orders')})
+    check(not e.get('images') and not e.get('cards'), '卖家发票文件后面那张「安全提醒：检测到外部链接」系统卡片：不当成图片、不当成开票卡片，扫描照常读完',
+          {k: e.get(k) for k in ('images', 'cards')})
     g = convs.get('某某虚构碳纤维加工', {})
     check(not g.get('images') and len(g.get('email', [])) == 1, '卖家推的商品卡片图片不当成二维码；要邮箱的话认出来了',
           {k: g.get(k) for k in ('images', 'email')})
@@ -293,8 +310,15 @@ def run(p, tmp):
           f'会命中外层 .message-item-line，所有图片都被滤掉）')
     app.wait_for_timeout(500)
     rows = check_status(AFTER_SCAN, '扫描后主页状态：E 卖家已发送文件，F 图片（二维码），G 要求提供邮箱，I 已向卖家索要等回复，H 仍需向卖家索要', F_HINT)
-    check(not rows.get(NO['E'], {}).get('btns') and not rows.get(NO['A'], {}).get('btns'),
-          '发票表里没有逐单的下载按钮（下载由「自动处理发票」完成）', {k: rows.get(NO[k], {}).get('btns') for k in 'AE'})
+    # 「操作」列按状态只有一个主要操作（用户 2026-10-08）；I 单等了 7 天以上，所以是「找客服督促」而不是「催卖家」
+    want_acts = {'A': '下载', 'B': '换开发票', 'C': '找客服督促', 'D': '申请开票', 'E': '下载', 'F': '下载', 'G': '回复邮箱', 'H': '索要发票', 'I': '找客服督促'}
+    acts = {k: rows.get(NO[k], {}).get('btns') for k in LAB}
+    check(all(acts[k] == [v] for k, v in want_acts.items()), '「操作」列每行只有一个主要操作：待下载 → 下载，抬头不符 → 换开发票，已申请 / 超期 → 找客服督促，可平台申请 → 申请开票，需索要 → 索要发票',
+          {k: (acts[k], want_acts[k]) for k in LAB if acts[k] != [want_acts[k]]})
+    add = app.evaluate("[...document.querySelectorAll('.inv-table tbody tr')].map(tr => { const a = tr.querySelector('.acts .add'); return a ? [a.textContent.trim(), a.className, getComputedStyle(a).fontSize] : null; })")
+    check(add and all(a and a[0] == '手动添加发票' and 'btn' not in a[1] and float(a[2][:-2]) < 13 for a in add), '「手动添加发票」降为每行的小字链接，不和主要操作抢位置', add[:2])
+    pb = app.evaluate("no => { const tr = [...document.querySelectorAll('.inv-table tbody tr')].find(tr => tr.innerText.includes(no)); return tr.querySelector('.st').tagName; }", NO['B'])
+    check(pb == 'SPAN', '「抬头不符」的状态标签不再可点：和操作列的「换开发票」打开的是同一个页面，只留一个入口', pb)
     # 三种「等待」状态颜色各不相同，标签可点、悬停说明写着去哪
     pill = lambda k: app.evaluate("no => { const tr = [...document.querySelectorAll('.inv-table tbody tr')].find(tr => tr.innerText.includes(no)); const s = tr && tr.querySelector('.st'); "
                                   "return s ? { cls: s.className, tag: s.tagName, title: s.title, bg: getComputedStyle(s).backgroundColor } : {}; }", NO[k])
@@ -304,6 +328,20 @@ def run(p, tmp):
     check(pc.get('tag') == 'BUTTON' and '发票详情' in pc.get('title', '') and pi.get('tag') == 'BUTTON' and '旺旺' in pi.get('title', ''),
           '两个状态标签都可点：申请中 → 发票详情页，已索要 → 旺旺聊天（悬停说明写明去处）', (pc.get('title'), pi.get('title')))
     check(app.locator('#inv-legend:not([hidden])').count() == 1 and '已由淘宝客服督促' in app.inner_text('#inv-legend'), '发票栏顶上有颜色图例')
+    # 图例文字不被裁：Windows 上微软雅黑的字身靠上，以前图例用负的上外边距贴到 sticky 工具条下面，每个字的上沿被盖掉一截（用户 2026-10-08）
+    clip = app.evaluate(CLIP_JS)
+    check(not clip, '颜色图例的文字完整显示：没被上面的工具条盖住，没有负外边距、固定高度或裁切；带 overflow 的小标签文字也没被裁', clip)
+    # 换成 Windows 的微软雅黑（本机装了才有），再换一种上下留白故意放大的字体，各看一遍
+    for name, css in (('微软雅黑', 'body,button,input{font-family:"Microsoft YaHei","Microsoft YaHei UI",sans-serif!important}'),
+                      ('上下留白放大的字体', '@font-face{font-family:OtTall;src:local("Microsoft YaHei"),local("DejaVu Sans"),local("Noto Sans");ascent-override:130%;descent-override:45%}'
+                                           ' body,button,input{font-family:OtTall,sans-serif!important}')):
+        app.add_style_tag(content='/*ot-font*/' + css)
+        app.wait_for_timeout(300)
+        clip = app.evaluate(CLIP_JS)
+        check(not clip, f'换成{name}后，图例和小标签的文字仍完整显示', clip)
+        app.evaluate("document.querySelectorAll('style').forEach(s => { if (s.textContent.includes('ot-font')) s.remove(); })")
+    note = app.inner_text('#inv-note')
+    check(note.startswith('上次刷新 ') and '同步' not in app.inner_text('body'), '措辞：发票栏右侧写「上次刷新 时间」，界面上不再出现「同步」', note)
 
     by_url = [u for pg in ctx.pages if '/app/im/' in pg.url for fr in pg.frames if '/chat-core/' in fr.url for u in (fr.evaluate('window.__mock.byUrl || []'))]
     check('某某虚构碳纤维加工' in by_url or any('碳纤维' in k for k in (store('chatScan') or {}).get('convs', {})),
@@ -392,7 +430,10 @@ def run(p, tmp):
     app.bring_to_front()
     app.evaluate("() => { window.__dlgN = 0; const o = HTMLDialogElement.prototype.showModal; HTMLDialogElement.prototype.showModal = function () { if (this.id === 'dlg-list') window.__dlgN++; return o.call(this); }; }")
     check(app.locator('#summary .flow-acts button').count() == 1 and app.inner_text('#summary .flow-acts') == '自动处理发票', '「处理发票」这一步只有一个按钮「自动处理发票」', app.inner_text('#summary .flow-acts'))
+    t_run = app.evaluate('Date.now()')
     app.click('#summary [data-flow="inv-run"]')
+    prog = wait_until(app, lambda: (t := app.inner_text('#summary')) and re.search(r'第 \d / 9 段：刷新淘宝开票记录 · .+ · 已等 \d+ 秒', t) and t, 60) or app.inner_text('#summary')
+    check(bool(re.search(r'第 \d / 9 段：刷新淘宝开票记录 · .+ · 已等 \d+ 秒', prog)), '处理中步骤条下方显示分段进度：第几段、在等什么、已等多久', prog[:300])
     s1 = wait_until(app, lambda: (v := at('invSync')) != s0 and v, 120)
     check(bool(s1), '① 同步发票状态：写回了新的 invSync')
     c1 = wait_until(app, lambda: (v := at('chatScan')) != c0 and v, 180)
@@ -402,9 +443,25 @@ def run(p, tmp):
     heads = app.evaluate("[...document.querySelectorAll('#list-rows h4.grp')].map(h => h.textContent)")
     check(bool(dlg) and heads and any('向卖家索要发票' in h for h in heads) and any('申请平台开票' in h for h in heads),
           '③ 要对外提交、发送的合成一张清单，分组列出（向卖家索要、平台申请等）', heads)
+    check(any(h.startswith('需手动处理') for h in heads) and NO['B'] in dlg and '换开发票' in dlg,
+          '插件做不了的「需处理」订单（抬头不符的 B）也列在清单里，写明该点哪个操作', heads)
     app.click('#list-cancel')
     fin = wait_until(app, lambda: (t := app.inner_text('#summary')) and '发票处理完成' in t and t, 120) or app.inner_text('#summary')
     check('发票处理完成' in fin, '取消清单后只做下载，处理结束后步骤条下方写明结果', fin[:300])
+    lines = [l for l in fin.split('\n') if re.match(r'^[①-⑨] ', l)]
+    check([l.split('：')[0][2:] for l in lines] == ['读取订单详情', '刷新淘宝开票记录', '读取卖家旺旺回复', '下载已开具的发票', '确认对外操作', '向卖家索要发票', '按开票入口申请', '请淘宝客服督促', '申请平台开票']
+          and '已取消' in lines[4], '总结逐段列出 9 段的结果（确认清单那段写明已取消）', lines)
+    check('仍需处理' in fin and '某某虚构电池配件' in fin, '总结写明仍需处理的订单（抬头不符的 B）', fin[:300])
+    log = app.evaluate('chrome.storage.local.get("autoLog").then(r => r.autoLog || [])')
+    mine = [e for e in log if e.get('t', 0) >= t_run and e.get('src') == 'home']
+    run_id = mine[0].get('run') if mine else None
+    evs = [(e.get('stage'), e.get('ev')) for e in mine]
+    check(mine and all(e.get('run') == run_id and re.fullmatch(r'\d{4}-\d\d-\d\d \d\d:\d\d:\d\d', e.get('at', '')) for e in mine)
+          and evs[0] == ('run', 'start') and evs[-1] == ('run', 'end') and ('sync', 'start') in evs and ('sync', 'end') in evs and ('scan', 'end') in evs
+          and ('confirm', 'end') in evs and all('ms' in e for e in mine if e.get('ev') in ('end', 'skip', 'timeout')) and len(log) <= 300,
+          '本机调试日志 autoLog：每段开始 / 结束都记下（时间戳、本次编号、用时），最多 300 条', evs)
+    check(any(e.get('src') == 'market.m.taobao.com' and e.get('stage') == 'scan' for e in log if e.get('t', 0) >= t_run), '旺旺页读完回复也写了一条 autoLog',
+          [e for e in log if e.get('src') != 'home'][-3:])
     check(app.evaluate('window.__dlgN') == 1, '整个过程只弹出一次确认清单', app.evaluate('window.__dlgN'))
     sent = [s for pg in ctx.pages for fr in pg.frames if '/chat-core/' in fr.url for s in fr.evaluate('window.__mock.sent')]
     check(not sent and not [pg for pg in ctx.pages if 'batchInvoice' in pg.url or 'alimebot' in pg.url], '取消后没有发消息、没有打开批量开票页和客服页', sent)
@@ -515,6 +572,27 @@ def run(p, tmp):
     fin = wait_until(app, lambda: (t := app.inner_text('#summary')) and '发票处理完成' in t and t, 120) or ''
     check('索要发票' in fin and not [pg for pg in ctx.pages if 'batchInvoice' in pg.url or 'alimebot' in pg.url], '结果写明向卖家索要了；没勾的平台申请、客服督促没有执行', fin[:300])
 
+    print('\n[8d] 发票表里点「催卖家」（已向卖家索要、还没超过 7 天）：打开这家的旺旺会话，填好一句催开票的话，不发送')
+    for pg in [pg for pg in ctx.pages if '/app/im/' in pg.url]: pg.close()
+    app.bring_to_front(); app.reload(); app.wait_for_timeout(1500)
+    app.click('.flow li[data-step="2"]'); app.wait_for_timeout(500)
+    nb = app.locator(f'.inv-table tbody tr:has-text("{NO["H"]}") button[data-act]')
+    check(nb.count() == 1 and nb.inner_text() == '催卖家' and '不发送' in (nb.get_attribute('title') or ''), '刚索要过的轴承这一单：操作是「催卖家」，悬停说明写明只填不发',
+          nb.count() and nb.inner_text())
+    nb.click()
+    got = wait_until(app, lambda: filled('某某虚构轴承'), 25)
+    check(bool(got) and NO['H'] in got[1] and '的发票麻烦尽快开一下' in got[1] and TAX in got[1] and '开好直接发 PDF 到这个窗口' in got[1],
+          '输入框里填好了催促的话（订单号、抬头税号），不是首次索要的那条', got and got[1])
+    if got:
+        fr = got[0]
+        pnl = wait_until(app, lambda: '已填好催促消息，请核对后点发送' in (t := fr.inner_text('div[style*="2147483647"]')) and t, 10)
+        check(bool(pnl), '旺旺页面板提示「已填好催促消息，请核对后点发送」', fr.inner_text('div[style*="2147483647"]'))
+        fr.page.wait_for_timeout(1500)
+        check('点了发送' not in fr.evaluate('window.__mock.sent') and not [p for p in (fr.evaluate('window.__mock.posted || []')) if '尽快开一下' in p['text']],
+              '插件没有替用户点「发送」')
+    app.evaluate('chrome.storage.local.remove("chatQueue")')
+    for pg in [pg for pg in ctx.pages if '/app/im/' in pg.url]: pg.close()
+
     print('\n[9] 旺旺只留一个聊天页：新开的把旧的关掉；剩下的「连接断开」就自己刷新')
     for pg in [pg for pg in ctx.pages if '/app/im/' in pg.url]: pg.close()
     a = ctx.new_page(); a.goto('https://market.m.taobao.com/app/im/chat/index.html'); a.wait_for_timeout(2500)
@@ -584,6 +662,17 @@ def run(p, tmp):
     pnl = (got or core()).inner_text('div[style*="2147483647"]')
     check('已点「提交投诉」' in pnl and '已回复「OK」' in pnl, '卡片上写明回了 OK、点了提交投诉', pnl)
 
+    print('\n[12b] 发票表里某一单点「找客服督促」：只为这一单打开官方客服、转人工后发这一单的督促（点了按钮就算确认这一单）')
+    app.bring_to_front(); app.click('.flow li[data-step="2"]'); app.wait_for_timeout(500)
+    old = {id(pg) for pg in ctx.pages if 'alimebot' in pg.url}
+    vb = app.locator(f'.inv-table tbody tr:has-text("{NO["C"]}") button[data-act]')
+    check(vb.count() == 1 and vb.inner_text() == '找客服督促', '已申请淘宝开票（督促过）的 C 单：操作是「找客服督促」', vb.count() and vb.inner_text())
+    vb.click()
+    pg2 = wait_until(app, lambda: next((pg for pg in ctx.pages if 'alimebot' in pg.url and id(pg) not in old), None), 20)
+    done = wait_until(app, lambda: pg2 and [t for t in pg2.evaluate('window.__mock.sent') if '督促' in t], 60) or []
+    check(len(done) == 1 and NO['C'] in done[0], '新开的客服页先转人工，再只发了 C 这一单的督促', pg2 and pg2.evaluate('window.__mock.sent'))
+    check(not app.locator('#dlg-list[open]').count(), '逐单操作不弹确认清单')
+
     print('\n[13] 整理成报销文件：选下载好的发票文件夹 → 预览新文件名 → 生成「订单分拣-报销/…」文件夹、汇总表和压缩包；原文件不动')
     import zipfile
     src = dl_dir / '订单分拣-发票'
@@ -616,8 +705,8 @@ def run(p, tmp):
     print('\n[14] 每天自动处理：后台到点打开主页（带 #auto），主页自己点「检查开票情况」')
     app.goto(f'chrome-extension://{eid}/index.html#auto')
     app.reload()                                       # 后台也是改地址后再刷新（只改 # 不会重新加载）
-    t = wait_until(app, lambda: re.search('每天自动处理|检查开票情况', app.inner_text('#toast')) and app.inner_text('#toast'), 15)
-    check(bool(t), '打开 #auto 的主页后自动开始检查开票情况', app.inner_text('#toast'))
+    t = wait_until(app, lambda: re.search('每天自动刷新发票情况', app.inner_text('#toast')) and app.inner_text('#toast'), 15)
+    check(bool(t), '打开 #auto 的主页后自动开始刷新发票情况', app.inner_text('#toast'))
     check('#auto' not in app.url, '跑过以后地址里的 #auto 去掉了（刷新不会再跑一次）', app.url)
 
     print('\n[15] 天猫店：点旺旺图标时不知道旺旺名，订单详情页被重定向到 trade.tmall.com，照样读到旺旺名、打开聊天页（不是订单页）')
@@ -634,6 +723,28 @@ def run(p, tmp):
     check(any('trade.tmall.com/detail/' in pg.url for pg in tm) and all(pg.is_closed() for pg in tm), '重定向到天猫的订单详情页读完旺旺名就关掉了', [pg.url[:90] for pg in tm])
     nick = app.evaluate("no => (JSON.parse(localStorage.getItem('orderTriage.app.v1')).orders.find(o => o.no === no) || {}).nick", NO['A'])
     check(nick == '某某虚构卖家', '旺旺名记下了', nick)
+
+    print('\n[16] 淘宝页面上的「← 订单分拣」：切回已打开的主页；主页没开着就新开')
+    for pg in [pg for pg in ctx.pages if '/app/im/' in pg.url or 'alimebot' in pg.url]: pg.close()
+    ip = ctx.new_page(); ip.goto(INV_URL)
+    hb = ip.wait_for_selector('#ot-home', timeout=10000)
+    box, vp = hb.bounding_box(), ip.viewport_size
+    check(hb.inner_text() == '← 订单分拣' and '主页' in (hb.get_attribute('title') or '') and box['x'] + box['width'] > vp['width'] - 40 and box['y'] < 40 and box['height'] < 40,
+          '「我的发票」页右上角有一个小按钮「← 订单分拣」', (hb.inner_text(), box))
+    ip.bring_to_front(); hb.click()
+    back = wait_until(app, lambda: app.evaluate('chrome.tabs.getCurrent().then(t => t.active)'), 10)
+    check(bool(back), '点了以后切回已打开的主页标签')
+    cp = ctx.new_page(); cp.goto('https://market.m.taobao.com/app/im/chat/index.html?uid=' + quote('cntaobao某某虚构轴承'))
+    core = wait_until(cp, lambda: next((fr for fr in cp.frames if '/chat-core/' in fr.url and fr.locator('.send-btn').count()), None), 15)
+    cb = cp.wait_for_selector('#ot-home', timeout=10000).bounding_box()
+    hit = lambda a, b: a and b and not (a['x'] + a['width'] <= b['x'] or b['x'] + b['width'] <= a['x'] or a['y'] + a['height'] <= b['y'] or b['y'] + b['height'] <= a['y'])
+    boxes = [core.locator(s).bounding_box() for s in ('.send-btn', '.editBox')] if core else []
+    check(bool(core) and core.locator('#ot-home').count() == 0 and bool(boxes) and not any(hit(cb, b) for b in boxes),
+          '旺旺页：按钮只在最外层页面放一个，不挡输入框和「发送」', (cb, boxes))
+    app.close()
+    cp.bring_to_front(); cp.click('#ot-home')
+    home = wait_until(cp, lambda: next((pg for pg in ctx.pages if pg.url.startswith(f'chrome-extension://{eid}/index.html')), None), 10)
+    check(bool(home), '主页没开着时，点按钮新开一个主页', [pg.url[:60] for pg in ctx.pages])
     ctx.close()
 
 

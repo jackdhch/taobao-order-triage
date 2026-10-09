@@ -60,11 +60,12 @@ body{margin:0;font:13px system-ui,"Microsoft YaHei";display:flex;height:100vh;co
       me('2026-08-06 09:30:00', '你好，订单 5190000000000000105 需要开电子普通发票：抬头 某大学，税号 121000009999999996，谢谢'),
       he('2026-08-06 09:31:00', '好的亲，稍等'),
       Object.assign(he('2026-08-07 15:30:12'), { file: { name: 'dzfp_26442000000000000105_某大学_20260807153012.pdf', size: '86 KB' } }),
+      // 旺旺紧跟在卖家消息后面插的「安全提醒：检测到外部链接」系统卡片（2026-10-08 用户截图里见过）：不是文件、不是图片、不是开票卡片，扫描和下载都不能被它卡住
+      Object.assign(he('2026-08-07 15:30:20'), { safeCard: true }),
       he('2026-08-07 15:30:40', '发票开好了，请查收'),
       me('2026-08-07 16:00:00', '收到，谢谢'),
       he('2026-08-12 09:00:00', '亲，收到货满意的话给个五星好评哦'),
       he('2026-08-20 18:00:00', '店铺活动：满 99 减 10'),
-      he('2026-09-05 10:00:00', '新品上架'),
       me('2026-09-06 10:00:00', '好的')] },
     { name: '某某虚构传感器店', orders: ['5190000000000000106'], msgs: [
       me('2026-08-15 20:00:00', '你好，订单 5190000000000000106 麻烦开个发票，抬头某大学 税号121000009999999996'),
@@ -114,6 +115,9 @@ body{margin:0;font:13px system-ui,"Microsoft YaHei";display:flex;height:100vh;co
       + '<div view-name="TextView">共1件商品</div><div view-name="TextView">如您有发票需求，根据实际情况进行申请</div>'
       + '<div class="dx-event-node" data-card-no="' + m.invCard.no + '" style="display:inline-block;border:1px solid #f50;padding:2px 10px;cursor:pointer">去申请</div>'
       + '</div></div></div></div>';
+    else if (m.safeCard) c = '<div class="im-template-msg dx-msg-wrap"><div class="tpl-wrapper" data-tpl-id="5550000000001.SAFE"><div view-name="FrameLayoutNG" style="width:240px">'
+      + '<img src="' + BG + '" width="240" height="80" alt=""><div view-name="TextView">安全提醒：检测到外部链接</div>'
+      + '<div view-name="TextView">请勿轻信陌生链接，谨防诈骗</div><a href="https://example.invalid/ext" target="_blank">继续访问</a></div></div></div>';
     else c = '<pre class="edit">' + esc(m.text) + '</pre>';
     return '<div class="message-item-line"><div class="message-item' + (m.self ? ' self' : '') + '">'
       + '<div class="nick">' + (m.self ? '我' : esc(cur.name)) + '</div><div class="time">' + m.time + '</div>'

@@ -325,13 +325,37 @@ assert.equal(I.detailRefund('某商品 退款完成 ￥12.25 x1').refunded, true
   assert.ok(scriptsFor('https://invoice-ua.taobao.com/e-invoice/invoice-apply-online.html?disableNav=YES%2CYES&orderId=1&channel=card').includes('extension/apply-card.js'));
   assert.ok(scriptsFor('https://invoice-ua.taobao.com/e-invoice/invoice-detail-tm.html?disableNav=YES&orderId=1').includes('extension/apply-card.js'));
   assert.ok(scriptsFor('https://market.m.taobao.com/app/im/chat-core/index.html').includes('extension/chat-main.js'));
-  assert.equal(mf.version, '0.16.0');
+  assert.equal(mf.version, '0.17.0');
   // 备份文件里写的插件版本：网页版读不到 manifest，用 app.js 里写死的版本号，两处要一致
   const appJs = fs.readFileSync(new URL('../js/app.js', import.meta.url), 'utf8');
   assert.equal((/const VERSION = EXT \? chrome\.runtime\.getManifest\(\)\.version : '([\d.]+)'/.exec(appJs) || [])[1], mf.version);
+  // README 徽章上的版本号也一致
+  const readme = fs.readFileSync(new URL('../README.md', import.meta.url), 'utf8');
+  assert.ok(readme.includes('%E7%89%88%E6%9C%AC-' + mf.version + '-') && readme.includes('alt="版本 ' + mf.version + '"'));
+  // 「← 订单分拣」回主页按钮：插件内容脚本运行的每个淘宝页面都有
+  for (const u of ['https://buyertrade.taobao.com/trade/itemlist/list_bought_items.htm', 'https://i.taobao.com/my_itaobao/invoice',
+    'https://i.taobao.com/my_itaobao/pricelist/batchInvoice', 'https://market.m.taobao.com/app/im/chat/index.html',
+    'https://invoice-ua.taobao.com/e-invoice/invoice-apply-online.html?orderId=1', 'https://trade.taobao.com/trade/detail/trade_order_detail.htm?biz_order_id=1',
+    'https://trade.tmall.com/detail/orderDetail.htm?biz_order_id=1', 'https://ai.alimebot.taobao.com/intl/index.htm'])
+    assert.ok(scriptsFor(u).includes('extension/home.js'), u);
+  // 措辞（用户 2026-10-08）：界面上说「刷新发票情况」，不说「同步」（「同步带」「同步轮」是 classify.js 里的商品词，不在界面上）
+  const html = fs.readFileSync(new URL('../index.html', import.meta.url), 'utf8').replace(/<!--[\s\S]*?-->/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+  assert.ok(!html.includes('同步'), '主页 HTML 里还有「同步」');
+  for (const f of ['../js/app.js', '../extension/invoice-list.js', '../extension/chat.js', '../extension/vip.js'])
+    assert.deepEqual(fs.readFileSync(new URL(f, import.meta.url), 'utf8').match(/'[^'\n]*同步[^'\n]*'/g) || [], [], f + ' 的界面文字里还有「同步」');
+  assert.ok(html.includes('每天自动刷新发票情况') && appJs.includes("'上次刷新 '"));
+  // 调试日志不进备份：恢复时丢掉，备份时也去掉
+  assert.ok(/const BACKUP_SKIP = \[[^\]]*'autoLog'/.test(appJs) && appJs.includes('delete b.storage.autoLog'));
+}
+// 「催卖家」的跟进话术：一句简短的催促；首次索要的模板不变
+{
+  const v = { title: '某大学', taxId: '121000009999999996' };
+  assert.equal(I.renderMsg(I.FOLLOW_TEMPLATE, Object.assign({ orders: [{ no: '5190000000000000201', date: '2026-08-14', amount: 27 }] }, v)),
+    '您好，订单 5190000000000000201（26.8.14，¥27）的发票麻烦尽快开一下，抬头 某大学，税号 121000009999999996，开好直接发 PDF 到这个窗口，谢谢！');
+  assert.ok(I.DEFAULT_TEMPLATE.startsWith('您好，订单 {订单号}（{日期}，¥{金额}）需要开电子普通发票：抬头 {抬头}，税号 {税号}，邮箱 {邮箱}，内容按商品明细。'));
 }
 // 发票状态带上要列出的文件名（主页逐个单行显示，不从名字中间折断）
 assert.deepEqual(I.status({ got: [{ file: 'a_1.pdf' }, { file: 'b_2.pdf' }] }, {}).files, ['a_1.pdf', 'b_2.pdf']);
 assert.deepEqual(I.status({ have: { file: '第一批/001_x.pdf' } }, {}).files, ['第一批/001_x.pdf']);
 assert.deepEqual(I.status({ chat: { files: [{ name: '发票.pdf' }], cards: [], images: [], email: [], asks: [] } }, {}).files, ['发票.pdf']);
-console.log('自检通过：读表（xml:space）、合并规则、日期格式、先抓后导表、关键词建议、发票逻辑、已整理发票去重、读发票 PDF 文字、补差价待定、同店默认实验室、下载发票按金额日期对单、给卖家的消息、详情页退款、zip 打包、开票卡片、manifest 匹配与版本号、发票状态的文件名');
+console.log('自检通过：读表（xml:space）、合并规则、日期格式、先抓后导表、关键词建议、发票逻辑、已整理发票去重、读发票 PDF 文字、补差价待定、同店默认实验室、下载发票按金额日期对单、给卖家的消息、详情页退款、zip 打包、开票卡片、manifest 匹配与版本号、回主页按钮、措辞、调试日志不进备份、催卖家话术、发票状态的文件名');

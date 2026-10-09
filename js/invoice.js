@@ -27,6 +27,9 @@
   // 用户 2026-10-03 亲手发给卖家的就是这一句（日期写成 26.8.14、金额用实付）；卖家常要邮箱，设置里填了才带上
   const DEFAULT_TEMPLATE = '您好，订单 {订单号}（{日期}，¥{金额}）需要开电子普通发票：抬头 {抬头}，税号 {税号}，邮箱 {邮箱}，内容按商品明细。'
     + '开好后麻烦直接把 PDF 文件发在这个聊天窗口，谢谢！';
+  // 已向卖家索要过、还没回的：发票表里点「催卖家」时填进输入框的一句跟进（用户 2026-10-08 给的话术；只填不发，由用户自己点发送）。
+  // 首次索要用上面的 DEFAULT_TEMPLATE，不变
+  const FOLLOW_TEMPLATE = '您好，订单 {订单号}（{日期}，¥{金额}）的发票麻烦尽快开一下，抬头 {抬头}，税号 {税号}，开好直接发 PDF 到这个窗口，谢谢！';
   const shortDate = d => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(d || '')); return m ? m[1].slice(2) + '.' + +m[2] + '.' + +m[3] : String(d || ''); };
   // v = { no, date, amount, title, taxId, email }，或 { orders: [{ no, date, amount }...], title, taxId, email }（同一家店几单合成一条）
   function renderMsg(tpl, v) {
@@ -357,7 +360,7 @@
     return [String(o.time || '').slice(0, 10), o.amount != null ? String(o.amount) : '', clean(o.shop), o.no].filter(Boolean).join('_') + '.' + (ext || 'pdf');
   }
 
-  const api = { LABEL, titleScore, cardOwner, taxIdOk, DEFAULT_TITLE, DEFAULT_TAX, DEFAULT_TEMPLATE, renderMsg, parseInvoiceName, chatAnalyze, chatForOrder, status, findHave, matchHave, detailRefund, parseInvoiceText, saveName, checkFiles };
+  const api = { LABEL, titleScore, cardOwner, taxIdOk, DEFAULT_TITLE, DEFAULT_TAX, DEFAULT_TEMPLATE, FOLLOW_TEMPLATE, renderMsg, parseInvoiceName, chatAnalyze, chatForOrder, status, findHave, matchHave, detailRefund, parseInvoiceText, saveName, checkFiles };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Invoice = api;
 })(typeof self !== 'undefined' ? self : this);

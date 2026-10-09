@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/%E7%89%88%E6%9C%AC-0.16.0-1C6E8C?style=flat-square" alt="版本 0.16.0">
+  <img src="https://img.shields.io/badge/%E7%89%88%E6%9C%AC-0.17.0-1C6E8C?style=flat-square" alt="版本 0.17.0">
   <img src="https://img.shields.io/badge/Chrome%20%E6%89%A9%E5%B1%95-Manifest%20V3-4285F4?style=flat-square&logo=googlechrome&logoColor=white" alt="Chrome 扩展 Manifest V3">
   <img src="https://img.shields.io/badge/%E6%95%B0%E6%8D%AE-%E4%BB%85%E5%9C%A8%E6%9C%AC%E6%9C%BA-2F7D4F?style=flat-square" alt="数据仅在本机">
   <img src="https://img.shields.io/badge/%E5%88%A4%E6%96%AD-%E5%9B%BA%E5%AE%9A%E8%A7%84%E5%88%99%20%C2%B7%20%E6%97%A0%20AI-5F6C72?style=flat-square" alt="固定规则，无 AI">
@@ -43,7 +43,7 @@
 <td valign="top">
 <img src="docs/assets/icons/invoice.svg" width="36" height="36" alt=""><br>
 <b>发票申请与下载</b><br>
-同步开票记录，批量申请平台开票，下载发票并按订单命名。
+刷新开票情况，批量申请平台开票，下载发票并按订单命名。
 </td>
 <td valign="top">
 <img src="docs/assets/icons/card.svg" width="36" height="36" alt=""><br>
@@ -99,7 +99,7 @@
 ### 第一次使用
 
 1. 点「打开设置」，填写单位的发票抬头和税号。
-2. 点「从淘宝读取订单」，填写上次报销到哪天，点「开始读取」。未登录时在打开的淘宝页扫码登录一次，其余自动完成。
+2. 点「从淘宝读取订单」，填写上次报销到哪天，点「开始读取」。未登录时在打开的淘宝页扫码登录一次（也可先点顶栏「打开淘宝」登录），其余自动完成。
 
 <p align="center">
   <img src="docs/screenshots/welcome.png" alt="「开始使用」：填写发票抬头和税号、从淘宝读取订单两项" width="760">
@@ -141,8 +141,10 @@ flowchart LR
 |---|---|---|---|
 | 1　读取订单 | 从淘宝读取订单 | 打开淘宝「已买到的宝贝」，自动翻页读取上次报销之后的订单、商品图片和逐件退款 | 填写上次报销到哪天；未登录时登录一次 |
 | 2　核对商品 | 确认核对完成 | 按关键词自动判断实验室 / 个人，判不准的标为待定、排在最前 | 按 <kbd>1</kbd> / <kbd>2</kbd> 判完待定，点确认 |
-| 3　处理发票 | 自动处理发票 | 同步开票记录、读卖家回复、下载发票；列出要申请、索要、督促的清单 | 确认一次清单；平台批量开票在淘宝页点「确认提交」 |
+| 3　处理发票 | 自动处理发票 | 刷新发票情况（开票记录、卖家回复）、下载发票；列出要申请、索要、督促的清单 | 确认一次清单；平台批量开票在淘宝页点「确认提交」 |
 | 4　整理报销文件 | 选择发票文件夹并整理 | 按报销格式重命名发票，生成汇总表和压缩包 | 选择下载文件夹里的「订单分拣-发票」 |
+
+插件运行的淘宝页面上有一个小按钮「← 订单分拣」，点击回到主页。
 
 <p align="center">
   <img src="docs/screenshots/demo-sorting.gif" alt="演示：按 1、2 判断两件待定商品，点「确认核对完成」，顶部进度变为 8 / 8" width="100%">
@@ -186,14 +188,14 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    a["同步开票记录<br>读卖家旺旺回复"] --> b["一张确认清单"] --> c["下载发票"] --> d["向卖家索要<br>按开票入口申请<br>请客服督促"] --> e["平台批量申请<br>（用户在淘宝点确认提交）"]
+    a["刷新发票情况<br>（开票记录、卖家旺旺回复）"] --> c["下载发票"] --> b["一张确认清单"] --> d["向卖家索要<br>按开票入口申请<br>请客服督促"] --> e["平台批量申请<br>（用户在淘宝点确认提交）"]
     classDef act fill:#FFFFFF,stroke:#5F6C72,color:#1D2629
     classDef ok fill:#E4F3EA,stroke:#2E9D5B,color:#2F7D4F
     class a,c,d,e act
     class b ok
 ```
 
-需要在淘宝上提交或发送的操作，按「向卖家索要 / 按卖家的开票入口申请 / 请淘宝客服督促 / 申请平台开票」分组列在一张清单里，可取消勾选；确认一次后自动依次完成。取消则只下载已开具的发票。下载的发票存入下载文件夹的「订单分拣-发票」。
+需要在淘宝上提交或发送的操作，按「向卖家索要 / 按卖家的开票入口申请 / 请淘宝客服督促 / 申请平台开票」分组列在一张清单里，可取消勾选；确认一次后自动依次完成。插件无法处理的订单也列在清单里。下载的发票存入下载文件夹的「订单分拣-发票」。处理时步骤条下方显示当前第几段、在等什么；结束后逐段列出结果。
 
 <p align="center">
   <img src="docs/screenshots/demo-invoice.gif" alt="演示：发票表按颜色显示每单状态；一单依次变为已申请淘宝开票、已开票待下载、已下载" width="100%">
@@ -208,7 +210,14 @@ flowchart LR
 | <img src="docs/assets/status/urge.svg" width="12" height="12" alt=""> 青 | 已由淘宝客服督促 |
 | <img src="docs/assets/status/bad.svg" width="12" height="12" alt=""> 红 | 需处理（下次「自动处理发票」会列进清单） |
 
-带「›」的状态可点击，打开该单对应的淘宝页面。
+带「›」的状态可点击，打开该单对应的淘宝页面。发票表每行的「操作」按状态只有一个：
+
+| 状态 | 操作 |
+|---|---|
+| 已开具，待下载 / 卖家已发送文件 | 下载 |
+| 等待卖家回复 | 催卖家（在旺旺输入框填好一句催促，由用户点发送） |
+| 已申请淘宝开票 / 已由淘宝客服督促 / 超过设定天数 | 找客服督促 |
+| 需处理 | 索要发票、申请开票、按入口申请、换开发票或联系卖家 |
 
 > [!IMPORTANT]
 > 提交申请、给卖家或客服发消息都先在清单中确认；平台批量开票的「确认提交」由用户在淘宝页面点击。
@@ -222,7 +231,7 @@ flowchart LR
 - 下载后读取 PDF 的金额和开票日期核对，归错的订单自动更正。
 - 卖家发来的图片在本机识别二维码；是税务局电子发票的，核对后下载 PDF。
 - 卖家发到邮箱的发票：在该单点「手动添加发票」。
-- 「设置 → 每日自动处理」：每天定时同步、读回复、下载，不提交、不发送。
+- 「设置 → 每天自动刷新发票情况」：每天定时刷新、下载，不提交、不发送。
 - 插件打开的淘宝页面做完自动关闭；用户自己打开的不关。
 
 </details>
@@ -244,7 +253,7 @@ flowchart LR
 | 接收发票的邮箱 | 可留空；卖家要求邮箱时附在消息中 |
 | 未开票超过几天请客服督促 | 默认 7 天 |
 | 索要发票的消息模板 | 可用 `{订单号}` `{日期}` `{金额}` `{抬头}` `{税号}` `{邮箱}` |
-| 每日自动处理 | 默认关闭 |
+| 每天自动刷新发票情况 | 默认关闭 |
 
 「更多」里只有可选功能：导入已整理的发票文件夹（识别已报销的订单）、导入订单表（xlsx）、备份数据、从备份恢复。
 
@@ -281,7 +290,7 @@ flowchart LR
 |---|---|
 | `storage` | 在本机保存数据，在主页和淘宝页面之间传递任务和结果 |
 | `downloads` | 将发票存入下载文件夹的「订单分拣-发票」并按订单命名，将整理好的报销文件存入「订单分拣-报销」，将备份数据存入「订单分拣-备份」 |
-| `alarms` | 「每日自动处理」每小时检查一次是否到达设定时间 |
+| `alarms` | 「每天自动刷新发票情况」每小时检查一次是否到达设定时间 |
 | `https://*.aliyuncs.com/*`、`https://invoice-ua.taobao.com/*` | 淘宝和卖家的发票 PDF 所在位置：下载、命名，并读取金额和开票日期用于核对 |
 | `https://*.alicdn.com/*` | 淘宝图片服务器：读取卖家发来的图片，判断是否为发票二维码 |
 
@@ -293,7 +302,7 @@ flowchart LR
 | 页面 | 用途 |
 |---|---|
 | `buyertrade.taobao.com`（已买到的宝贝） | 读取订单、商品图片、逐件退款状态、卖家旺旺名 |
-| `i.taobao.com/my_itaobao/…`（我的发票、批量开票） | 同步开票记录、下载平台发票、批量申请 |
+| `i.taobao.com/my_itaobao/…`（我的发票、批量开票） | 读取开票记录、下载平台发票、批量申请 |
 | `trade.taobao.com/trade/detail/…`、`trade.tmall.com/detail/…`（订单详情） | 读取卖家旺旺名，检查是否整单退款 |
 | `market.m.taobao.com/app/im/…`（网页版旺旺） | 扫描卖家回复、下载卖家发送的文件、发送索要发票的消息、点击开票卡片的「去申请」 |
 | `invoice-ua.taobao.com/e-invoice/…`（开具发票、发票详情） | 按卖家的开票入口申请：核对订单号和抬头后提交 |
@@ -311,7 +320,7 @@ flowchart LR
 - 淘宝网页版旺旺同一时间只能连接一个聊天页，打开第二个时旧的会断开；扩展只保留最新的一个，断开后自动刷新。
 - 「自动处理发票」的一键串联、「请淘宝客服督促」中客服发来开票入口后的自动提交、「按卖家的开票入口申请」的部分环节，尚未在真实页面上完整验证。
 - 纸质发票没有电子文件，需等待卖家寄送；单笔投诉的详情在电脑网页上看不到，只能在手机淘宝中查看。
-- 「每日自动处理」只在浏览器开启时运行。
+- 「每天自动刷新发票情况」只在浏览器开启时运行。
 - 开发和测试使用 Chrome 与 Chromium，其他浏览器未经验证。
 
 ## 开发与测试
@@ -329,9 +338,9 @@ node tools/selftest.mjs
 python3 -m pip install playwright
 python3 -m playwright install chromium
 env -u TMPDIR python3 tools/e2e-mock.py      # 读取订单、退款、自动翻页、导入订单表合并、界面准则
-env -u TMPDIR python3 tools/e2e-invoice.py   # 自动处理发票（一次确认）、同步、读旺旺、下载改名、发消息、客服督促
+env -u TMPDIR python3 tools/e2e-invoice.py   # 自动处理发票（分段进度、一次确认）、读开票记录和旺旺、下载改名、发消息、逐单操作、回主页按钮
 env -u TMPDIR python3 tools/e2e-apply.py     # 平台批量申请（停在确认页）、按卖家的开票入口申请、工作页面用完关闭
-env -u TMPDIR python3 tools/e2e-extras.py    # 读取发票文件夹、二维码、备份恢复
+env -u TMPDIR python3 tools/e2e-extras.py    # 读取发票文件夹、二维码、备份恢复、某段超时
 ```
 
 每个端到端测试约一到两分钟。`env -u TMPDIR` 是因为临时目录路径过长时浏览器会报错，路径不长时可以省略。
@@ -343,7 +352,7 @@ env -u TMPDIR python3 tools/e2e-extras.py    # 读取发票文件夹、二维码
 <details>
 <summary>发布新版本</summary>
 
-1. 改 `manifest.json` 的 `version`（`js/app.js` 的 `VERSION` 和 `tools/selftest.mjs` 里的版本号同步改），跑通全部测试。
+1. 改 `manifest.json` 的 `version`（`js/app.js` 的 `VERSION` 和 `tools/selftest.mjs` 里的版本号、README 徽章同步改），跑通全部测试。
 2. `bash tools/make-release.sh`，生成 `dist/order-triage-v版本号.zip`（只含插件运行需要的文件和一份「安装说明.txt」）。
 3. 提交、推送后：`gh release create v版本号 dist/order-triage-v版本号.zip --title "订单分拣 v版本号" --notes "更新内容……"`。
 

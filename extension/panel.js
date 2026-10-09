@@ -57,6 +57,11 @@ window.otPanel = function (title, buttons, onClick, opts) {
   return { set(s) { st.textContent = s; }, buttons: setButtons, detail };                    // 状态里有从页面读来的店名，当纯文字放，别让它变成网页代码
 };
 
+// 本机调试日志：写进 chrome.storage.local 的 autoLog（后台排队追加，见 background.js），界面上没有入口
+window.otLog = function (stage, ev, msg) {
+  chrome.runtime.sendMessage({ type: 'autoLog', e: { stage, ev, msg: String(msg == null ? '' : msg).slice(0, 500) } }).catch(() => {});
+};
+
 // 出现滑块 / 安全验证：停下交给用户，不绕过
 window.otNeedsVerify = function () {
   if (/punish|captcha|_____tmd_____/i.test(location.href)) return true;

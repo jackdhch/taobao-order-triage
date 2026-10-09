@@ -5,8 +5,9 @@
 //       记下我们要发票的消息、之后对方发来的文件 / 图片（可能是二维码）/ 提到邮箱的话，存进扩展存储 chatScan。
 //       只点左侧会话、只滚动消息列表；不碰输入框和「发送」。打开会话会让对方看到「已读」，所以范围只限这几家。
 // 下载：主页里点了「下载」的聊天文件排在 dlJobs 里，这里打开会话找到那个文件点「下载文件」。
-// 发消息：主页「给卖家发消息」排的 chatQueue(kind=compose)：逐家打开会话，把写好的消息填进输入框（.editBox pre.edit[contenteditable=true]），
-//       用户选「自动发送」时核对会话后代点「发送」，否则只填不发；看到这条消息出现在聊天里，记进 askSent，自动开下一家。
+// 发消息：主页排的 chatQueue(kind=compose)：逐家打开会话，把写好的消息填进输入框（.editBox pre.edit[contenteditable=true]），
+//       「自动处理发票」清单确认过的（auto）核对会话后代点「发送」；发票表里逐单的「索要发票」「催卖家」（follow）只填不发，由用户点发送；
+//       看到这条消息出现在聊天里，记进 askSent，自动开下一家。
 // 开票卡片：卖家发来的「请填写发票申请 … 去申请」模板卡片单独记成 card（不算图片）；主页排了 cardRun 时，打开会话找到卡片点「去申请」。
 //
 // 页面结构（2026-09 实测）：会话 .conversation-item > .name（长店名会截断成「…」）；消息 .message-item(.self) > .nick .time .content；
@@ -65,20 +66,22 @@
       const pl = (lines.find(s => /^[¥￥]/.test(s)) || '').replace(/[^\d.]/g, '');
       return { title, price: pl && !isNaN(+pl) ? (+pl).toFixed(2) : '' };
     }
+    // 一条消息读不了（比如「安全提醒：检测到外部链接」这类系统卡片结构特殊）就跳过这一条，别让整个会话、整轮扫描停下
     function readMsgs() {
-      return [...document.querySelectorAll('.message-item')].map(m => {
-        const fileEl = m.querySelector('.file-msg');
-        // 商品卡片（.item-pic 之类）、模板卡片里的图不算；只在消息内容里面找，别找到外层 .message-item-line 上去
-        const img = [...m.querySelectorAll('.content img')].find(i => i.getBoundingClientRect().width > 60 && !i.closest('.content [class*="item-"]') && !i.closest(TPL_SEL));
-        return {
-          self: m.classList.contains('self'),
-          time: text(m.querySelector('.time')),
-          text: text(m.querySelector('.content pre.edit')) || '',
-          file: fileEl ? { name: (fileEl.querySelector('.file-name') || {}).title || text(fileEl.querySelector('.file-name')), size: text(fileEl.querySelector('.file-size')) } : null,
-          img: img ? img.currentSrc || img.src : '',
-          card: cardOf(tplOf(m)),
-        };
-      }).filter(m => m.time);
+      return [...document.querySelectorAll('.message-item')].map(m => { try { return readMsg(m); } catch (e) { return null; } }).filter(m => m && m.time);
+    }
+    function readMsg(m) {
+      const fileEl = m.querySelector('.file-msg');
+      // 商品卡片（.item-pic 之类）、模板卡片里的图不算；只在消息内容里面找，别找到外层 .message-item-line 上去
+      const img = [...m.querySelectorAll('.content img')].find(i => i.getBoundingClientRect().width > 60 && !i.closest('.content [class*="item-"]') && !i.closest(TPL_SEL));
+      return {
+        self: m.classList.contains('self'),
+        time: text(m.querySelector('.time')),
+        text: text(m.querySelector('.content pre.edit')) || '',
+        file: fileEl ? { name: (fileEl.querySelector('.file-name') || {}).title || text(fileEl.querySelector('.file-name')), size: text(fileEl.querySelector('.file-size')) } : null,
+        img: img ? img.currentSrc || img.src : '',
+        card: cardOf(tplOf(m)),
+      };
     }
     // 攒消息：同一条（时间 + 谁发的 + 第几条）只留读到内容的那次
     let pile = new Map();
@@ -159,6 +162,7 @@
       }
       await chrome.storage.local.remove('chatQueue');
       await chrome.storage.local.set({ chatScan: { at: Date.now(), convs: next.out } });
+      window.otLog('scan', 'end', '读取 ' + total + ' 个会话' + (next.failed && next.failed.length ? '，未能打开 ' + next.failed.join('、') : ''));
       panel.set('已读取 ' + total + ' 个会话（会话列表中 ' + q.done + ' 个，按旺旺名打开 ' + (total - q.done) + ' 个），结果已送回分拣主页'
         + (next.failed && next.failed.length ? '；未能打开：' + next.failed.join('、') : ''));
       return true;
@@ -177,10 +181,13 @@
       const next = Object.assign({}, q, { items: q.items.slice(1), done: q.done + 1 });
       const go = async () => {
         next.at = Date.now();
+        // 主页那边超时停掉了队列（chatQueue 被删）：不再接着开下一家
+        const { chatQueue: still } = await chrome.storage.local.get('chatQueue');
+        if (!still) { panel.buttons([]); panel.set('分拣主页已停止发送：发送 ' + next.sent.length + ' 家，其余未发送。'); return; }
         if (next.items.length) { await chrome.storage.local.set({ chatQueue: next }); await sleep(800); goChat(next.items[0].nick); return; }
         await chrome.storage.local.remove('chatQueue');
         panel.buttons([]); panel.detail([]);
-        panel.set('已处理完毕：发送 ' + next.sent.length + ' 家' + (next.skipped.length ? '，跳过 ' + next.skipped.length + ' 家（' + next.skipped.join('、') + '）' : '') + '。卖家回复后，请在分拣主页点击「检查开票情况」。');
+        panel.set('已处理完毕：发送 ' + next.sent.length + ' 家' + (next.skipped.length ? '，跳过 ' + next.skipped.length + ' 家（' + next.skipped.join('、') + '）' : '') + '。卖家回复后，「自动处理发票」会读取并下载。');
       };
       panel.detail(cur.orders);
       // 会话名可能是旺旺名，也可能是店名；按地址打开的页面加载慢，等 30 秒（15 秒时有两家店没等到，2026-10-04）
@@ -208,7 +215,8 @@
       // 3 天内已经给这家发过带税号的消息（比如用户自己手动发的，主页还没重新扫描）：不再重复要，直接下一家
       const d3 = new Date(Date.now() - 3 * 864e5), pad = n => String(n).padStart(2, '0');
       const since3 = d3.getFullYear() + '-' + pad(d3.getMonth() + 1) + '-' + pad(d3.getDate());
-      const recent = q.taxId && readMsgs().find(m => m.self && m.time >= since3 && squash(m.text).includes(squash(q.taxId)));
+      // 「催卖家」是用户点了这一单要再催一次：不看 3 天内发过没有
+      const recent = !q.follow && q.taxId && readMsgs().find(m => m.self && m.time >= since3 && squash(m.text).includes(squash(q.taxId)));
       if (recent) {
         const { askSent } = await chrome.storage.local.get('askSent');
         const all = Object.assign({}, askSent);
@@ -231,7 +239,9 @@
         if (sb && isTarget()) for (const k of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) sb.dispatchEvent(new MouseEvent(k, { bubbles: true, cancelable: true, view: window }));
         await window.otWaitFor(() => sentCount(cur.msg) > before, 10000);
         if (sentCount(cur.msg) <= before) panel.set('第 ' + n0 + ' / ' + total + ' 家：' + cur.shop + '。自动发送未成功，消息保留在输入框中，请核对后手动点击「发送」。');
-      } else panel.set('第 ' + n0 + ' / ' + total + ' 家：' + cur.shop + '（会话「' + header() + '」，订单已核对）。索要发票的消息已填入输入框，请核对后手动点击「发送」；发送后自动打开下一家。');
+      } else if (q.follow) panel.set('已填好催促消息，请核对后点发送（' + cur.shop + '，会话「' + header() + '」，订单已核对）。');
+      else if (total === 1) panel.set(cur.shop + '（会话「' + header() + '」，订单已核对）：索要发票的消息已填入输入框，请核对后点发送。');
+      else panel.set('第 ' + n0 + ' / ' + total + ' 家：' + cur.shop + '（会话「' + header() + '」，订单已核对）。索要发票的消息已填入输入框，请核对后手动点击「发送」；发送后自动打开下一家。');
       panel.buttons([['skip', '跳过此店', '不给这家店发送，继续下一家']]);
       onPanel = id => { if (id === 'skip') skip = true; };
       const t0 = Date.now();
@@ -245,7 +255,7 @@
       if (left) {
         await chrome.storage.local.remove('chatQueue');
         panel.buttons([]); panel.detail([]);
-        panel.set('会话已从 ' + cur.shop + ' 切换到「' + header() + '」。为避免发错对象，已清除填入的消息并停止。如需继续，请在分拣主页重新点击「给卖家发消息」。');
+        panel.set('会话已从 ' + cur.shop + ' 切换到「' + header() + '」。为避免发错对象，已清除填入的消息并停止。如需继续，请在分拣主页重新操作。');
         return true;
       }
       if (skip || sentCount(cur.msg) <= before) {
@@ -323,7 +333,8 @@
       const next = Object.assign({}, q, { items: q.items.slice(1), done: q.done + ids.length, at: Date.now() });
       if (next.items.length) { await chrome.storage.local.set({ chatQueue: next }); await sleep(800); goChat(next.items[0].nick); return true; }
       await chrome.storage.local.remove('chatQueue');
-      panel.set('已下载 ' + next.done + ' 个文件' + (q.total > next.done ? '，' + (q.total - next.done) + ' 个未找到' : ''));
+      panel.set('已下载 ' + next.done + ' 个文件' + (q.total > next.done ? '，' + (q.total - next.done) + ' 个未找到' : '') + '，结果已送回分拣主页。');
+      window.otLog('chatDownload', 'end', '按旺旺名打开会话下载 ' + next.done + ' / ' + q.total + ' 个');
       return true;
     }
 
@@ -341,11 +352,13 @@
         for (const it of items) {
           if (window.otNeedsVerify()) { alert('页面出现安全验证，请手动完成后在分拣主页重新操作。'); break; }
           panel.set('正在读取第 ' + (++k) + ' / ' + items.length + ' 个会话：' + convName(it));
-          if (!await openConv(it)) continue;
-          if (!await loadBack(since)) { alert('页面出现安全验证，请手动完成后在分拣主页重新操作。'); break; }
-          const msgs = collected();
-          const orders = [...document.querySelectorAll('.ww_tab .order-id')].map(text).filter(s => /^\d{15,20}$/.test(s));
-          out[header()] = Object.assign({ at: Date.now(), orders, first: (msgs[0] || {}).time || '' }, I.chatAnalyze(msgs, { taxId: invWant.taxId }));
+          try {
+            if (!await openConv(it)) continue;
+            if (!await loadBack(since)) { alert('页面出现安全验证，请手动完成后在分拣主页重新操作。'); break; }
+            const msgs = collected();
+            const orders = [...document.querySelectorAll('.ww_tab .order-id')].map(text).filter(s => /^\d{15,20}$/.test(s));
+            out[header()] = Object.assign({ at: Date.now(), orders, first: (msgs[0] || {}).time || '' }, I.chatAnalyze(msgs, { taxId: invWant.taxId }));
+          } catch (e) { window.otLog('scan', 'error', convName(it) + '：' + e.message); }      // 一个会话出错不影响别的会话
           await sleep(800 + Math.random() * 800);
         }
         // 左侧最近会话列表里没有的店（聊得太久以前）：用订单页上这一单自己的卖家旺旺名打开，和在订单页点旺旺图标打开的是同一个会话。
@@ -364,10 +377,12 @@
           return goChat(queue[0].nick);
         }
         await chrome.storage.local.set({ chatScan: { at: Date.now(), convs: out } });
+        window.otLog('scan', 'end', '读取 ' + items.length + ' 个会话');
         panel.set('已读取 ' + items.length + ' 个会话，结果已送回分拣主页'
           + (noNick.length ? '；' + noNick.length + ' 家店铺不在会话列表中且旺旺名未知（请先在淘宝订单页补充一次图片）' : ''));
       } catch (e) {
         panel.set('读取出错：' + e.message);
+        window.otLog('scan', 'error', e.message);
       }
     });
 
@@ -393,6 +408,7 @@
         await sleep(2500);
       }
       await window.otSend({ type: 'jobsDone', ids: done });   // 交给后台统一删，别和发票页互相盖
+      window.otLog('chatDownload', 'end', '下载 ' + done.length + ' / ' + jobs.length + ' 个' + (later.length ? '，' + later.length + ' 个要按旺旺名打开会话' : ''));
       if (later.length) {
         const convs = [...new Set(later.map(j => j.conv))];
         await chrome.storage.local.set({ chatQueue: { at: Date.now(), kind: 'dl', done: done.length, total: jobs.length,
@@ -400,8 +416,8 @@
         panel.set('已下载 ' + done.length + ' 个文件；另有 ' + convs.length + ' 个会话不在列表中，正逐个打开下载…');
         return goChat(convs[0]);
       }
-      panel.set('已下载 ' + done.length + ' 个文件' + (jobs.length > done.length ? '，' + (jobs.length - done.length) + ' 个未找到' : ''));
-    } catch (e) { panel.set('下载出错：' + e.message); } });
+      panel.set('已下载 ' + done.length + ' 个文件' + (jobs.length > done.length ? '，' + (jobs.length - done.length) + ' 个未找到' : '') + '，结果已送回分拣主页。');
+    } catch (e) { panel.set('下载出错：' + e.message); window.otLog('chatDownload', 'error', e.message); } });
 
     // 不放按钮：扫描、下载都由分拣主页一键派活，这里只显示进度（用户 2026-10-03：做成全自动，别让人在这里点）
     let onPanel = null;

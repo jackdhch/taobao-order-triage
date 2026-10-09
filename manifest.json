@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "订单分拣",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "description": "淘宝订单报销整理：实验室采购分拣、发票申请与归档。数据仅在本机处理；对淘宝的提交、发送操作均需在主页确认后执行。",
   "action": {
     "default_title": "打开订单分拣主页"
@@ -23,7 +23,8 @@
       ],
       "js": [
         "scraper/taobao-scraper.js",
-        "extension/taobao.js"
+        "extension/taobao.js",
+        "extension/home.js"
       ]
     },
     {
@@ -43,7 +44,8 @@
       "js": [
         "js/invoice.js",
         "extension/panel.js",
-        "extension/invoice-list.js"
+        "extension/invoice-list.js",
+        "extension/home.js"
       ]
     },
     {
@@ -54,7 +56,8 @@
       "js": [
         "js/invoice.js",
         "extension/panel.js",
-        "extension/chat.js"
+        "extension/chat.js",
+        "extension/home.js"
       ]
     },
     {
@@ -75,7 +78,8 @@
       ],
       "js": [
         "extension/panel.js",
-        "extension/apply-card.js"
+        "extension/apply-card.js",
+        "extension/home.js"
       ]
     },
     {
@@ -86,7 +90,8 @@
       ],
       "js": [
         "extension/panel.js",
-        "extension/batch.js"
+        "extension/batch.js",
+        "extension/home.js"
       ]
     },
     {
@@ -116,7 +121,8 @@
       ],
       "js": [
         "js/invoice.js",
-        "extension/detail.js"
+        "extension/detail.js",
+        "extension/home.js"
       ]
     },
     {
@@ -126,7 +132,8 @@
       ],
       "js": [
         "extension/panel.js",
-        "extension/vip.js"
+        "extension/vip.js",
+        "extension/home.js"
       ]
     }
   ],
