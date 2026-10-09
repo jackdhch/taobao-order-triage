@@ -77,7 +77,9 @@
     const images = since ? after.filter(m => m.img && !m.card).map(m => ({ time: m.time, src: m.img })) : [];
     const email = since ? after.filter(m => m.text && EMAIL_RE.test(m.text)).map(m => ({ time: m.time, text: m.text.slice(0, 80) })) : [];
     const cards = msgs.filter(m => !m.self && m.card).map(m => ({ time: m.time, title: String(m.card.title || '').slice(0, 120), price: m.card.price || '' }));
-    return { asks, files, images, email, cards };
+    // docs：要过发票之后卖家发来的表格、Word（3D 打印订单的明细清单常常是 xlsx），不算发票；3D 打印订单缺明细时主页把它下下来挂成附件
+    const docs = since ? after.filter(m => m.file && /\.(xlsx?|csv|docx?)$/i.test(m.file.name)).map(m => Object.assign({ time: m.time }, m.file)) : [];
+    return { asks, files, images, email, cards, docs };
   }
 
   // 商品标题相似度 0~1（开票卡片上只有商品标题，可能被截断）：去掉空白和符号，一个包含另一个算 1，否则按相邻两字的重合比例
@@ -141,7 +143,8 @@
       const own = cardOwner(k, ps);
       return own.nos.includes(no) ? Object.assign({}, k, { shared: own.nos.length > 1 || !own.sure }) : null;
     }).filter(Boolean);
-    return { asks: myAsks, files: (a.files || []).filter(inSpan), images: (a.images || []).filter(inSpan), email: (a.email || []).filter(inSpan), cards, shared };
+    return { asks: myAsks, files: (a.files || []).filter(inSpan), images: (a.images || []).filter(inSpan), email: (a.email || []).filter(inSpan), cards, shared,
+             docs: (a.docs || []).filter(inSpan) };
   }
 
   /*
@@ -236,7 +239,25 @@
     const amts = [...flat.matchAll(/[¥￥]([\d,]+\.\d{2})/g)].map(m => +m[1].replace(/,/g, ''));
     return { invNo: no, date: d ? d[1] + '-' + d[2].padStart(2, '0') + '-' + d[3].padStart(2, '0') : '',
              amount: amts.length ? Math.max(...amts) : null, isInvoice: /发票/.test(flat) && !!no,
-             titleOk: title ? flat.includes(String(title).replace(/\s+/g, '')) : null };
+             titleOk: title ? flat.includes(String(title).replace(/\s+/g, '')) : null,
+             items: invoiceItems(flat), seller: invoiceSeller(flat, title) };
+  }
+  // 发票明细（项目名称）：全电发票写成「*税收分类简称*商品名」，名字后面紧跟规格、单位、数量、金额。
+  // 只取到第一个数字或 ¥ 为止，够判断「模块」、与科研无关的字样、3D 打印就行（低值品、补材料用）；最多 300 字
+  function invoiceItems(flat) {
+    const out = [];
+    for (const m of flat.matchAll(/\*([^*¥￥]{1,20})\*([^*¥￥]{0,60})/g)) {
+      const name = m[2].replace(/[\d.%]{2,}.*$/, '').replace(/(规格型号|单位|数量|单价|金额|税率|税额).*$/, '');
+      out.push('*' + m[1] + '*' + name);
+    }
+    return [...new Set(out)].join('；').slice(0, 300);
+  }
+  // 销售方名称：发票上有两个「名称」（购买方、销售方），不是本单位抬头的那个就是销售方（读不出时报销清单写店铺名）
+  function invoiceSeller(flat, title) {
+    const t = String(title || '').replace(/\s+/g, '');
+    const ns = [...flat.matchAll(/名称[:：]([^:：]{2,40}?)(?=统一社会信用代码|纳税人识别号|项目名称|地址|开户|名称|$)/g)].map(m => m[1]);
+    // PDF.js 常把标签和值分开排（「名称： 名称： 项目名称 …」），这时读到的是下一个标签，不算
+    return ns.find(n => (!t || !n.includes(t)) && n.length >= 3 && !/项目|金额|税|规格|单位|数量|单价|合计|信息|开户|地址|电话|账号|\d{6}/.test(n)) || '';
   }
 
   // 卖家发来的 PDF 读得出不少文字、却一个「发票」字样都没有：是说明书、报价单、检测报告之类，不是发票。

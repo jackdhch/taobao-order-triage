@@ -11,6 +11,8 @@ chrome.storage.local.remove('jobTabs').catch(() => {});
 // 对不上的下载（点了却没下成、用户自己下的别的东西、同时下的另一单）一律不动，免得把发票记到别的订单上。
 // 后台随时可能被浏览器休眠，待改名清单和进行中的下载都放一份在 session 存储里
 const INVOICE_EXT = /\.(pdf|ofd|xml|zip)$/i;
+// 卖家发来的表格、Word（3D 打印明细清单）：主页排的下载活带 attach（附件类型）时才收，完成后记进 attDone（不算发票）
+const ATTACH_EXT = /\.(xlsx?|csv|docx?)$/i;
 let expect = [], pending = {};
 // 读失败也要放行（2026-09 真实窗口：这里报「No SW」后 ready 一直是失败状态，所有等它的消息都不回话，下载全卡住）
 const ready = chrome.storage.session.get(['expect', 'pending'])
@@ -313,9 +315,9 @@ function pick(item) {
   const now = Date.now();
   expect = expect.filter(e => now - e.at < 60000);
   const name = base(item.filename);
-  if (!INVOICE_EXT.test(name)) return null;
+  if (!INVOICE_EXT.test(name) && !ATTACH_EXT.test(name)) return null;
   // 二维码发票（税务局页面下的）文件名是 dzfp_<发票号>_<销售方>_<时间>.pdf：按发票号认
-  const i = expect.findIndex(j => j.kind === 'chat' ? j.file === name : j.kind === 'qr' ? name.includes(j.invNo) : name.includes(j.no));
+  const i = expect.findIndex(j => (INVOICE_EXT.test(name) || j.attach) && (j.kind === 'chat' ? j.file === name : j.kind === 'qr' ? name.includes(j.invNo) : name.includes(j.no)));
   return i < 0 ? null : expect.splice(i, 1)[0];
 }
 chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
@@ -328,7 +330,7 @@ chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
   ready.then(() => {
     const j = pick(item);
     if (!j) { suggest(); return; }                             // 不是我们点的那张发票：原样放行
-    const ext = (INVOICE_EXT.exec(base(item.filename)) || [, 'pdf'])[1].toLowerCase();
+    const ext = (INVOICE_EXT.exec(base(item.filename)) || ATTACH_EXT.exec(base(item.filename)) || [, 'pdf'])[1].toLowerCase();
     const name = j.saveAs.replace(/\.\w+$/, '') + '.' + ext;
     pending[item.id] = Object.assign({}, j, { name });
     keep();
@@ -346,6 +348,13 @@ chrome.downloads.onChanged.addListener(d => {
     if (!j) return;
     delete pending[d.id]; keep();
     const [item] = await chrome.downloads.search({ id: d.id });
+    if (j.attach) {
+      const { attDone } = await chrome.storage.local.get('attDone');
+      const all = attDone || {};
+      (all[j.no] = all[j.no] || []).push({ kind: j.attach, file: j.name, path: item ? item.filename : '', at: Date.now(), src: j.file || '' });
+      await chrome.storage.local.set({ attDone: all });
+      return;
+    }
     const { dlDone } = await chrome.storage.local.get('dlDone');
     const all = dlDone || {};
     // file：我们起的名字（主页显示用）；path：Chrome 实际存的位置（重名时会自动加序号）

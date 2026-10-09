@@ -199,7 +199,7 @@ assert.equal(I.status({ have: idx[0], plat: { tab: 'issued', title: '企业-某�
 // PDF 抽出来的文字：标签和值分开、字间夹空格（照真实发票的排列，内容虚构）
 const pt = '电 子 发 票 （ 普 通 发 票 ） 发 票 号 码： 开票 日期： 购 买 方 信 息 统一社会信用代码/ 纳税人识别号 ： 名称： 名称： 项目名称 金 额 税 额 价 税合 计（ 小写） '
   + '12345678901234567890 2026 年 08 月 17 日 某大学 121000009999999996 ¥ 17.61 ¥ 2.29 ¥ 19.90 壹拾玖圆玖角';
-assert.deepEqual(I.parseInvoiceText(pt, '某大学'), { invNo: '12345678901234567890', date: '2026-08-17', amount: 19.9, isInvoice: true, titleOk: true });
+assert.deepEqual(I.parseInvoiceText(pt, '某大学'), { invNo: '12345678901234567890', date: '2026-08-17', amount: 19.9, isInvoice: true, titleOk: true, items: '', seller: '' });
 assert.equal(I.parseInvoiceText('产品说明书 型号 12345678901234567890').isInvoice, false);
 assert.equal(I.parseInvoiceText('发票号码 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 开票日期').invNo, '12345678901234567890');     // 逐字隔开的号码
 assert.equal(I.parseInvoiceText('电子发票 发票代码 发票号码 开票日期 031002100111 07921694 2026年03月13日 ¥52.00').invNo, '07921694');
@@ -387,4 +387,121 @@ assert.equal(I.detailRefund('某商品 退款完成 ￥12.25 x1').refunded, true
 assert.deepEqual(I.status({ got: [{ file: 'a_1.pdf' }, { file: 'b_2.pdf' }] }, {}).files, ['a_1.pdf', 'b_2.pdf']);
 assert.deepEqual(I.status({ have: { file: '第一批/001_x.pdf' } }, {}).files, ['第一批/001_x.pdf']);
 assert.deepEqual(I.status({ chat: { files: [{ name: '发票.pdf' }], cards: [], images: [], email: [], asks: [] } }, {}).files, ['发票.pdf']);
-console.log('自检通过：读表（xml:space）、合并规则、日期格式、先抓后导表、关键词建议、发票逻辑、已整理发票去重、读发票 PDF 文字、补差价待定、同店默认实验室、下载发票按金额日期对单、给卖家的消息、详情页退款、zip 打包、开票卡片、manifest 匹配与版本号、回主页按钮、措辞、调试日志不进备份、催卖家话术、发票状态的文件名');
+// ── 报销规范（js/reimburse.js、js/office.js，用户 2026-10-09；数据全部虚构）──
+const RB = req('../js/reimburse.js'), OF = req('../js/office.js');
+{
+  // 低值品：单价 > 200、没有「模块」、是设备器械（两张关键词表；被更长的词包住的词不算）
+  const J = (title, unit, memo, inv) => RB.lowJudge({ unit, title, memo, inv }).v;
+  assert.equal(J('数字万用表 高精度 全自动', 452), 'low');
+  assert.equal(J('电子秤 精准 0.01g', 432.2), 'low');
+  assert.equal(J('航模锂电池 6S 1300mAh', 312), 'no');
+  assert.equal(J('碳板 0.2mm', RB.unitPrice(330, 330, 6)), '');                // 6 张合计 330，单价 55：未超过 200
+  assert.equal(J('某某定位模块 双频', 520), 'no');                              // 含「模块」
+  assert.equal(J('数字万用表', 452, undefined, '*电子元件*万用表模块'), 'no');   // 发票明细里有「模块」也不是
+  assert.equal(J('电源线 国标 3 米', 230), 'no');                                // 「电源线」包住「电源」：耗材
+  assert.equal(J('开关电源 24V 15A', 260), 'low');                               // 「开关电源」包住「开关」：设备
+  assert.equal(J('无线遥控器 16 通道', 650), 'low');                             // 「无线」不算耗材「线」
+  assert.equal(J('温湿度计 工业级', 210), 'low');
+  assert.equal(J('工业设计 碳纤维 机架', 300), 'no');                            // 「设计」不算「计」
+  assert.equal(J('空心杯 双轴舵机 80KG', 298), 'no');
+  assert.equal(J('数字万用表 带表笔线', 452), 'ask');                            // 两边都中：待确认
+  assert.equal(J('某某说不清的东西', 300), 'ask');                               // 都没中：待确认
+  assert.equal(J('某某说不清的东西', 300, 'low'), 'low');                        // 用户确认过的同名商品沿用
+  assert.equal(J('航模锂电池', 312, 'low'), 'low');
+  assert.equal(J('定位模块', 520, 'low'), 'no');                                 // 「模块」先于用户记忆
+  assert.equal(J('数字万用表', 199.99), '');
+  assert.equal(J('数显恒温磁力搅拌器 加热型', 389), 'low');
+  assert.ok(RB.lowJudge({ unit: 520, title: '定位模块' }).fixed && !RB.lowJudge({ unit: 452, title: '数字万用表' }).fixed);   // 「模块」定的不能改
+  // 按件的单价：部分退款按实付 − 退款折算到件
+  assert.equal(RB.unitPrice(10, 30, 3, null, 20), 10);                          // 买 3 个各 10 元、退 20 元：留 1 个
+  assert.equal(RB.unitPrice(600, 900, 3, 2, null), 300);                        // 用户填了留 2 个
+  assert.equal(RB.unitPrice(445, 450, 1, null, 5), 445);                        // 价保退 5 元：仍是 1 件
+  // 与科研无关的字样、3D 打印
+  assert.deepEqual(RB.sensitiveWords('*玩具*遥控车 某某'), ['玩具']);
+  assert.deepEqual(RB.sensitiveWords('*体育用品*瑜伽垫；*家具*折叠桌'), ['体育用品', '家具']);
+  assert.deepEqual(RB.sensitiveWords('运动控制卡 四轴；运动相机支架'), []);
+  for (const t of ['3D打印 手板 定制', '3d 打印服务', '光固化树脂打样', 'SLA 打印', 'FDM 打印 PLA']) assert.ok(RB.is3d(t), t);
+  for (const t of ['数字万用表', 'slash 刀具', '打印纸 A4']) assert.ok(!RB.is3d(t), t);
+  assert.ok(RB.ASK_3D.startsWith('另外麻烦提供这单的 3D 打印明细清单'));
+  // 要补的材料
+  assert.deepEqual(RB.required({ big: true, sens: [], p3d: false }), ['订单页面', '支付记录']);
+  assert.deepEqual(RB.missing({ big: true, sens: ['玩具'], p3d: true }, ['订单页面']), ['支付记录', '用途说明', '3D打印明细']);
+  assert.deepEqual(RB.missing({ big: false, sens: [], p3d: false }, []), []);
+  // 到账差额：哪几张加起来正好等于差额（组合唯一时直接写出；多解时写有几种、列张数最少的前 3 种；低值品优先）
+  const rows = [{ seq: 1, title: '杜邦线', amount: 10 }, { seq: 23, title: '数字万用表', amount: 452, low: true }, { seq: 34, title: '电子秤', amount: 432.2, low: true },
+                { seq: 5, title: '螺丝', amount: 3.07 }];
+  assert.equal(RB.diffHint(rows, 884.2), '差额可能是：23 号 数字万用表 452.00 + 34 号 电子秤 432.20');
+  assert.equal(RB.diffHint(rows, 452), '差额可能是：23 号 数字万用表 452.00');
+  assert.equal(RB.diffHint(rows, 7), '');
+  const multi = [{ seq: 1, title: '甲', amount: 5 }, { seq: 2, title: '乙', amount: 5 }, { seq: 3, title: '丙', amount: 10 }, { seq: 4, title: '丁', amount: 10, low: true }];
+  const cs = RB.diffCombos(multi, 10);
+  assert.deepEqual(cs.map(c => c.map(r => r.seq)), [[4], [3], [1, 2]]);        // 一张的在前，同样张数时低值品在前
+  assert.equal(RB.diffHint(multi, 10), '有 3 种可能组合：4 号 丁 10.00；3 号 丙 10.00；1 号 甲 5.00 + 2 号 乙 5.00');
+  assert.equal(RB.diffCombos(multi.concat({ seq: 9, title: '戊', amount: 1 }), 21, 3).every(c => c.length <= 3), true);
+  // 历史批次文件夹名、批次名、报销文件夹名
+  assert.deepEqual(RB.parseBatchDir('260401_实验室第一批采购_1234.56_报销给张三'),
+    { date: '2026-04-01', name: '第一批', label: '实验室第一批采购', amount: 1234.56, to: '张三', dir: '260401_实验室第一批采购_1234.56_报销给张三' });
+  assert.equal(RB.parseBatchDir('260717_第三批_88_报销给某某').amount, 88);
+  assert.equal(RB.parseBatchDir('260401_采购_1234.56_报销给张三'), null);
+  assert.equal(RB.parseBatchDir('订单分拣-发票'), null);
+  assert.equal(RB.cnNum('十二'), 12); assert.equal(RB.cnNum('二十'), 20); assert.equal(RB.cnNum('四'), 4);
+  assert.equal(RB.nextBatchName([]), '第 1 批');
+  assert.equal(RB.nextBatchName([{ name: '第一批' }, { name: '第四批' }]), '第 5 批');
+  assert.equal(RB.nextBatchName([{ name: '第 2 批' }, { name: '补交' }, { name: '另一批' }]), '第 4 批');
+  assert.equal(RB.packDirName({ name: '张三', sid: '12345678' }, 256.8), '12345678_张三_256.80元');
+  assert.equal(RB.packDirName({ name: '张三', sid: '' }, 1000), '张三_1000.00元');
+  // 发票明细（项目名称）和销售方：低值品、补材料用
+  const inv2 = '电子发票（普通发票） 发票号码：26990000000000000777 开票日期：2026年09月01日 购买方信息 名称：某大学 统一社会信用代码/纳税人识别号：121000009999999996 '
+    + '销售方信息 名称：某某虚构商店 统一社会信用代码/纳税人识别号：91000000000000000X 项目名称 规格型号 *电子测量仪器*数字万用表 DT-9205 个 1 400.00 400.00 13% 52.00 价税合计（小写）¥452.00';
+  const pi = I.parseInvoiceText(inv2, '某大学');
+  assert.equal(pi.items, '*电子测量仪器*数字万用表DT-');
+  assert.equal(pi.seller, '某某虚构商店');
+  assert.equal(pi.amount, 452);
+  // 旺旺里卖家发来的表格（3D 打印明细）：不算发票文件，单独记 docs
+  const ca = I.chatAnalyze([{ self: true, time: '2026-09-01 10:00:00', text: '您好，订单 5190000000000000301 需要开发票' },
+    { self: false, time: '2026-09-02 10:00:00', file: { name: '3D打印明细.xlsx', size: '9 KB' } },
+    { self: false, time: '2026-09-02 10:01:00', file: { name: 'dzfp_26990000000000000301_某大学_20260902.pdf', size: '80 KB' } }]);
+  assert.deepEqual(ca.docs.map(f => f.name), ['3D打印明细.xlsx']);
+  assert.deepEqual(ca.files.map(f => f.name), ['dzfp_26990000000000000301_某大学_20260902.pdf']);
+  assert.deepEqual(I.chatForOrder(ca, '5190000000000000301', 1, '2026-08-30').docs.map(f => f.name), ['3D打印明细.xlsx']);
+}
+// 最小 xlsx / docx：zip 结构齐全，用本项目的表格读取器读回来一致
+{
+  const T = req('../js/xlsx-lite.js');
+  const ents = u8 => { const m = new Map(), dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength), dec = new TextDecoder();
+    for (let p = 0; dv.getUint32(p, true) === 0x04034b50;) { const n = dv.getUint16(p + 26, true), e = dv.getUint16(p + 28, true), sz = dv.getUint32(p + 18, true);
+      m.set(dec.decode(u8.subarray(p + 30, p + 30 + n)), u8.subarray(p + 30 + n + e, p + 30 + n + e + sz)); p += 30 + n + e + sz; } return m; };
+  const xl = OF.makeXlsx([{ name: '报销清单', rows: [['序号', '商品或说明', '金额'], [1, '示例 <万用表> & "线"', 452.2], [2, '碳板', 55]], widths: [6, 30, 10] },
+                          { name: '尚无发票', rows: [['订单号'], ['12345678']] }]);
+  const xe = ents(xl), txt = n => new TextDecoder().decode(xe.get(n));
+  for (const n of ['[Content_Types].xml', '_rels/.rels', 'xl/workbook.xml', 'xl/_rels/workbook.xml.rels', 'xl/styles.xml', 'xl/worksheets/sheet1.xml', 'xl/worksheets/sheet2.xml']) assert.ok(xe.has(n), n);
+  assert.ok(txt('xl/workbook.xml').includes('<sheet name="报销清单" sheetId="1" r:id="rId1"/>') && txt('xl/_rels/workbook.xml.rels').includes('Target="styles.xml"'));
+  assert.ok(txt('[Content_Types].xml').includes('/xl/worksheets/sheet2.xml'));
+  assert.ok(txt('xl/worksheets/sheet1.xml').includes('&lt;万用表&gt; &amp; &quot;线&quot;') && txt('xl/worksheets/sheet1.xml').includes('<v>452.2</v>'));
+  const back = await T.read(xl.buffer.slice(xl.byteOffset, xl.byteOffset + xl.byteLength), '报销清单.xlsx');
+  assert.deepEqual(back, [['序号', '商品或说明', '金额'], ['1', '示例 <万用表> & "线"', '452.2'], ['2', '碳板', '55']]);
+  const png = Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'));
+  const dx = ents(OF.makeDocx({ title: '用途说明', paras: ['订单号：12345678', { text: '用途：____', bold: true }], images: [{ data: png, type: 'png', w: 100, h: 300 }] }));
+  const doc = new TextDecoder().decode(dx.get('word/document.xml'));
+  for (const n of ['[Content_Types].xml', '_rels/.rels', 'word/_rels/document.xml.rels', 'word/document.xml', 'word/media/image1.png']) assert.ok(dx.has(n), n);
+  assert.ok(doc.includes('>用途说明<') && doc.includes('>用途：____<') && doc.includes('r:embed="rIdImg1"'));
+  assert.ok(new TextDecoder().decode(dx.get('word/_rels/document.xml.rels')).includes('Id="rIdImg1"') && new TextDecoder().decode(dx.get('[Content_Types].xml')).includes('Extension="png"'));
+  // 标签成对（粗查 XML 是否闭合）
+  for (const s of [doc, txt('xl/worksheets/sheet1.xml')]) for (const t of ['w:p', 'w:r', 'row', 'c', 'is']) {
+    const open = (s.match(new RegExp('<' + t + '[ >]', 'g')) || []).length, close = (s.match(new RegExp('</' + t + '>', 'g')) || []).length;
+    assert.equal(open, close, t);
+  }
+}
+// 主页：整理报销文件的目录结构和命名、批次进备份、设置里有姓名学号
+{
+  const appJs = fs.readFileSync(new URL('../js/app.js', import.meta.url), 'utf8');
+  const html = fs.readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+  assert.ok(appJs.includes("CAT_DIR = { small: '不超过1k耗材', big: '超过1k耗材', low: '低值品' }"));
+  assert.ok(appJs.includes("CAT_DIR.small + '/发票' + r.seq + '.' + ext") && appJs.includes("CAT_DIR[r.cat] + '/附件原图/'"));
+  assert.ok(appJs.includes("put('README.txt'") && appJs.includes("put('报销清单.xlsx'") && !appJs.includes("'/汇总.csv'") && !appJs.includes("'低值品（单张超过200元）/'"));
+  assert.ok(!/const BACKUP_SKIP = \[[^\]]*'batches'/.test(appJs), '报销批次要进备份');
+  assert.ok(html.includes('id="person-name"') && html.includes('id="person-sid"') && html.includes('src="js/reimburse.js"') && html.includes('src="js/office.js"'));
+  const mf = JSON.parse(fs.readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
+  assert.ok(mf.host_permissions.includes('<all_urls>'), 'chrome.tabs.captureVisibleTab 要 <all_urls>');
+}
+console.log('自检通过：读表（xml:space）、合并规则、日期格式、先抓后导表、关键词建议、发票逻辑、已整理发票去重、读发票 PDF 文字、补差价待定、同店默认实验室、下载发票按金额日期对单、给卖家的消息、详情页退款、zip 打包、开票卡片、manifest 匹配与版本号、回主页按钮、措辞、调试日志不进备份、催卖家话术、发票状态的文件名、低值品判断表、与科研无关的字样、3D 打印识别、到账差额组合、历史批次文件夹名、xlsx / docx 结构、整理目录结构');

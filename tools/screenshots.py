@@ -325,7 +325,7 @@ def load_invoice(page, home, nos=None, plat=None, store=None):
         for (const o of orders) for (const l of o.lines) { l.img = imgs[l.title] || ''; decisions[l.key] = 'lab'; }
         localStorage.setItem('orderTriage.app.v1', JSON.stringify({ orders, decisions, refunds: {}, rules: null, since: 'none',
             prefs: { autoNext: true, sort: 'desc', remindDays: 7 }, invoice: { title, taxId: tax, template: '', email: '' },
-            invFiles: {}, haveIdx: [] }));
+            invFiles: {}, haveIdx: [], person: { name: '张三', sid: '12345678' } }));
     }''', [rows, imgs, TITLE, FAKE_TAX])
     at = ts('2026-10-05T09:12:00+08:00')
     if plat is None:
@@ -440,7 +440,7 @@ def make_shots(p, page, home, tmp):
     page.evaluate('() => window.scrollTo(0, 0)')
     save(page, 'invoice', clip=band(box(page, '#bar')['top'] - 6, box(page, '#list')['bottom'] + 24), full=True)
 
-    # 整理报销文件：6 单已下载发票，选文件夹后预览新文件名
+    # 整理报销文件：7 单已下载发票，选文件夹后预览（按报销规范分类、低值品标签）
     got = ['示例-1011', '示例-1009', '示例-1008', '示例-1007', '示例-1006', '示例-1005', '示例-1004']
     issued = {'示例-1011': '2026-09-29', '示例-1009': '2026-09-25', '示例-1008': '2026-09-15', '示例-1007': '2026-09-08',
               '示例-1006': '2026-09-02', '示例-1005': '2026-08-27', '示例-1004': '2026-08-22'}
@@ -453,11 +453,9 @@ def make_shots(p, page, home, tmp):
         for (const [name, b64] of files) dt.items.add(new File([Uint8Array.from(atob(b64), c => c.charCodeAt(0))], name, { type: 'application/pdf' }));
         const inp = document.getElementById('inv-pack-dir'); inp.files = dt.files; inp.dispatchEvent(new Event('change', { bubbles: true })); }''', files)
     page.wait_for_selector('#dlg-pack[open]', timeout=20000)
-    page.fill('#pack-seq', '101')
-    page.dispatch_event('#pack-seq', 'input')
-    page.fill('#pack-name', '第五批采购报销')
-    # 预览框拉高到能放下整份清单（相当于用户拖大文本框）
-    page.evaluate('() => { const t = document.getElementById("pack-list"); t.style.maxHeight = "none"; t.style.height = (t.scrollHeight + 4) + "px"; document.activeElement.blur(); }')
+    page.fill('#pack-name', '第 5 批')
+    # 预览列表拉高到能放下整份清单（相当于用户把窗口拉大）
+    page.evaluate('() => { document.getElementById("pack-list").style.maxHeight = "none"; document.activeElement.blur(); }')
     page.wait_for_timeout(300)
     r = page.locator('#dlg-pack').bounding_box()
     save(page, 'pack', clip={'x': r['x'] - 20, 'y': r['y'] - 20, 'width': r['width'] + 40, 'height': r['height'] + 40})

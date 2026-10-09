@@ -1,7 +1,7 @@
 /* 订单分拣 —— 界面与状态。全部在本机浏览器内运行。 */
 (function () {
   'use strict';
-  const N = window.Normalize, C = window.Classify, T = window.TableReader, I = window.Invoice, Z = window.Zip;
+  const N = window.Normalize, C = window.Classify, T = window.TableReader, I = window.Invoice, Z = window.Zip, RB = window.Reimburse, OF = window.Office;
   const STORE = 'orderTriage.app.v1';
   // 作为 Chrome 扩展主页打开时：缺图清单写给淘宝页，淘宝页抓到的数据从扩展存储自动并进来
   const EXT = typeof chrome !== 'undefined' && !!(chrome.storage && chrome.runtime && chrome.runtime.id);
@@ -12,12 +12,17 @@
   const yuan = n => n == null ? '—' : '¥' + n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   // ── 状态 ──
+  // person：报销人姓名、学号（工程师没有学号，可空；整理报销文件的文件夹名、README.txt 用）
+  // lowval：用户点标签确认过的「是不是低值品」，按商品标题（N.norm）记 'low' / 'no'，同名商品以后自动沿用
+  // batches：每次整理报销文件记一批（和导入时认出的历史批次），含到账记录 pays，见「报销记录」
   let S = { orders: [], decisions: {}, refunds: {}, rules: null, prefs: { autoNext: true, sort: 'desc' },
-            invoice: { title: I.DEFAULT_TITLE, taxId: I.DEFAULT_TAX, template: '', email: '' }, invFiles: {}, haveIdx: [] };
+            invoice: { title: I.DEFAULT_TITLE, taxId: I.DEFAULT_TAX, template: '', email: '' }, invFiles: {}, haveIdx: [],
+            person: { name: '', sid: '' }, lowval: {}, batches: [] };
   // 扩展存储里淘宝页读回来的发票数据：全部发票同步结果、旺旺扫描结果、已下载记录（只在扩展里有）
   // cardApplied：按卖家开票卡片提交过申请的单（extension/apply-card.js 记）；cardResult：每单按卡片申请的结果；qrFail：二维码发票核对没通过的
-  const X = { invSync: null, chatScan: null, dlDone: {}, cardApplied: {}, cardResult: {}, qrFail: {} };
-  const XKEYS = ['invSync', 'chatScan', 'dlDone', 'askSent', 'vipSent', 'goneNos', 'cardApplied', 'cardResult', 'qrFail'];
+  // attDone：从旺旺下载的附件（3D 打印明细表格等，background.js 记）
+  const X = { invSync: null, chatScan: null, dlDone: {}, cardApplied: {}, cardResult: {}, qrFail: {}, attDone: {} };
+  const XKEYS = ['invSync', 'chatScan', 'dlDone', 'askSent', 'vipSent', 'goneNos', 'cardApplied', 'cardResult', 'qrFail', 'attDone'];
   const XEMPTY = k => k === 'goneNos' ? [] : ['invSync', 'chatScan'].includes(k) ? null : {};
   // step：用户点开的那一步（null = 当前该做的那一步）；list：下方显示商品列表还是发票表（renderSummary 按显示的那一步定）
   const view = { q: '', focus: null, step: null, list: 'goods' };
@@ -102,6 +107,7 @@
       if (!raw) return;
       const d = JSON.parse(raw);
       if (d && Array.isArray(d.orders)) S = Object.assign(S, d);
+      S.person = S.person || { name: '', sid: '' }; S.lowval = S.lowval || {}; S.batches = S.batches || [];
     } catch (e) { /* 私密窗口等情况下读不到，当作空白开始 */ }
   }
   // 词表写死在代码里（设置里的词表编辑已删）；以前保存的自定义词表不再使用
@@ -158,7 +164,10 @@
             : { cat: 'lab', via: 'invoice', why: '本单' + inv });
         const r = manual ? { cat: manual, via: 'manual', why: '手动判断', hits: a.hits } : a;
         const d = lineDue(o, l, shares[i]);
-        rows.push({ o, l, share: d.share, share0: shares[i], r, ref: d.ref, past, keep: d.keep, refAmt: d.refAmt, refManual: S.refunds[l.key] !== undefined });
+        // 低值品（js/reimburse.js lowJudge）：按件的单价；发票明细只在这单只有一件时拿来看（几件时分不清明细对应哪件，只看标题）
+        const unit = RB.unitPrice(d.share, shares[i], l.qty, d.keep, d.refAmt);
+        const low = RB.lowJudge({ unit, title: l.title, sku: l.sku, inv: o.lines.length === 1 ? invItemsOf(o) : '', memo: (S.lowval || {})[N.norm(l.title)] });
+        rows.push({ o, l, share: d.share, share0: shares[i], r, ref: d.ref, past, keep: d.keep, refAmt: d.refAmt, refManual: S.refunds[l.key] !== undefined, unit, low });
       });
     }
     derived = { rows, byKey: new Map(rows.map(x => [x.l.key, x])) };
@@ -193,11 +202,13 @@
 
   const effCat = x => x.r.cat;                         // lab / personal / unsure
   const counted = x => !x.ref;                         // 退款、交易关闭的不计金额
+  // 实验室商品里「是否低值品」判断不出的（黄色标签，和待定一样要用户点一下）
+  const lowAsk = x => !x.ref && !x.past && effCat(x) === 'lab' && x.low && x.low.v === 'ask';
 
   // ── 筛选 ──
   // 「核对商品」一张列表（用户 2026-10-07：不再分待定 / 个人 / 实验室三个视图来回切）：
-  // 待定的排最前，其次自动判断、还没确认的，再是已确认的，退款的放最后；同一组里新的在前
-  const rankOf = x => x.ref ? 3 : effCat(x) === 'unsure' ? 0 : S.decisions[x.l.key] ? 2 : 1;
+  // 待定的、待确认是否低值品的排最前，其次自动判断、还没确认的，再是已确认的，退款的放最后；同一组里新的在前
+  const rankOf = x => x.ref ? 3 : effCat(x) === 'unsure' || lowAsk(x) ? 0 : S.decisions[x.l.key] ? 2 : 1;
   function visibleRows() {
     const q = view.q.trim().toLowerCase();
     return derived.rows.filter(x => {
@@ -426,11 +437,12 @@
   const pb = (attr, label, tip, primary, off) => '<button class="btn' + (primary === false ? '' : ' primary') + '" ' + attr + (off ? ' disabled' : '') + ' title="' + tip + '">' + label + '</button>';
   function sortCounts() {
     const live = derived.rows.filter(x => !x.past);
-    const n = { lab: 0, personal: 0, unsure: 0, ref: 0, unconf: 0, img: 0, live: live.length };
+    const n = { lab: 0, personal: 0, unsure: 0, ref: 0, unconf: 0, img: 0, live: live.length, lowAsk: 0 };
     for (const x of live) {
       if (x.l.img) n.img++;
       if (x.ref) { n.ref++; continue; }
       n[effCat(x)]++;
+      if (lowAsk(x)) n.lowAsk++;
       if (effCat(x) !== 'unsure' && S.decisions[x.l.key] !== effCat(x)) n.unconf++;
     }
     return n;
@@ -444,7 +456,7 @@
     const range = t0 === t1 ? t0 : t0.slice(0, 4) === t1.slice(0, 4) ? t0 + ' 至 ' + t1.slice(5) : t0 + ' 至 ' + t1;
     const since = sinceInfo();
     const pack = EXT ? packState() : null;
-    const sorted = n.live > 0 && n.unsure === 0 && n.unconf === 0;
+    const sorted = n.live > 0 && n.unsure === 0 && n.unconf === 0 && n.lowAsk === 0;
     return [
       // 读取订单（用户 2026-10-07）：订单、图片、逐件退款一次读完；订单表（xlsx）降为可选，在「更多」里导入。
       // 网页版没有扩展读不了淘宝页面，仍是导入订单表 + 复制抓取脚本
@@ -462,20 +474,22 @@
           + pb('data-flow="img-dlg"', '补充图片', '复制抓取脚本，在淘宝订单页的控制台运行，补充商品图片和退款', false) },
       // 核对商品：原来的「判断待定 / 检查个人 / 检查实验室」三步合成一步，列表就在下方，待定的排最前
       { id: 'sort', title: '核对商品', list: 'goods', done: sorted,
-        text: !n.live ? '暂无商品' : n.unsure ? '待定 ' + n.unsure + ' 件' : sorted ? '已确认' : '实验室 ' + n.lab + ' · 个人 ' + n.personal,
-        tip: '实验室 ' + n.lab + ' 件、个人 ' + n.personal + ' 件、待定 ' + n.unsure + ' 件、退款 ' + n.ref + ' 件',
-        hint: n.unsure ? '按 1 实验室、2 个人，还有 ' + n.unsure + ' 件待定' : sorted ? '已全部确认' : '核对下方判断，判错的按 1 / 2 改正',
+        text: !n.live ? '暂无商品' : n.unsure ? '待定 ' + n.unsure + ' 件' : n.lowAsk ? '待确认低值品 ' + n.lowAsk + ' 件' : sorted ? '已确认' : '实验室 ' + n.lab + ' · 个人 ' + n.personal,
+        tip: '实验室 ' + n.lab + ' 件、个人 ' + n.personal + ' 件、待定 ' + n.unsure + ' 件、退款 ' + n.ref + ' 件' + (n.lowAsk ? '、待确认是否低值品 ' + n.lowAsk + ' 件' : ''),
+        hint: n.unsure ? '按 1 实验室、2 个人，还有 ' + n.unsure + ' 件待定' : n.lowAsk ? '点黄色标签确认是否低值品，还有 ' + n.lowAsk + ' 件'
+          : sorted ? '已全部确认' : '核对下方判断，判错的按 1 / 2 改正',
         acts: pb('data-flow="sort-done"', '确认核对完成', n.unsure ? '还有 ' + n.unsure + ' 件待定，判完才能确认'
-          : '将下方自动判断的商品全部确认（实验室 ' + n.lab + ' 件、个人 ' + n.personal + ' 件），之后不再自动变更', true, n.unsure > 0 || sorted) },
+          : n.lowAsk ? '还有 ' + n.lowAsk + ' 件待确认是否低值品（单价超过 200 元、判断不出设备还是耗材），点黄色标签确认后才能确认'
+          : '将下方自动判断的商品全部确认（实验室 ' + n.lab + ' 件、个人 ' + n.personal + ' 件），之后不再自动变更', true, n.unsure > 0 || n.lowAsk > 0 || sorted) },
       { id: 'invoice', title: '处理发票', list: 'invoice', done: !!ic && ic.todo === 0 && ic.ready === 0 && invOrders().length > 0,
         text: J.busy ? '处理中…' : ic ? '已取得 ' + ic.done + ' / ' + (ic.todo + ic.ready + ic.done) + ' 单' : '需安装为 Chrome 扩展',
         tip: EXT ? '需在本浏览器中保持淘宝登录，并已在「设置」中填写抬头和税号' : '发票功能需安装为 Chrome 扩展后使用',
         hint: EXT ? '自动检查、申请、索要并下载发票；对外操作先确认' : '需安装为 Chrome 扩展',
         acts: EXT ? pb('data-flow="inv-run"', J.busy ? '正在处理…' : '自动处理发票', hasSample() ? SAMPLE_TIP : RUN_TIP, true, J.busy || hasSample()) : '' },
       { id: 'pack', title: '整理报销文件', list: 'invoice', done: !!pack && pack.done, text: pack ? pack.text : '需安装为 Chrome 扩展',
-        tip: '结果存入下载文件夹的「订单分拣-报销」：按序号重命名的发票、汇总表和压缩包，单张超过 200 元的放入「低值品」；原文件不变',
+        tip: '按报销规范整理到下载文件夹的「订单分拣-报销/学号_姓名_总金额元」：不超过1k耗材、超过1k耗材（发票 + 附件原图）、低值品，附 README.txt、报销清单.xlsx 和压缩包；原文件不变',
         hint: EXT ? '选择下载文件夹里的「订单分拣-发票」' : '需安装为 Chrome 扩展',
-        acts: EXT ? pb('data-pick="inv-pack-dir"', '选择发票文件夹并整理', hasSample() ? SAMPLE_TIP : '选择下载文件夹里的「订单分拣-发票」（浏览器询问「上传」时确认即可，文件只在本机读取），预览新文件名后生成报销文件夹和压缩包', true, hasSample()) : '' },
+        acts: EXT ? pb('data-flow="pack"', '选择发票文件夹并整理', hasSample() ? SAMPLE_TIP : '选择下载文件夹里的「订单分拣-发票」（浏览器询问「上传」时确认即可，文件只在本机读取），预览后生成报销文件夹和压缩包；需先在「设置」中填写报销人姓名', true, hasSample()) : '' },
     ];
   }
   const RUN_TIP = '依次自动：刷新发票情况（淘宝开票记录、卖家旺旺回复）、下载已开具的发票；需要申请开票、向卖家索要、请客服督促的，先列一张清单，确认一次后自动完成';
@@ -513,7 +527,9 @@
         + '<span class="flow-s">' + esc(x.text) + '</span></li>').join('') + '</ol>'
       + statusBar()
       + '<div class="flow-detail"><div class="fd-text"><span class="fd-title">第 ' + (show + 1) + ' 步　' + d.title + '</span>'
-      + '<span class="fd-hint">' + esc(d.hint) + '</span></div><div class="flow-acts">' + d.acts + '</div></div>';
+      + '<span class="fd-hint">' + esc(d.hint) + '</span></div><div class="flow-acts">' + d.acts + '</div></div>'
+      // 第 4 步说明区下方：报销记录（每批一行，只读；到账在行内「填写到账」）
+      + (d.id === 'pack' && EXT ? batchView() : '');
   }
 
   function statusClass(s) {
@@ -665,7 +681,7 @@
                   : x.ref === 'closed' ? '<span class="pill p-ref">交易关闭</span>'
                   : x.refAmt != null ? '<span class="pill p-ref">部分退款：已退 ' + yuan(x.refAmt) + '，按 ' + yuan(x.share) + ' 报销</span>'
                   : x.keep != null ? '<span class="pill p-ref">退 ' + (x.l.qty - x.keep) + ' 个，留 ' + x.keep + ' 个</span>' : '';
-    return '<div class="line' + (x.ref ? ' is-ref' : cat === 'unsure' ? ' is-uns' : '') + (view.focus === l.key ? ' focus' : '') + '" data-key="' + esc(l.key) + '">'
+    return '<div class="line' + (x.ref ? ' is-ref' : cat === 'unsure' || lowAsk(x) ? ' is-uns' : '') + (view.focus === l.key ? ' focus' : '') + '" data-key="' + esc(l.key) + '">'
       + img
       + '<div><div class="title">' + title + '</div>'
       + (l.sku ? '<div class="sku">' + esc(l.sku) + '</div>' : '')
@@ -676,10 +692,46 @@
       + '<div class="cls"><div class="pick">'
       + '<button data-set="lab" class="' + labCls + '" title="判为实验室（快捷键 1）">实验室</button>'
       + '<button data-set="personal" class="' + perCls + '" title="判为个人（快捷键 2）">个人</button></div>'
-      + '<div class="meta">' + pill
+      + '<div class="meta">' + pill + lowPill(x)
       + (manual ? '<button class="linkbtn" data-set="auto" title="撤回为自动判断（快捷键 0）">撤回</button>' : '')
       + ((x.ref === 'refunded' && x.l.qty > 1) || x.keep != null ? '<button class="linkbtn" data-keep="1" title="同一商品购买 ' + x.l.qty + ' 个，订单页无法看出退款数量">' + (x.keep != null ? '修改保留数量' : '仅部分退款') + '</button>' : '')
       + '</div></div></div>';
+  }
+
+  // 低值品标签（只给单价超过 200 元的实验室商品）：深色「低值品」、浅色「耗材」、黄色「是否低值品？」；点一下在低值品 / 耗材间切换，
+  // 按商品标题记住（S.lowval），同名商品以后自动沿用
+  const LOW_PILL = { low: ['p-low', '低值品'], no: ['p-cons', '耗材'], ask: ['p-lowask', '是否低值品？'] };
+  function lowPill(x) {
+    if (x.ref || effCat(x) !== 'lab' || !x.low || !LOW_PILL[x.low.v]) return '';
+    const [cls, label] = LOW_PILL[x.low.v], to = x.low.v === 'low' ? '耗材' : '低值品';
+    if (x.low.fixed) return '<span class="pill ' + cls + '" title="' + esc(x.low.why) + '">' + label + '</span>';
+    return '<button type="button" class="pill ' + cls + '" data-low="' + esc(x.l.key) + '" title="' + esc(x.low.why + '。点击改为「' + to + '」（同名商品以后沿用）') + '">' + label + '</button>';
+  }
+  // 发票表、整理预览里一单（一张票）的低值品标签：待确认的几件一起改；没有待确认的，在低值品 / 耗材间切换
+  function toggleLowOrder(no) {
+    const xs = derived.rows.filter(x => x.o.no === no && !x.ref && effCat(x) === 'lab' && x.low && x.low.v && !x.low.fixed);
+    if (!xs.length) return;
+    const ask = xs.filter(x => x.low.v === 'ask'), v = ask.length || !xs.some(x => x.low.v === 'low') ? 'low' : 'no';
+    S.lowval = S.lowval || {};
+    for (const x of ask.length ? ask : xs) S.lowval[N.norm(x.l.title)] = v;
+    persist(); derive(); render();
+    if ($('dlg-pack').open) renderPack();
+    toast(v === 'low' ? '已确认为低值品（需先开低值票）' : '已确认为耗材');
+  }
+  // 这单的发票明细（读发票 PDF 时记下的项目名称；整理报销文件时读到的也算）
+  function invItemsOf(o) {
+    const got = (X.dlDone[o.no] || []).concat(S.invFiles[o.no] || []);
+    return got.map(g => { const c = fcOf(g) || packRead.get(baseOf(g.path)) || packRead.get(g.file); return c && c.items; }).filter(Boolean).join('；');
+  }
+  function toggleLow(key) {
+    const x = derived.byKey.get(key);
+    if (!x) return;
+    const k = N.norm(x.l.title), prev = (S.lowval || {})[k];
+    const v = x.low && x.low.v === 'low' ? 'no' : 'low';
+    S.lowval = S.lowval || {}; S.lowval[k] = v;
+    undoStack.push({ type: 'low', key: k, prev });
+    persist(); derive(); render();
+    toast((v === 'low' ? '已确认为低值品（需先开低值票）' : '已确认为耗材') + '：' + x.l.title.slice(0, 18), true);
   }
 
   // ── 操作 ──
@@ -699,6 +751,7 @@
     const u = undoStack.pop();
     if (!u) return;
     if (u.type === 'bulk') for (const [k, v] of u.prev) { if (v === undefined) delete S.decisions[k]; else S.decisions[k] = v; }
+    else if (u.type === 'low') { if (u.prev === undefined) delete S.lowval[u.key]; else S.lowval[u.key] = u.prev; }
     else { const box = u.type === 'dec' ? S.decisions : S.refunds; if (u.prev === undefined) delete box[u.key]; else box[u.key] = u.prev; }
     persist(); derive(); render();
     toast('已撤销');
@@ -731,7 +784,7 @@
   // 「确认核对完成」：待定都判完后，把自动判断的也全部写成用户的判断，以后不再自动变更；然后显示下一步「处理发票」
   function confirmSort() {
     const live = derived.rows.filter(x => !x.past && !x.ref);
-    if (live.some(x => effCat(x) === 'unsure')) return;
+    if (live.some(x => effCat(x) === 'unsure' || lowAsk(x))) return;
     const rows = live.filter(x => S.decisions[x.l.key] !== effCat(x));
     const prev = rows.map(x => [x.l.key, S.decisions[x.l.key]]);
     rows.forEach(x => { S.decisions[x.l.key] = effCat(x); });
@@ -927,7 +980,12 @@
     if (cs && ['ask', 'apply', 'asked'].includes(st.key))
       return { key: 'check', base: st.key, label: '疑似已整理，请核对', detail: '已整理的发票中有同金额的：' + cs.map(x => x.file).join('、') + '（多单对应同一张或一单对应多张，插件不做推断）' };
     if (st.key === 'apply' && noPlatformOf(o)) return chatFailOr(o, askedOr(o, { key: 'ask', label: I.LABEL.ask, detail: '批量开票页中无此订单，无法在平台开票' }));
-    return withCardFail(o, withVip(o, withCheck(o, chatFailOr(o, askedOr(o, rejectedOnly(o, st))))));
+    return withBatch(o, withCardFail(o, withVip(o, withCheck(o, chatFailOr(o, askedOr(o, rejectedOnly(o, st)))))));
+  }
+  // 插件整理过的单：写明是哪一批（「已整理（第 3 批）」）
+  function withBatch(o, st) {
+    const p = st.key === 'have' && S.packed && S.packed[o.no], b = p && p.batch && (S.batches || []).find(x => x.id === p.batch);
+    return b ? Object.assign({}, st, { label: '已整理（' + b.name + '）' }) : st;
   }
   // 上次读旺旺时这家的会话没读成（点不开、读不出）、又从没读到过：标成「旺旺会话未能读取」，不当成「需向卖家索要」（免得把问过的店再问一遍）
   function chatFailOr(o, st) {
@@ -958,13 +1016,14 @@
       const o = x.o;
       if (!o.nick) { noNick.add(o.shop); noNickOrders.push(o); continue; }
       const g = by.get(o.nick) || { nick: o.nick, shop: o.shop, orders: [] };
-      g.orders.push({ no: o.no, date: (o.time || '').slice(0, 10), amount: dueOf(o),
+      g.orders.push({ no: o.no, date: (o.time || '').slice(0, 10), amount: dueOf(o), p3d: needOf([x]).p3d,
         lines: x.lines.map(l => ({ title: l.title, img: l.img || '', qty: l.qty || 1 })) });
       by.set(o.nick, g);
     }
     const tpl = S.invoice.template || I.DEFAULT_TEMPLATE;
+    // 3D 打印订单：在原消息末尾追加一句索要明细清单（报销要附；原消息一个字不改）
     const items = [...by.values()].map(g => Object.assign(g, { nos: g.orders.map(o => o.no),
-      msg: I.renderMsg(tpl, { orders: g.orders, title: S.invoice.title, taxId: S.invoice.taxId, email: S.invoice.email }) }));
+      msg: I.renderMsg(tpl, { orders: g.orders, title: S.invoice.title, taxId: S.invoice.taxId, email: S.invoice.email }) + (g.orders.some(o => o.p3d) ? RB.ASK_3D : '') }));
     return { items, noNick: [...noNick], noNickOrders };
   }
   // 逐家打开卖家聊天、把消息填进输入框，用户核对后自己点「发送」（插件不替用户发）；发完自动开下一家
@@ -1113,7 +1172,7 @@
       const item = g || { nick: o.nick, shop: o.shop, nos: [no], orders: [{ no, date: (o.time || '').slice(0, 10), amount: dueOf(o),
         lines: x.lines.map(l => ({ title: l.title, img: l.img || '', qty: l.qty || 1 })) }] };
       if (!g) item.msg = I.renderMsg(act === 'nudge' ? I.FOLLOW_TEMPLATE : (S.invoice.template || I.DEFAULT_TEMPLATE),
-        { orders: item.orders, title: S.invoice.title, taxId: S.invoice.taxId, email: S.invoice.email });
+        { orders: item.orders, title: S.invoice.title, taxId: S.invoice.taxId, email: S.invoice.email }) + (act === 'ask' && needOf([x]).p3d ? RB.ASK_3D : '');
       await doAsk([item], false, act === 'nudge');
       toast('已打开与 ' + o.shop + ' 的旺旺会话：' + (act === 'nudge' ? '催促消息' : '索要发票的消息') + '填好后请核对，再点「发送」');
       return;
@@ -1172,8 +1231,11 @@
         const o = x.o, s = st.get(o.no), c = chatOf(o);
         const acts = [], a = rowAction(x, s, late.has(o.no));
         if (a) acts.push('<button type="button" class="btn sm" data-act="' + a.act + '" data-no="' + esc(o.no) + '" title="' + esc(a.tip) + '">' + a.label + '</button>');
-        // 卖家发到邮箱的发票只能用户自己挂上：次要操作，小字链接
-        if (s.key !== 'gone') acts.push('<label class="add" title="选择 PDF 文件（如卖家发送到邮箱的发票），按本单命名复制到下载文件夹的「订单分拣-发票」">手动添加发票<input type="file" accept=".pdf,.ofd,.xml" data-inv="attach" data-no="' + esc(o.no) + '" hidden></label>');
+        // 卖家发到邮箱的发票、要补的附件（支付记录截图、用途说明、3D 打印明细）只能用户自己挂上：次要操作，小字链接，一个入口（插件按文件判断是发票还是附件）
+        const mat = s.key === 'gone' || s.key === 'have' ? null : matOf(x), needA = !!(mat && mat.miss.length);
+        if (s.key !== 'gone') acts.push('<label class="add" title="' + (needA ? '选择文件：发票（PDF、OFD）按本单命名存入「订单分拣-发票」；支付记录截图、用途说明、3D 打印明细等存为本单附件，整理报销文件时放入「附件原图」'
+          : '选择 PDF 文件（如卖家发送到邮箱的发票），按本单命名复制到下载文件夹的「订单分拣-发票」') + '">' + (needA ? '手动添加发票 / 附件' : '手动添加发票')
+          + '<input type="file" accept="' + (needA ? '.pdf,.ofd,.xml,.png,.jpg,.jpeg,.xlsx,.xls,.csv,.doc,.docx' : '.pdf,.ofd,.xml') + '" data-inv="attach" data-no="' + esc(o.no) + '" hidden></label>');
         const okImg = u => /^https:\/\/([\w-]+\.)*(alicdn|taobao|tbcdn|tmall)\.com\//.test(u);
         const imgs = s.key === 'replied' && c && !c.files.length && c.images.length
           ? c.images.slice(-2).filter(im => okImg(im.src)).map(im => '<div><img class="qr" alt="卖家发送的图片" referrerpolicy="no-referrer" crossorigin="anonymous" data-qr="1" src="' + esc(im.src) + '"><div class="detail" data-qr-out></div></div>').join('') : '';
@@ -1184,7 +1246,7 @@
           + '<td class="who"><div class="shop">' + esc(o.shop || '未知店铺') + wwBtn(o) + '</div><div class="detail ono">' + esc(o.no) + '</div></td>'
           + '<td>' + detailA(o.no, esc(t.length > 26 ? t.slice(0, 26) + '…' : t)) + (x.lines.length > 1 ? ' 等 ' + x.lines.length + ' 件' : '') + '</td>'
           + '<td class="amt num">' + yuan(o.pay) + '</td>'
-          + '<td class="st-cell">' + stPill(o, s) + stDetail(s) + imgs + '</td>'
+          + '<td class="st-cell">' + stPill(o, s) + stDetail(s) + (mat ? matTags(x) : '') + imgs + '</td>'
           + '<td><div class="acts">' + acts.join('') + '</div></td></tr>';
     };
     const SECT = [['todo', '未开票'], ['ready', '已开票，待下载'], ['done', '已下载'], ['gone', '已视为删除']];
@@ -1257,8 +1319,10 @@
     const by = new Map((S.haveIdx || []).map(x => [x.invNo, x]));
     got.forEach(r => { if (!by.has(r.invNo)) by.set(r.invNo, { invNo: r.invNo, date: r.date, amount: r.amount, file: r.file }); });
     S.haveIdx = [...by.values()];
+    const nb = importBatches(files, got);
     persist(); derive(); render();
-    toast('已读取 ' + total + ' 个 PDF：识别发票 ' + got.length + ' 张（' + notInv.length + ' 个非发票文件，如扫描件或说明文档），已整理的发票共 ' + S.haveIdx.length + ' 张');
+    toast('已读取 ' + total + ' 个 PDF：识别发票 ' + got.length + ' 张（' + notInv.length + ' 个非发票文件，如扫描件或说明文档），已整理的发票共 ' + S.haveIdx.length + ' 张'
+      + (nb ? '；识别出历史报销批次 ' + nb + ' 个（见第 4 步「报销记录」）' : ''));
   }
   // 能确定的改过来：归错单的挪到对的那单名下；比下单还早的、已报销过的、不是发票的从这单拿掉（这单又会出现在「还没开发票」里）；
   // 同店几单合开一张的，同一条下载记录也挂到其余几单下面（整理报销文件时按发票号合成一行）
@@ -1293,29 +1357,154 @@
     return n;
   }
 
-  // ── 整理成报销文件（用户 2026-10-05）：这一批实验室订单的发票，复制一份按报销格式改名
-  //   「序号_开票日期_金额-商品摘要-数量件.pdf」（和用户以前几批的命名一样，如 170_260713_22.54-K16P4芯插头加C4连接座-1套.pdf），
-  //   放进下载文件夹的「订单分拣-报销/批次名_今天_合计金额/」，附汇总表（含还没有发票的实验室订单），再打一个同样内容的压缩包。
-  //   插件读不了电脑上的文件，所以要用户选一下下载好的发票文件夹；原文件不动。序号默认接着已整理发票里最大的那个往下编
-  const baseOf = p => String(p || '').split(/[\\/]/).pop();
-  function nextSeq() {
-    let max = 0;
-    const files = (S.haveIdx || []).map(x => x.file).concat(Object.values(S.packed || {}).map(p => p.file));
-    for (const f of files) { const m = /(?:^|\/)(\d{1,4})((?:\+\d{1,4})*)_\d{6}_/.exec(f || ''); if (m) max = Math.max(max, +m[1], ...(m[2].match(/\d+/g) || []).map(Number)); }
-    return max + 1;
+  // ── 报销附件（用户 2026-10-09，按《报销规范手册》3.1）：订单页面截图、支付记录、用途说明、3D 打印明细 ──
+  // 截图和用户手动添加的文件存在本机 IndexedDB（库 orderTriage-att，表 att，每条 { id, no, kind, name, type, blob, w, h, at }）；
+  // 图片较大，不进备份；「清除本机数据」时一起清掉。旺旺里下载的附件（3D 打印明细表格）在下载文件夹里（X.attDone），整理时从选的文件夹按文件名取
+  const ATT = new Map();          // 订单号 → [附件记录]
+  let attDb = null;
+  function idb() {
+    if (!attDb) attDb = new Promise((ok, bad) => {
+      const r = indexedDB.open('orderTriage-att', 1);
+      r.onupgradeneeded = () => r.result.createObjectStore('att', { keyPath: 'id' });
+      r.onsuccess = () => ok(r.result); r.onerror = () => bad(r.error);
+    });
+    return attDb;
   }
-  const yymmdd = d => String(d || '').replace(/-/g, '').slice(2, 8);
+  async function attTx(mode, fn) {
+    const db = await idb();
+    return new Promise((ok, bad) => { const t = db.transaction('att', mode), r = fn(t.objectStore('att')); t.oncomplete = () => ok(r && r.result); t.onerror = () => bad(t.error); });
+  }
+  async function attLoad() {
+    try {
+      const all = await attTx('readonly', st => st.getAll());
+      ATT.clear();
+      for (const a of all || []) ATT.set(a.no, (ATT.get(a.no) || []).concat(a));
+    } catch (e) { console.warn('[订单分拣] 读取本机附件出错', e); }
+  }
+  async function attPut(rec) {
+    await attTx('readwrite', st => st.put(rec));
+    ATT.set(rec.no, (ATT.get(rec.no) || []).filter(a => a.id !== rec.id).concat(rec));
+  }
+  const attClear = () => attTx('readwrite', st => st.clear()).then(() => ATT.clear()).catch(() => {});
+  // 这单已有的附件：本机存的（截图、手动添加的）+ 旺旺下载的
+  const attsOf = no => (ATT.get(no) || []).map(a => ({ kind: a.kind, name: a.name, id: a.id, src: 'idb' }))
+    .concat(((X.attDone || {})[no] || []).map(a => ({ kind: a.kind, name: a.file, path: a.path, src: 'disk' })));
+
+  // 这单（或这张票）要补什么材料（规则在 js/reimburse.js）：价税合计超过 1000 元、开票内容有与科研无关的字样、3D 打印。
+  // amount：发票的价税合计（读到才有）；与科研无关的字样只看发票明细（手册说的是开票内容），还没读到发票时先按商品标题提醒
+  function needOf(xs, amount, items) {
+    const titles = xs.flatMap(x => x.lines.map(l => l.title + ' ' + (l.sku || ''))).join(' ');
+    const inv = items != null ? items : xs.map(x => invItemsOf(x.o)).filter(Boolean).join('；');
+    return { big: (+amount || 0) > RB.BIG + 0.005 || xs.some(x => dueOf(x.o) > RB.BIG + 0.005), sens: RB.sensitiveWords(inv || titles), p3d: RB.is3d(titles + ' ' + inv) };
+  }
+  // 这单的低值品情况：实验室商品里有一件低值品 → 'low'；有判断不出的 → 'ask'
+  function lowOfOrder(no) {
+    const vs = derived.rows.filter(x => x.o.no === no && !x.ref && effCat(x) === 'lab' && x.low).map(x => x.low.v);
+    return vs.includes('low') ? 'low' : vs.includes('ask') ? 'ask' : '';
+  }
+  // 发票表一行（invOrders 的一项）：要的材料、缺的材料、低值品
+  function matOf(x) {
+    const got = (X.dlDone[x.o.no] || []).concat(S.invFiles[x.o.no] || []);
+    const amts = got.map(g => { const c = fcOf(g); return c && c.amount; }).filter(a => a != null);
+    const need = needOf([x], amts.length ? Math.max(...amts) : null);
+    return { need, miss: RB.missing(need, attsOf(x.o.no).map(a => a.kind)), low: lowOfOrder(x.o.no) };
+  }
+  // 发票表、整理预览里的标签：低值品深色、待确认黄色、缺材料橙色
+  const MAT_TAG = {
+    订单页面: ['需订单截图', '要附订单页面截图：「自动处理发票」或「整理报销文件」时插件自动打开订单详情页截图'],
+    支付记录: ['需补支付记录', '价税合计超过 1000 元：要附订单页面和支付记录（能证明实际付款的支付宝账单截图），在本行「手动添加发票 / 附件」中添加'],
+    用途说明: ['需用途说明', '开票内容含可能与科研无关的字样：要附 Word 用途说明（整理时自动生成草稿，文末附订单截图），填写用途后按要求盖章'],
+    '3D打印明细': ['需3D打印明细', '3D 打印订单：要附明细清单（零件名称、材料、数量、单价）；向卖家索要发票时插件一并索要，卖家发来后自动挂上或手动添加'],
+  };
+  function lowTag(no, v) {
+    if (v === 'low') return '<span class="tag t-low" title="单件超过 200 元的设备器械，需先开低值票">低值品</span>';
+    if (v === 'ask') return '<button type="button" class="tag t-ask" data-lowno="' + esc(no) + '" title="单价超过 200 元，判断不出是设备器械还是耗材；点击确认为低值品，再点改为耗材（同名商品以后沿用）">是否低值品？</button>';
+    return '';
+  }
+  function matTags(x) {
+    const m = matOf(x);
+    const h = lowTag(x.o.no, m.low) + m.miss.map(k => '<span class="tag t-mat" title="' + esc(MAT_TAG[k][1]) + '">' + MAT_TAG[k][0] + '</span>').join('');
+    return h ? '<div class="tags">' + h + '</div>' + (m.low === 'low' ? '<div class="detail">需先开低值票</div>' : '') : '';
+  }
+
+  // ── 订单详情页截图（chrome.tabs.captureVisibleTab，manifest 要 <all_urls>，只截插件自己打开的订单详情页）──
+  // 详情页（extension/detail.js）按主页发的 otShot 逐段滚动，每段截一张（浏览器限制每秒最多截 2 次），拼成一张长图，最多 6 屏。
+  // 每段截之前核对这一页还在前台、还是这单的订单详情页——用户中途切走了就不截（不然会截到别的页面）
+  const DETAIL_RE = /^https:\/\/(trade\.taobao\.com\/trade\/detail\/|trade\.tmall\.com\/detail\/)/;
+  async function shotDetail(o, tab) {
+    const segs = [];
+    let y = 0, info = null;
+    for (let i = 0; i < 6; i++) {
+      info = await chrome.tabs.sendMessage(tab.id, { type: 'otShot', no: o.no, y });
+      if (!info) throw new Error('订单详情页未响应');
+      const t = await chrome.tabs.get(tab.id);
+      if (!t.active || !DETAIL_RE.test(t.url || '') || !t.url.includes(o.no)) throw new Error('订单详情页不在前台，未截图');
+      if (i) await sleepMs(600);
+      segs.push({ y: info.y, url: await chrome.tabs.captureVisibleTab(t.windowId, { format: 'jpeg', quality: 85 }) });
+      if (info.y + info.vh >= info.h - 2) break;
+      y = info.y + info.vh;
+    }
+    const bmps = await Promise.all(segs.map(async s => createImageBitmap(await (await fetch(s.url)).blob())));
+    const scale = bmps[0].width / (info.vw || bmps[0].width), last = segs[segs.length - 1];
+    const H = Math.max(1, Math.min(Math.round((last.y + info.vh) * scale), 16000));
+    const c = new OffscreenCanvas(bmps[0].width, H), g = c.getContext('2d');
+    g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, H);
+    segs.forEach((s, i) => g.drawImage(bmps[i], 0, Math.round(s.y * scale)));
+    return { blob: await c.convertToBlob({ type: 'image/jpeg', quality: 0.85 }), w: c.width, h: H };
+  }
+  // 要截订单页面、还没截到的单（每天自动刷新的后台模式不截：截图要把详情页切到前台）
+  const shotList = () => invOrders().filter(x => !isSample(x.o.no) && invStatus(x).key !== 'have' && matOf(x).miss.includes('订单页面')).map(x => x.o);
+
+  // 手动添加：卖家发到邮箱的发票，或补的附件（支付记录截图、用途说明、3D 打印明细）。一个入口，插件按文件判断：
+  //   .ofd / .xml → 发票；PDF 读得出是发票（或读不出字、这单又不缺材料）→ 发票；其余 → 附件，类型按这单缺什么和文件类型定
+  async function addFile(no, file) {
+    const x = invOrders().find(g => g.o.no === no);
+    if (!x || !file) return;
+    if (/\.(ofd|xml)$/i.test(file.name)) return attachFile(no, file);
+    if (/\.pdf$/i.test(file.name)) {
+      let r = null;
+      try { r = await readInvoicePdf(file); } catch (e) { /* 读不了的按发票处理 */ }
+      if (!r || r.isInvoice || (!r.noInv && !matOf(x).miss.length)) return attachFile(no, file);
+    }
+    const kind = kindFor(x, file.name);
+    const rec = { id: no + '|' + kind + '|' + Date.now(), no, kind, name: file.name, type: file.type || '', blob: file, at: Date.now() };
+    if (/^image\//.test(file.type)) { try { const b = await createImageBitmap(file); rec.w = b.width; rec.h = b.height; } catch (e) { /* 不是能读的图片 */ } }
+    await attPut(rec);
+    render();
+    toast('已添加附件「' + kind + '」：' + file.name);
+  }
+  function kindFor(x, name) {
+    const miss = matOf(x).miss, first = ks => ks.find(k => miss.includes(k));
+    if (/\.(png|jpe?g|gif|webp|bmp)$/i.test(name)) return first(['支付记录', '订单页面']) || '附件';
+    if (/\.(xlsx?|csv)$/i.test(name)) return first(['3D打印明细']) || '附件';
+    if (/\.docx?$/i.test(name)) return first(['用途说明']) || '附件';
+    return first(['3D打印明细', '支付记录', '用途说明']) || '附件';
+  }
+
+  // ── 整理成报销文件（用户 2026-10-09 改：按单位《报销规范手册》3.2.2 的结构；原来的序号命名、「低值品（单张超过200元）」文件夹由它取代）──
+  //   学号_姓名_总金额元/（没有学号时 姓名_总金额元；存进下载文件夹的「订单分拣-报销/」，另打一个同名压缩包）
+  //     README.txt            报销人、学号、生成时间、总金额、各分类合计、特殊情况（部分退款、合开、票面差异、低值品、缺附件）、逐项明细
+  //     报销清单.xlsx          序号、分类、商品或说明、销售方、发票号码、开票日期、金额、订单号、下单日期、店铺、材料状态、缺失材料、备注
+  //     不超过1k耗材/发票1.pdf、发票2.pdf…（手册要求按「发票 N」顺序命名；N = 报销清单里的序号，这一类排在最前）
+  //     超过1k耗材/发票/序号_商品_金额元.pdf、超过1k耗材/附件原图/序号_商品_类型.jpg（订单页面、支付记录、用途说明、3D 打印明细）
+  //     低值品/发票/…、低值品/附件原图/…（低值品需先开低值票，单独一个文件夹；超过 1000 元的同样附订单页面和支付记录）
+  //   不超过 1000 元、但要用途说明或 3D 打印明细的，附件放在 不超过1k耗材/附件原图/。插件读不了电脑上的文件，所以要用户选一下
+  //   下载好的发票文件夹；原文件不动。生成后记一个报销批次（S.batches，见「报销记录」）
+  const baseOf = p => String(p || '').split(/[\\/]/).pop();
   const shortTitle = t => String(t || '').replace(/【[^】]*】|\[[^\]]*\]|（[^）]*）|\([^)]*\)/g, '').replace(/[\\/:*?"<>|\s]+/g, '').slice(0, 14) || '商品';
+  const PACK_EXT = /\.(pdf|ofd|xml|xlsx?|csv|docx?|png|jpe?g)$/i;
+  const CAT_DIR = { small: '不超过1k耗材', big: '超过1k耗材', low: '低值品' };
+  const CAT_NAME = { small: '耗材（不超过1k）', big: '耗材（超过1k）', low: '低值品' };
   let packFiles = null;
-  // 每张发票一行：同一张票（同一个发票号，或同一个文件）对着几单的（卖家合开），序号写成「261+262」
-  function packPlan(seq0) {
+  // 每张发票一行：同一张票（同一个发票号，或同一个文件）对着几单的（卖家合开）合成一行
+  function packPlan() {
     const byName = new Map(packFiles.map(f => [f.name, f]));
     const groups = new Map(), miss = [];
     for (const x of invOrders()) {
       const st = invStatus(x);
       if (st.key === 'have') continue;                         // 已经整理过（报销过）的不再放
       const got = (X.dlDone[x.o.no] || []).concat(S.invFiles[x.o.no] || []);
-      const g = got.find(g => byName.has(baseOf(g.path)) || byName.has(g.file));
+      const g = got.find(g => /\.(pdf|ofd|xml)$/i.test(g.file || g.path || '') && (byName.has(baseOf(g.path)) || byName.has(g.file)));
       if (!g) { miss.push({ x, st }); continue; }
       const f = byName.get(baseOf(g.path)) || byName.get(g.file);
       const chk = packRead.get(f.name) || fcOf(g) || null;
@@ -1323,47 +1512,86 @@
       if (!groups.has(k)) groups.set(k, { f, xs: [], chk });
       groups.get(k).xs.push(x);
     }
-    const rows = [...groups.values()].sort((a, b) => (a.xs[0].o.time || '').localeCompare(b.xs[0].o.time || ''));
-    let seq = seq0;
+    const rows = [...groups.values()];
     for (const r of rows) {
       r.xs.sort((a, b) => (a.o.time || '').localeCompare(b.o.time || ''));
-      const nos = r.xs.map(() => seq++);
       const good = r.chk && r.chk.amount != null && !['error', 'unread', 'old', 'dup', 'title'].includes(r.chk.kind);
-      const due = Math.round(r.xs.reduce((a, x) => a + dueOf(x.o), 0) * 100) / 100;
-      r.amount = good ? +r.chk.amount : due;
+      r.due = Math.round(r.xs.reduce((a, x) => a + dueOf(x.o), 0) * 100) / 100;
+      r.good = !!good;
+      r.amount = good ? +r.chk.amount : r.due;
       r.date = (good && r.chk.date) || (r.xs[0].o.time || '').slice(0, 10);
-      const qty = r.xs.reduce((a, x) => a + x.lines.reduce((b, l) => b + (l.qty || 1), 0), 0);
-      const ext = ((/\.(pdf|ofd|xml)$/i.exec(r.f.name) || [, 'pdf'])[1]).toLowerCase();
-      r.seq = nos.join('+');
-      const same = r.chk && r.chk.invNo && (S.haveIdx || []).find(h => h.invNo === r.chk.invNo);
-      // 票面比应报金额少超过 1 元：预览和汇总表备注里写明少了多少（用户 2026-10-05：少 1 元以内没关系）
-      const short = good && r.amount + 1.005 < due ? '票面比应报少 ' + (due - r.amount).toFixed(2) + ' 元' : '';
-      r.warn = [same ? '与已整理的 ' + same.file + ' 为同一张发票' : '', r.chk && r.chk.titleOk === false ? '抬头不是 ' + S.invoice.title : '', short].filter(Boolean).join('；');
-      r.name = r.seq + '_' + yymmdd(r.date) + '_' + r.amount.toFixed(2) + '-' + shortTitle(r.xs[0].lines[0].title) + '-' + qty + '件.' + ext;
+      r.items = (r.chk && r.chk.items) || '';
+      r.seller = (r.chk && r.chk.seller) || '';
+      r.invNo = (r.chk && r.chk.invNo) || '';
+      r.need = needOf(r.xs, r.amount, r.items || null);
+      // 低值品：这张票对着的实验室商品里有一件是低值品，整张票就按低值品报；有判断不出的，先要用户确认
+      const lows = r.xs.map(x => lowOfOrder(x.o.no));
+      r.low = lows.includes('low') ? 'low' : lows.includes('ask') ? 'ask' : '';
+      r.cat = r.low === 'low' ? 'low' : r.need.big ? 'big' : 'small';
+      // 旺旺下载的附件要在选的文件夹里才算有
+      r.atts = r.xs.flatMap(x => attsOf(x.o.no).map(a => Object.assign({ no: x.o.no }, a))).filter(a => a.src === 'idb' || byName.has(baseOf(a.path)) || byName.has(a.name));
+      r.miss = RB.missing(r.need, r.atts.map(a => a.kind));
+      const same = r.invNo && (S.haveIdx || []).find(h => h.invNo === r.invNo);
+      // 票面和应报金额（实付 − 退款）差 1 元以上：预览和清单备注里写明（用户 2026-10-05：少 1 元以内没关系）
+      const diff = good ? Math.round((r.amount - r.due) * 100) / 100 : 0;
+      r.diff = Math.abs(diff) >= 0.005 ? diff : 0;
+      r.warn = [same ? '与已整理的 ' + same.file + ' 为同一张发票' : '', r.chk && r.chk.titleOk === false ? '抬头不是 ' + S.invoice.title : '',
+        good && diff < -1.005 ? '票面比应报少 ' + (-diff).toFixed(2) + ' 元' : ''].filter(Boolean).join('；');
     }
-    return { rows, miss, total: rows.reduce((a, r) => a + r.amount, 0) };
+    const ORDER = { small: 0, big: 1, low: 2 };
+    rows.sort((a, b) => ORDER[a.cat] - ORDER[b.cat] || a.date.localeCompare(b.date) || (a.xs[0].o.time || '').localeCompare(b.xs[0].o.time || ''));
+    rows.forEach((r, i) => {
+      r.seq = i + 1;
+      r.title = r.xs.flatMap(x => x.lines.map(l => l.title)).join('；');
+      const ext = ((/\.(pdf|ofd|xml)$/i.exec(r.f.name) || [, 'pdf'])[1]).toLowerCase();
+      r.file = r.cat === 'small' ? CAT_DIR.small + '/发票' + r.seq + '.' + ext
+        : CAT_DIR[r.cat] + '/发票/' + r.seq + '_' + shortTitle(r.xs[0].lines[0].title) + '_' + r.amount.toFixed(2) + '元.' + ext;
+      r.attDir = CAT_DIR[r.cat] + '/附件原图/';
+    });
+    const total = Math.round(rows.reduce((a, r) => a + r.amount, 0) * 100) / 100;
+    return { rows, miss, total, dir: RB.packDirName(S.person, total), ask: rows.filter(r => r.low === 'ask').length, byName };
   }
   function renderPack() {
-    const seq0 = Math.max(1, +$('pack-seq').value || nextSeq());
-    const p = packPlan(seq0);
-    $('pack-note').textContent = '找到发票 ' + p.rows.length + ' 张（' + p.rows.reduce((a, r) => a + r.xs.length, 0) + ' 单），合计 ' + yuan(p.total)
-      + (p.miss.length ? '；另有 ' + p.miss.length + ' 单实验室订单尚无发票文件，将列在汇总表末尾' : '') + '。确认后存入下载文件夹的「订单分拣-报销」。';
-    $('pack-list').value = p.rows.map(r => (r.amount > 200 ? '［低值品］' : '') + r.name + '    ← ' + r.f.name + (r.warn ? '    ⚠ ' + r.warn : '')).join('\n') + (p.miss.length ? '\n\n尚无发票：\n' + p.miss.map(m => '  ' + (m.x.o.time || '').slice(0, 10) + ' ' + m.x.o.shop + ' ' + yuan(m.x.o.pay) + ' ' + m.x.o.no + '（' + m.st.label + '）').join('\n') : '');
-    $('pack-go').disabled = !p.rows.length;
+    const p = packPlan();
+    const nLow = p.rows.filter(r => r.cat === 'low').length, nMiss = p.rows.filter(r => r.miss.length).length;
+    $('pack-note').textContent = '发票 ' + p.rows.length + ' 张（' + p.rows.reduce((a, r) => a + r.xs.length, 0) + ' 单），合计 ' + yuan(p.total)
+      + ' → 「' + p.dir + '」' + (p.ask ? '；' + p.ask + ' 张待确认是否低值品（点黄色标签）' : '') + (nLow ? '；低值品 ' + nLow + ' 张需先开低值票' : '')
+      + (nMiss ? '；' + nMiss + ' 张缺材料' : '') + (p.miss.length ? '；另有 ' + p.miss.length + ' 单尚无发票' : '') + '。';
+    const tag = (cls, t, tip) => '<span class="tag ' + cls + '"' + (tip ? ' title="' + esc(tip) + '"' : '') + '>' + esc(t) + '</span>';
+    $('pack-list').innerHTML = p.rows.map(r => '<div class="pk-row" data-no="' + esc(r.xs[0].o.no) + '"><span class="pk-seq num">' + r.seq + '</span><div>'
+      + '<div class="pk-main"><b>' + esc(r.xs[0].lines[0].title.slice(0, 30)) + '</b>' + (r.xs.length > 1 ? ' 等 ' + r.xs.length + ' 单（合开）' : '')
+      + ' <span class="num">' + yuan(r.amount) + '</span> ' + lowTag(r.xs[0].o.no, r.low)
+      + (r.miss.length ? tag('t-mat', '缺：' + r.miss.join(' / '), r.miss.includes('用途说明') ? '用途说明会按固定模板生成草稿，需填写用途' : '') : '') + '</div>'
+      + '<div class="detail">' + esc(r.file) + '　←　' + esc(r.f.name) + (r.atts.length ? '　附件：' + esc(r.atts.map(a => a.kind).join('、')) : '') + '</div>'
+      + (r.warn ? '<div class="detail warn">⚠ ' + esc(r.warn) + '</div>' : '') + '</div></div>').join('')
+      + (p.miss.length ? '<div class="pk-h">尚无发票（列在 README.txt 末尾，不放入本次报销）</div>' + p.miss.map(m => '<div class="detail">' + esc((m.x.o.time || '').slice(0, 10) + ' ' + m.x.o.shop + ' ' + yuan(m.x.o.pay) + ' ' + m.x.o.no + '（' + m.st.label + '）') + '</div>').join('') : '');
+    if (!$('pack-name').value.trim()) $('pack-name').value = RB.nextBatchName(S.batches);
+    $('pack-go').disabled = !p.rows.length || p.ask > 0;
+    $('pack-go').title = p.ask ? '还有 ' + p.ask + ' 张发票待确认是否低值品，点黄色标签确认后才能生成' : '按上述结构复制发票和附件到「订单分拣-报销」，生成 README.txt、报销清单.xlsx 和压缩包';
     return p;
   }
-  // 选好文件夹后，把要用到的每张 PDF 都读一遍：文件名里的金额、开票日期按票面写（有的票是加「读 PDF 核对」之前下的，没读过；
-  // 2026-10-05 实测一张票面比实付多 3 元的，按实付写错了）
+  // 选好文件夹后，把要用到的每张 PDF 都读一遍：金额、开票日期按票面写，发票明细用来判断低值品和要补的材料
+  // （有的票是加「读 PDF 核对」之前下的，没读过；2026-10-05 实测一张票面比实付多 3 元的，按实付写错了）。
+  // 要附订单页面、还没截到的，先打开订单详情页截图
   const packRead = new Map();
   async function openPack(files) {
-    packFiles = [...files].filter(f => /\.(pdf|ofd|xml)$/i.test(f.name));
-    if (!$('pack-seq').value) $('pack-seq').value = nextSeq();
-    const need = packPlan(1).rows.map(r => r.f).filter(f => /\.pdf$/i.test(f.name) && !packRead.has(f.name));
+    packFiles = [...files].filter(f => PACK_EXT.test(f.name));
+    $('pack-name').value = '';
+    const need = packPlan().rows.map(r => r.f).filter(f => /\.pdf$/i.test(f.name) && !packRead.has(f.name));
     for (let i = 0; i < need.length; i++) {
       if (i % 10 === 0) toast('正在读取发票 PDF：' + i + ' / ' + need.length);
-      try { const r = await readInvoicePdf(need[i]); if (r.isInvoice && r.amount != null) packRead.set(need[i].name, { kind: 'ok', amount: r.amount, date: r.date, invNo: r.invNo, titleOk: r.titleOk }); }
+      try { const r = await readInvoicePdf(need[i]); if (r.isInvoice && r.amount != null) packRead.set(need[i].name, { kind: 'ok', amount: r.amount, date: r.date, invNo: r.invNo, titleOk: r.titleOk, items: r.items, seller: r.seller }); }
       catch (e) { /* 读不了的按订单实付写 */ }
     }
+    derive();
+    const nos = new Set(packPlan().rows.flatMap(r => r.miss.includes('订单页面') ? r.xs.map(x => x.o.no) : []));
+    const os = EXT && !hasSample() ? S.orders.filter(o => nos.has(o.no)) : [];
+    if (os.length) {
+      toast('正在截取 ' + os.length + ' 单的订单页面（超过 1000 元或需用途说明）');
+      await inspectOrders(os, nos);
+      chrome.runtime.sendMessage({ type: 'focusMe' }).catch(() => {});
+    }
+    render();
     renderPack();
     $('dlg-pack').showModal();
   }
@@ -1374,45 +1602,208 @@
       await chrome.downloads.download({ url, filename: path, conflictAction: 'uniquify' });
     } finally { setTimeout(() => URL.revokeObjectURL(url), 60000); }
   }
-  async function makePack() {
-    const p = renderPack();
-    if (!p.rows.length) return;
-    const today = new Date(), td = String(today.getFullYear()).slice(2) + String(today.getMonth() + 1).padStart(2, '0') + String(today.getDate()).padStart(2, '0');
-    const batch = ($('pack-name').value.trim() || '报销').replace(/[\\/:*?"<>|]+/g, '');
-    const dir = batch + '_' + td + '_' + p.total.toFixed(2);
-    const cell = v => { const s = String(v == null ? '' : v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
-    const lines = [['序号', '报销文件名', '原文件名', '下单日期', '店铺', '商品', '数量', '实付', '发票金额', '开票日期', '订单号', '备注', '类别'].join(',')];
-    // 合开的一张票对着几单：发票金额只写在第一行，其余行注明合开，合计不重复算
-    for (const r of p.rows) r.xs.forEach((x, i) =>
-      lines.push([r.seq, r.name, r.f.name, (x.o.time || '').slice(0, 10), x.o.shop, x.lines.map(l => l.title).join('；'), x.lines.reduce((a, l) => a + (l.qty || 1), 0), x.o.pay,
-        i ? '' : r.amount.toFixed(2), r.date, x.o.no, [i ? '与上一行合开一张发票' : '', r.warn || ''].filter(Boolean).join('；'), r.amount > 200 ? '低值品（超过200元）' : ''].map(cell).join(',')));
-    lines.push(['合计', '', '', '', '', '', '', '', p.total.toFixed(2)].map(cell).join(','));
-    if (p.miss.length) {
-      lines.push('', '尚无发票的实验室订单');
-      for (const m of p.miss) lines.push(['', '', '', (m.x.o.time || '').slice(0, 10), m.x.o.shop, m.x.lines.map(l => l.title).join('；'), '', m.x.o.pay, '', '', m.x.o.no, m.st.label].map(cell).join(','));
+  // 整理报销文件前要有报销人姓名（学号可空）：没填就打开设置，顶上一行提示
+  function personOk() {
+    if (S.person && S.person.name) return true;
+    openSettings('整理报销文件前，请先填写报销人姓名（学号可空）');
+    return false;
+  }
+  const extOf = (name, type) => ((/\.(\w{2,5})$/.exec(name || '') || [])[1] || (/jpeg/.test(type || '') ? 'jpg' : /png/.test(type || '') ? 'png' : 'bin')).toLowerCase();
+  const stamp = d => d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()) + ' ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+  // 长截图切成几段（每段不比 Word 版心更长），一页放得下、字不会缩得太小
+  async function splitImage(rec) {
+    const bmp = await createImageBitmap(rec.blob), maxH = Math.round(bmp.width * 1.3), out = [];
+    for (let y = 0; y < bmp.height && out.length < 8; y += maxH) {
+      const h = Math.min(maxH, bmp.height - y), c = new OffscreenCanvas(bmp.width, h);
+      c.getContext('2d').drawImage(bmp, 0, -y);
+      const b = await c.convertToBlob({ type: 'image/jpeg', quality: 0.85 });
+      out.push({ data: new Uint8Array(await b.arrayBuffer()), type: 'jpeg', w: bmp.width, h });
     }
-    const csv = new TextEncoder().encode('﻿' + lines.join('\r\n') + '\r\n');
+    return out;
+  }
+  // 用途说明草稿：固定模板（不是 AI）——标题、订单号、下单日期、商品、金额、开票内容、「用途：____」留空，文末附订单页面截图
+  async function usageDocx(r, shot) {
+    const os = r.xs.map(x => x.o);
+    const paras = ['订单号：' + os.map(o => o.no).join('、'), '下单日期：' + os.map(o => (o.time || '').slice(0, 10)).join('、'), '店铺：' + [...new Set(os.map(o => o.shop))].join('、'),
+      '商品：' + r.title, '金额：' + r.amount.toFixed(2) + ' 元', '开票内容：' + (r.items || '（未读取到发票明细）'), '',
+      { text: '用途：________________________________________', bold: true }, '',
+      '报销人：' + S.person.name + (S.person.sid ? '（学号 ' + S.person.sid + '）' : ''), '', '附：订单页面截图' + (shot ? '' : '（未截到，请另附）')];
+    return OF.makeDocx({ title: '用途说明', paras, images: shot ? await splitImage(shot) : [] });
+  }
+  function readmeTxt(p, now, rowsOut) {
+    const L = [], who = S.person, nOrders = p.rows.reduce((a, r) => a + r.xs.length, 0);
+    L.push('报销人：' + who.name, '学号：' + (who.sid || '无（工程师）'), '生成时间：' + stamp(now), '总金额：' + p.total.toFixed(2) + ' 元（发票 ' + p.rows.length + ' 张，订单 ' + nOrders + ' 单）');
+    for (const c of ['small', 'big', 'low']) {
+      const rs = p.rows.filter(r => r.cat === c);
+      if (rs.length) L.push('  ' + CAT_DIR[c] + '：' + rs.length + ' 张，' + rs.reduce((a, r) => a + r.amount, 0).toFixed(2) + ' 元');
+    }
+    const sp = [];
+    const lows = p.rows.filter(r => r.cat === 'low');
+    if (lows.length) sp.push('低值品 ' + lows.length + ' 张（序号 ' + lows.map(r => r.seq).join('、') + '，共 ' + lows.reduce((a, r) => a + r.amount, 0).toFixed(2) + ' 元）：需先开低值票');
+    for (const r of p.rows) {
+      for (const x of r.xs) {
+        const d = dueOf(x.o);
+        if (d < (+x.o.pay || 0) - 0.005) sp.push('部分退款：序号 ' + r.seq + ' 订单 ' + x.o.no + ' 实付 ' + (+x.o.pay).toFixed(2) + ' − 退款 ' + ((+x.o.pay) - d).toFixed(2) + ' = ' + d.toFixed(2) + ' 元');
+      }
+      if (r.xs.length > 1) sp.push('合开发票：序号 ' + r.seq + ' 一张发票对应 ' + r.xs.length + ' 单（' + r.xs.map(x => x.o.no).join('、') + '）');
+      if (r.diff) sp.push('票面与应报金额不同：序号 ' + r.seq + ' 票面 ' + r.amount.toFixed(2) + ' 元，应报 ' + r.due.toFixed(2) + ' 元（' + (r.diff > 0 ? '多 ' : '少 ') + Math.abs(r.diff).toFixed(2) + ' 元）');
+      if (r.draft) sp.push('用途说明：序号 ' + r.seq + ' 开票内容含「' + r.need.sens.join('、') + '」，已生成草稿 ' + r.draft + '，请填写用途后按要求盖章');
+      const miss = r.miss.filter(k => !(k === '用途说明' && r.draft));
+      if (miss.length) sp.push('缺附件：序号 ' + r.seq + ' 缺 ' + miss.join('、'));
+      const pay = (S.payInfo || {})[r.xs[0].o.no];
+      if (r.need.big && pay && (pay.alipay || pay.paidAt)) sp.push('支付信息：序号 ' + r.seq + ' 订单页面截图中有' + (pay.alipay ? '支付宝交易号 ' + pay.alipay : '') + (pay.alipay && pay.paidAt ? '、' : '') + (pay.paidAt ? '付款时间 ' + pay.paidAt : ''));
+      if (r.warn) sp.push('请核对：序号 ' + r.seq + ' ' + r.warn);
+    }
+    L.push('', '特殊情况', ...(sp.length ? sp.map(s => '  - ' + s) : ['  无']));
+    L.push('', '逐项明细');
+    for (const r of p.rows) L.push('  ' + r.seq + '. [' + CAT_NAME[r.cat] + '] ' + r.title.slice(0, 60) + '　' + r.amount.toFixed(2) + ' 元　发票号 ' + (r.invNo || '未读取')
+      + '　订单 ' + r.xs.map(x => x.o.no).join('、') + '　文件 ' + r.file + ((rowsOut.get(r) || []).length ? '　附件 ' + rowsOut.get(r).join('、') : ''));
+    if (p.miss.length) {
+      L.push('', '尚无发票的实验室订单（未放入本次报销）');
+      for (const m of p.miss) L.push('  ' + (m.x.o.time || '').slice(0, 10) + '　' + m.x.o.shop + '　' + (+m.x.o.pay).toFixed(2) + ' 元　' + m.x.o.no + '　' + m.st.label);
+    }
+    return new TextEncoder().encode('﻿' + L.join('\r\n') + '\r\n');
+  }
+  function listXlsx(p, now) {
+    const head = ['序号', '分类', '商品或说明', '销售方', '发票号码', '开票日期', '金额', '订单号', '下单日期', '店铺', '材料状态', '缺失材料', '备注'];
+    const rows = p.rows.map(r => {
+      const notes = ['文件 ' + r.file, r.xs.length > 1 ? '合开 ' + r.xs.length + ' 单' : '', r.diff ? '应报 ' + r.due.toFixed(2) + ' 元' : '',
+        r.xs.some(x => dueOf(x.o) < (+x.o.pay || 0) - 0.005) ? '部分退款（实付 − 退款）' : '', r.cat === 'low' ? '需先开低值票' : '', r.draft ? '用途说明为草稿，需填写' : '', r.warn].filter(Boolean).join('；');
+      return [r.seq, CAT_NAME[r.cat], r.title, r.seller || [...new Set(r.xs.map(x => x.o.shop))].join('、'), r.invNo, r.date, r.amount, r.xs.map(x => x.o.no).join('、'),
+        r.xs.map(x => (x.o.time || '').slice(0, 10)).join('、'), [...new Set(r.xs.map(x => x.o.shop))].join('、'), r.miss.length ? '缺材料' : '完整', r.miss.join('、'), notes];
+    });
+    rows.push(['合计', '', '', '', '', '', p.total]);
+    const sheets = [{ name: '报销清单', rows: [head, ...rows], widths: [6, 14, 40, 24, 22, 11, 11, 22, 11, 20, 9, 16, 40] }];
+    if (p.miss.length) sheets.push({ name: '尚无发票', rows: [['下单日期', '店铺', '商品', '实付', '订单号', '发票状态']].concat(p.miss.map(m =>
+      [(m.x.o.time || '').slice(0, 10), m.x.o.shop, m.x.lines.map(l => l.title).join('；'), +m.x.o.pay, m.x.o.no, m.st.label])), widths: [11, 20, 40, 10, 22, 24] });
+    return OF.makeXlsx(sheets, now);
+  }
+  const MIME = { pdf: 'application/pdf', xml: 'application/xml', txt: 'text/plain', csv: 'text/csv', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
+    xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' };
+  async function makePack() {
+    if (!personOk()) return;
+    const p = renderPack();
+    if (!p.rows.length || p.ask) return;
     $('pack-go').disabled = true;
     toast('正在整理：' + p.rows.length + ' 张发票…');
-    const entries = [];
-    // 单张发票超过 200 元算低值品，单独放一个文件夹（用户 2026-10-05）
-    for (const r of p.rows) entries.push({ name: dir + '/' + (r.amount > 200 ? '低值品（单张超过200元）/' : '') + r.name, data: new Uint8Array(await r.f.arrayBuffer()) });
-    entries.push({ name: dir + '/汇总.csv', data: csv });
+    const now = new Date(), entries = [], rowsOut = new Map();
+    const put = (name, data) => entries.push({ name: p.dir + '/' + name, data });
+    for (const r of p.rows) {
+      put(r.file, new Uint8Array(await r.f.arrayBuffer()));
+      const out = [], used = {}, short = shortTitle(r.xs[0].lines[0].title);
+      // 附件按「序号_商品_类型」命名；同类有几个的加 2、3
+      const name = (kind, ext) => { const n = (used[kind] = (used[kind] || 0) + 1); return r.attDir + r.seq + '_' + short + '_' + kind + (n > 1 ? n : '') + '.' + ext; };
+      let shot = null;
+      for (const a of r.atts) {
+        let data = null, ext = '';
+        if (a.src === 'idb') {
+          const rec = (ATT.get(a.no) || []).find(z => z.id === a.id);
+          if (!rec || !rec.blob) continue;
+          data = new Uint8Array(await rec.blob.arrayBuffer()); ext = extOf(rec.name, rec.type);
+          if (rec.kind === '订单页面' && !shot) shot = rec;
+        } else {
+          const f = p.byName.get(baseOf(a.path)) || p.byName.get(a.name);
+          if (!f) continue;
+          data = new Uint8Array(await f.arrayBuffer()); ext = extOf(f.name);
+        }
+        const n = name(a.kind, ext); put(n, data); out.push(n);
+      }
+      if (r.need.sens.length && !r.atts.some(a => a.kind === '用途说明')) {
+        const n = name('用途说明', 'docx');
+        put(n, await usageDocx(r, shot)); out.push(n); r.draft = n;
+      }
+      rowsOut.set(r, out);
+    }
+    put('README.txt', readmeTxt(p, now, rowsOut));
+    put('报销清单.xlsx', listXlsx(p, now));
     // 要写明文件类型：不写的话浏览器按内容猜，可能把 .pdf 存成 .txt（2026-10-05 测试里出现过）
-    const mime = n => /\.pdf$/i.test(n) ? 'application/pdf' : /\.csv$/i.test(n) ? 'text/csv' : /\.xml$/i.test(n) ? 'application/xml' : 'application/octet-stream';
-    for (const e of entries) { await saveBlob(new Blob([e.data], { type: mime(e.name) }), '订单分拣-报销/' + e.name); await sleepMs(300); }
-    await saveBlob(new Blob([Z.makeZip(entries)], { type: 'application/zip' }), '订单分拣-报销/' + dir + '.zip');
-    S.lastPack = { at: Date.now(), dir, n: p.rows.length, nos: p.rows.flatMap(r => r.xs.map(x => x.o.no)) };
-    // 这一批记为「已整理」：订单记进 S.packed（以后不再整理、不再索要），读到发票号的票记进已整理的发票（序号接着编、识别重复报销）
+    for (const e of entries) { await saveBlob(new Blob([e.data], { type: MIME[extOf(e.name)] || 'application/octet-stream' }), '订单分拣-报销/' + e.name); await sleepMs(300); }
+    await saveBlob(new Blob([Z.makeZip(entries, now)], { type: 'application/zip' }), '订单分拣-报销/' + p.dir + '.zip');
+    // 记一个报销批次（「报销记录」里填到账、找差额用）；这一批的订单记为「已整理（第 N 批）」，读到发票号的票记进已整理的发票（识别重复报销）
+    const round = v => Math.round(v * 100) / 100;
+    const batch = { id: 'b' + Date.now().toString(36), name: $('pack-name').value.trim() || RB.nextBatchName(S.batches), date: ymd(now), dir: p.dir, n: p.rows.length,
+      amount: p.total, low: round(p.rows.filter(r => r.cat === 'low').reduce((a, r) => a + r.amount, 0)),
+      invNos: p.rows.map(r => r.invNo).filter(Boolean), nos: p.rows.flatMap(r => r.xs.map(x => x.o.no)),
+      rows: p.rows.map(r => ({ seq: r.seq, title: shortTitle(r.xs[0].lines[0].title), amount: r.amount, low: r.cat === 'low', invNo: r.invNo })), pays: [], src: 'pack', at: Date.now() };
+    S.batches = (S.batches || []).concat(batch);
+    S.lastPack = { at: Date.now(), dir: p.dir, n: p.rows.length, nos: batch.nos };
     S.packed = S.packed || {}; S.haveIdx = S.haveIdx || [];
     for (const r of p.rows) {
-      const file = dir + '/' + (r.amount > 200 ? '低值品（单张超过200元）/' : '') + r.name, invNo = (r.chk && r.chk.invNo) || '';
-      for (const x of r.xs) S.packed[x.o.no] = { file, invNo, at: Date.now() };
-      if (invNo && !S.haveIdx.some(h => h.invNo === invNo)) S.haveIdx.push({ invNo, date: r.date, amount: r.amount, file });
+      const file = p.dir + '/' + r.file;
+      for (const x of r.xs) S.packed[x.o.no] = { file, invNo: r.invNo, at: Date.now(), batch: batch.id };
+      if (r.invNo && !S.haveIdx.some(h => h.invNo === r.invNo)) S.haveIdx.push({ invNo: r.invNo, date: r.date, amount: r.amount, file });
     }
     persist(); derive(); render();
     $('dlg-pack').close();
-    toast('整理完成：下载文件夹「订单分拣-报销/' + dir + '」中已生成 ' + p.rows.length + ' 张发票及汇总表，并附同名压缩包', true);
+    toast('整理完成（' + batch.name + '）：下载文件夹「订单分拣-报销/' + p.dir + '」中已生成 ' + p.rows.length + ' 张发票、README.txt 和报销清单.xlsx，并附同名压缩包', true);
+  }
+
+  // ── 报销记录（用户 2026-10-09：取代单独维护的在线台账）：每次整理报销文件记一批，导入以前整理好的文件夹时认出历史批次；
+  // 在第 4 步说明区下方只读列出，每批一行；「填写到账」可多次填（分期到账）。有差额时在这一批的发票金额里找哪几张加起来正好等于差额
+  const payOf = b => Math.round((b.pays || []).reduce((a, x) => a + (+x.amount || 0), 0) * 100) / 100;
+  function batchState(b) {
+    const paid = payOf(b), diff = Math.round((b.amount - paid) * 100) / 100;
+    if (!(b.pays || []).length) return { paid, diff, tone: 'wait', label: b.src === 'import' ? '待填到账' : '待到账' };
+    if (Math.abs(diff) < 0.005) return { paid, diff, tone: 'ok', label: '已到账' };
+    return { paid, diff, tone: 'bad', label: '有差额', hint: diff > 0 ? RB.diffHint(b.rows || [], diff) : '到账比报销金额多 ' + (-diff).toFixed(2) + ' 元' };
+  }
+  function batchView() {
+    const bs = S.batches || [];
+    if (!bs.length) return '';
+    return '<div class="batches" id="batches"><div class="b-h">报销记录</div>' + bs.slice().sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.at || 0) - (a.at || 0)).map(b => {
+      const s = batchState(b);
+      return '<div class="b-row" data-batch="' + esc(b.id) + '" title="' + esc(b.dir + '，发票 ' + b.n + ' 张' + (b.low ? '，其中低值品 ' + yuan(b.low) : '')
+          + ((b.pays || []).length ? '；到账：' + b.pays.map(x => x.date + ' ' + (+x.amount).toFixed(2)).join('；') : '')) + '">'
+        + '<b>' + esc(b.name) + '</b><span class="num">' + esc(b.date) + '</span><span class="num">' + yuan(b.amount) + '</span>'
+        + '<span class="num">已到账 ' + yuan(s.paid) + '</span><span class="num">差额 ' + yuan(s.diff) + '</span>'
+        + '<span class="tag tone-' + s.tone + '">' + s.label + '</span>'
+        + '<button type="button" class="linkbtn" data-pay="' + esc(b.id) + '" title="记一笔到账（可多次填写，分期到账）">填写到账</button>'
+        + (s.hint ? '<div class="b-hint">' + esc(s.hint) + '</div>' : '') + '</div>';
+    }).join('') + '</div>';
+  }
+  let payBatch = null;
+  function openPay(id) {
+    const b = (S.batches || []).find(x => x.id === id);
+    if (!b) return;
+    payBatch = b;
+    const s = batchState(b);
+    $('pay-title').textContent = '填写到账：' + b.name + '（' + yuan(b.amount) + '）';
+    $('pay-amt').value = s.diff > 0 ? s.diff.toFixed(2) : '';
+    $('pay-date').value = ymd(new Date());
+    $('pay-prev').textContent = (b.pays || []).length ? '已记：' + b.pays.map(x => x.date + ' ' + yuan(+x.amount)).join('；') : '';
+    $('pay-err').textContent = '';
+    $('dlg-pay').showModal();
+  }
+  function savePay() {
+    const v = Math.round(parseFloat($('pay-amt').value) * 100) / 100, d = $('pay-date').value;
+    if (!(v > 0) || !/^\d{4}-\d{2}-\d{2}$/.test(d)) { $('pay-err').textContent = '请填写到账金额和日期'; return; }
+    payBatch.pays = (payBatch.pays || []).concat({ amount: v, date: d, at: Date.now() });
+    persist(); render();
+    $('dlg-pay').close();
+    const s = batchState(payBatch);
+    toast(payBatch.name + '：已记到账 ' + yuan(v) + '，' + s.label + (s.hint ? '。' + s.hint : ''));
+  }
+  // 导入以前整理好的发票文件夹时：子文件夹名形如「YYMMDD_……第X批……_金额_报销给某人」的认成历史批次（名称、日期、金额、张数），待填到账
+  function importBatches(files, got) {
+    const found = new Map();
+    const dirOf = path => String(path || '').split('/').slice(0, -1).map(s => RB.parseBatchDir(s)).find(Boolean);
+    for (const f of files) { const b = dirOf(f.webkitRelativePath); if (b && !found.has(b.dir)) found.set(b.dir, Object.assign(b, { rows: [], invNos: new Set() })); }
+    for (const r of got) {
+      const b = dirOf(r.file), e = b && found.get(b.dir);
+      if (!e || e.invNos.has(r.invNo)) continue;
+      e.invNos.add(r.invNo);
+      const name = baseOf(r.file).replace(/\.\w+$/, '');
+      e.rows.push({ seq: (/^(\d+)/.exec(name) || [])[1] || null, title: (/-(.+?)-\d+[^-]*$/.exec(name) || [, name])[1].slice(0, 14), amount: r.amount, low: /低值品/.test(r.file), invNo: r.invNo });
+    }
+    let n = 0;
+    S.batches = S.batches || [];
+    for (const e of found.values()) {
+      if (S.batches.some(b => b.dir === e.dir)) continue;
+      S.batches.push({ id: 'b' + Date.now().toString(36) + n, name: e.name, date: e.date, dir: e.dir, n: e.invNos.size, amount: e.amount,
+        low: Math.round(e.rows.filter(r => r.low).reduce((a, r) => a + r.amount, 0) * 100) / 100, invNos: [...e.invNos], nos: [], rows: e.rows, pays: [], src: 'import', at: Date.now() + n });
+      n++;
+    }
+    return n;
   }
 
   // 排活给淘宝页，并打开那个页面（已开着的页面也会领到活）
@@ -1434,6 +1825,14 @@
       const s = invStatus(x), o = x.o, base = { no, saveAs: I.saveName({ time: o.time, amount: o.pay, shop: o.shop, no }) };
       if (s.key === 'ready') jobs.push(Object.assign({ id: 'p' + no, kind: 'platform' }, base));
       const c = chatOf(o);
+      // 3D 打印订单缺明细：卖家在旺旺发来的表格、Word 一并下载，挂成这单的「3D打印明细」附件（attach，后台记进 attDone，不算发票）
+      if (c && (c.docs || []).length && matOf(x).miss.includes('3D打印明细'))
+        c.docs.forEach((f, i) => {
+          const k = c.name + '|' + f.name + '|' + f.time;
+          if (seen.has(k)) return; seen.add(k);
+          jobs.push(Object.assign({ id: 'x' + no + '_' + i, kind: 'chat', attach: '3D打印明细', conv: c.name, nick: o.nick || c.nick || '', file: f.name, time: f.time },
+            base, { saveAs: base.saveAs.replace(/\.pdf$/, '_3D打印明细' + (i ? '_' + (i + 1) : '') + '.pdf') }));
+        });
       if (s.key !== 'replied' || !c) continue;
       // 分不清是哪单的（同店几单共用一个会话）也下：下完主页读 PDF 上的金额、开票日期，归错的自动挪到对的那单（用户 2026-10-04）
       c.files.forEach((f, i) => {
@@ -1457,7 +1856,8 @@
     const { dlJobs } = await chrome.storage.local.get('dlJobs'), now = Date.now();
     // 旧活只留「半小时内排的、这单也还要下」的（淘宝页正在下）：连点两次不再派第二个页面重复下；
     // 没找到的、已挂上 PDF / 已整理的旧活清掉，免得以后下别的单时被顺带再下一遍（2026-09 离线复现）
-    const still = j => { const x = byNo.get(j.no), k = x && invStatus(x).key; return j.kind === 'platform' ? k === 'ready' : k === 'replied'; };   // chat、qr 都是「卖家已回」
+    const still = j => { const x = byNo.get(j.no), k = x && invStatus(x).key;
+      return j.attach ? !!x && matOf(x).miss.includes(j.attach) : j.kind === 'platform' ? k === 'ready' : k === 'replied'; };   // chat、qr 都是「卖家已回」
     const keep = (dlJobs || []).filter(j => now - (j.at || 0) < 1800e3 && still(j));
     const busy = new Set(keep.map(j => j.id));
     const add = jobs.filter(j => !busy.has(j.id)).map(j => Object.assign(j, { at: now }));
@@ -1504,7 +1904,8 @@
           const [c0] = I.checkFiles([Object.assign(r, { file: g.file })], orders);
           // 发票号和已整理（已报销）的一样：是那一单的票，不是这单的（2026-10-04 实测：一张票被「多一点」规则算到同店另一单，其实是以前已报销过的票）
           const c = Object.assign({}, c0, { path: g.path, no: c0.no || no }, have.has(r.invNo) ? { kind: 'dup' } : {});
-          done[key] = { kind: c.kind, amount: c.amount, date: c.date, invNo: c.invNo, to: c.to || '', nos: c.nos || [], short: c.short || 0, dup: have.has(r.invNo) ? have.get(r.invNo).file : '' };
+          done[key] = { kind: c.kind, amount: c.amount, date: c.date, invNo: c.invNo, to: c.to || '', nos: c.nos || [], short: c.short || 0, dup: have.has(r.invNo) ? have.get(r.invNo).file : '',
+                        items: r.items || '', seller: r.seller || '' };
           res.push(c);
         } catch (e) { done[key] = { kind: 'error', err: String(e.message || e) }; }    // 下载链接过期等：标红，请用户打开文件核对
       }
@@ -1564,12 +1965,14 @@
   // 打开每一单的订单详情页（extension/detail.js）：读旺旺图标上的卖家旺旺名，并看商品是不是已经退款成功了。
   // 用户 2026-10-04：「不用猜旺旺名，订单边上的旺旺图标点进去就是他」；同一天发现有一单热缩管在订单表里是交易成功、
   // 其实已经整单退款——给卖家发消息要发票之前先看一眼。整单退款的标成退款（不再要发票），返回被标退款的单数
-  async function inspectOrders(os) {
+  // shots：这几单顺便截订单页面（见 shotDetail），结果记在 inspectOrders.shots = { ok, fail: [原因] }
+  async function inspectOrders(os, shots) {
+    inspectOrders.shots = { ok: 0, fail: [] };
     if (!os.length) return 0;
     await chrome.storage.local.set({ nickWant: Object.fromEntries(os.map(o => [o.no, Date.now()])), detailFound: {} });
     let refunded = 0, partial = 0;
     for (const o of os) {
-      toast('正在读取订单详情：' + o.shop + '（' + (o.time || '').slice(0, 10) + '，' + yuan(+o.pay) + '）');
+      toast((shots && shots.has(o.no) ? '正在截取订单页面：' : '正在读取订单详情：') + o.shop + '（' + (o.time || '').slice(0, 10) + '，' + yuan(+o.pay) + '）');
       // 每天自动处理（后台模式）时不抢用户当前的页面
       const tab = await chrome.tabs.create({ url: detailUrl(o.no), active: !J.quiet });
       for (let t = 0; t < 25000; t += 800) {
@@ -1597,8 +2000,18 @@
             }
           });
         }
+        // 支付宝交易号、付款时间（在订单信息区，截图里也有）：写进 README.txt，方便对照支付记录
+        if (d.pay && (d.pay.alipay || d.pay.paidAt)) (S.payInfo = S.payInfo || {})[o.no] = d.pay;
+        if (shots && shots.has(o.no) && !J.quiet) {
+          try {
+            const s = await shotDetail(o, tab);
+            await attPut({ id: o.no + '|订单页面', no: o.no, kind: '订单页面', name: '订单页面.jpg', type: 'image/jpeg', blob: s.blob, w: s.w, h: s.h, at: Date.now() });
+            inspectOrders.shots.ok++;
+          } catch (e) { inspectOrders.shots.fail.push(o.shop + '：' + e.message); }
+        }
         break;
       }
+      if (shots && shots.has(o.no) && !(await chrome.storage.local.get('detailFound')).detailFound?.[o.no]) inspectOrders.shots.fail.push(o.shop + '：订单详情页 25 秒内未加载出来');
       try { await chrome.tabs.remove(tab.id); } catch (e) { /* 已经关了 */ }
     }
     await chrome.storage.local.remove('nickWant');
@@ -1705,11 +2118,16 @@
     const miss = invOrders().filter(x => !x.o.nick && needsChat(invStatus(x))).map(x => x.o);
     const part = [...new Set(derived.rows.filter(x => !x.past && N.refundState(x.l, x.o) === 'refunded' && S.refunds[x.l.key] === undefined
       && (S.refundAmt || {})[x.l.key] == null && (S.decisions[x.l.key] || x.r.cat) === 'lab').map(x => x.o))];
-    if (!miss.length && !part.length) return { skip: true, text: '无需读取' };
+    // 要附订单页面截图的（超过 1000 元、需用途说明）：顺便截图。每天自动刷新（后台模式）不截：截图要把详情页切到前台
+    const shots = J.quiet ? [] : shotList();
+    if (!miss.length && !part.length && !shots.length) return { skip: true, text: '无需读取' };
     if (miss.length) { w('读取 ' + miss.length + ' 单的卖家旺旺名'); await resolveNicks(miss); }
     if (part.length) { w('读取 ' + part.length + ' 单的退款金额'); await inspectOrders(part); }
+    let shot = null;
+    if (shots.length) { w('截取 ' + shots.length + ' 单的订单页面'); await inspectOrders(shots, new Set(shots.map(o => o.no))); shot = inspectOrders.shots; }
     const still = miss.filter(o => !o.nick).length;
-    return { text: '已读取 ' + (miss.length + part.length) + ' 单' + (still ? '，' + still + ' 单未读到卖家旺旺名' : ''), bad: !!still };
+    return { text: '已读取 ' + (miss.length + part.length + shots.length) + ' 单' + (still ? '，' + still + ' 单未读到卖家旺旺名' : '')
+      + (shot ? '；截取订单页面 ' + shot.ok + ' / ' + shots.length + ' 单' + (shot.fail.length ? '（' + shot.fail[0] + '）' : '') : ''), bad: !!still || !!(shot && shot.fail.length) };
   }
   // 2 刷新淘宝开票记录（「我的发票」页）。超时就沿用上次的结果
   // 干活页报来的失败（jobFail，panel.js otFail 写）：这一段开始之后、属于这几段的
@@ -1750,7 +2168,7 @@
     return { timeout: true, text: '超时：' + mmss(lim) + '内未读完旺旺回复，沿用上次结果' };
   }
   // 4 下载已开具的发票：等淘宝页下完（这一批的活都做完；2 分钟没有进展或超过 5 分钟就不等了），再等下载的 PDF 核对完
-  const newFiles = t0 => Object.values(X.dlDone || {}).reduce((a, l) => a + l.filter(g => (g.at || 0) >= t0).length, 0);
+  const newFiles = t0 => Object.values(X.dlDone || {}).concat(Object.values(X.attDone || {})).reduce((a, l) => a + l.filter(g => (g.at || 0) >= t0).length, 0);
   async function downloadAll(w) {
     const t0 = Date.now();
     const r = await startDownloads(invOrders().map(x => x.o.no), true, true);
@@ -1930,6 +2348,11 @@
     row: (act, no) => rowAct(act, no),
     inspect: nos => inspectOrders(nos.map(no => S.orders.find(o => o.no === no)).filter(Boolean)),
     due: no => { const o = S.orders.find(x => x.no === no); return o ? dueOf(o) : null; },
+    // 报销规范（低值品、要补的材料、附件、截图）
+    mat: no => { const x = invOrders().find(g => g.o.no === no); return x ? matOf(x) : null; },
+    att: no => attsOf(no), attLoad: () => attLoad().then(() => render()),
+    details: () => readDetails(() => {}),
+    batches: () => (S.batches || []).map(b => Object.assign({}, b, batchState(b))),
     // 这几单现在会排哪些下载（只看不排：排完把下载清单放回原样）
     jobsFor: async nos => { const { dlJobs } = await chrome.storage.local.get('dlJobs'); const r = await queueDownloads(nos);
       await chrome.storage.local.set({ dlJobs: dlJobs || [] }); return r.add.map(j => j.no + ' ' + (j.file || j.kind)); },
@@ -2104,7 +2527,12 @@
   }
 
   // ── 设置 ──
-  function openSettings() {
+  // note：打开设置的原因（比如整理报销文件前要填姓名），显示在设置顶上一行
+  function openSettings(note) {
+    $('set-note').textContent = typeof note === 'string' ? note : '';
+    $('set-note').hidden = typeof note !== 'string';
+    $('person-name').value = (S.person && S.person.name) || '';
+    $('person-sid').value = (S.person && S.person.sid) || '';
     $('inv-title').value = S.invoice.title || '';
     $('inv-tax').value = S.invoice.taxId || '';
     $('inv-tpl').value = S.invoice.template || I.DEFAULT_TEMPLATE;
@@ -2122,6 +2550,7 @@
     S.invoice = { title: $('inv-title').value.trim(), taxId: tax,
                   template: $('inv-tpl').value.trim() === I.DEFAULT_TEMPLATE ? '' : $('inv-tpl').value.trim(),
                   email: $('inv-email').value.trim() };
+    S.person = { name: $('person-name').value.trim(), sid: $('person-sid').value.trim() };
     S.prefs.remindDays = Math.max(1, Math.min(60, +$('remind-days').value || 7));
     const hr = $('auto-hour').value.trim() === '' || isNaN(+$('auto-hour').value) ? 10 : +$('auto-hour').value;     // 0 点也是合法的设置
     S.prefs.autoDaily = { on: $('auto-daily').checked, hour: Math.max(0, Math.min(23, hr)) };
@@ -2249,11 +2678,13 @@
 
     $('inv-tax').oninput = e => { const v = e.target.value.trim(); $('inv-tax-err').textContent = v && !I.taxIdOk(v) ? '校验不通过' : v ? '✓ 校验通过' : ''; };
     $('inv-pack-dir').onchange = e => { const f = [...e.target.files]; e.target.value = ''; if (f.length) openPack(f).catch(err => toast('读取发票出错：' + err.message)); };
-    $('pack-seq').oninput = () => renderPack();
+    $('pack-list').addEventListener('click', e => { const t = e.target.closest('[data-lowno]'); if (t) toggleLowOrder(t.dataset.lowno); });
+    $('pay-ok').onclick = savePay;
+    $('pay-cancel').onclick = () => $('dlg-pay').close();
     $('pack-go').onclick = () => makePack().catch(e => { toast('整理出错：' + e.message); $('pack-go').disabled = false; });
     $('pack-cancel').onclick = () => $('dlg-pack').close();
     $('inv-have-dir').onchange = e => { const f = [...e.target.files]; e.target.value = ''; if (f.length) importHaveDir(f).catch(err => toast('读取 PDF 出错：' + err.message)); };
-    $('list').addEventListener('change', e => { const f = e.target.closest('input[data-inv="attach"]'); if (f && f.files[0]) attachFile(f.dataset.no, f.files[0]); });
+    $('list').addEventListener('change', e => { const f = e.target.closest('input[data-inv="attach"]'); if (f && f.files[0]) addFile(f.dataset.no, f.files[0]).catch(err => toast('添加出错：' + err.message)); f.value = ''; });
     $('img-copy').onclick = copyScraper;
     $('img-older').onchange = e => { S.older = e.target.value || ''; persist(); renderImages(); };
     $('img-close').onclick = () => $('dlg-img').close();
@@ -2273,7 +2704,9 @@
         // 设置里的「每天自动刷新」开关存在 S.prefs，清除后仍保留：扩展存储里这份也写回，免得设置显示开着、实际已不运行
         if (S.prefs.autoDaily) await chrome.storage.local.set({ autoDaily: S.prefs.autoDaily });
       }
-      S = { orders: [], decisions: {}, refunds: {}, rules: null, prefs: S.prefs, invoice: { title: I.DEFAULT_TITLE, taxId: I.DEFAULT_TAX, template: '', email: '' }, invFiles: {}, haveIdx: [] };
+      await attClear();                                   // 本机存的截图和附件也清掉
+      S = { orders: [], decisions: {}, refunds: {}, rules: null, prefs: S.prefs, invoice: { title: I.DEFAULT_TITLE, taxId: I.DEFAULT_TAX, template: '', email: '' }, invFiles: {}, haveIdx: [],
+            person: { name: '', sid: '' }, lowval: {}, batches: [] };
       Object.assign(R, { job: null, progress: null, result: null });
       $('dlg-settings').close(); derive(); render();
     };
@@ -2288,9 +2721,12 @@
         else if (k === 'inv-close') { J.note = ''; render(); }
         else if (k === 'sort-done') confirmSort();
         else if (k === 'inv-run') runInvoice(false);
+        else if (k === 'pack') { if (personOk()) $('inv-pack-dir').click(); }
         else if (k === 'img-dlg') openImages();
         return;
       }
+      const pay = e.target.closest('[data-pay]');
+      if (pay) { openPay(pay.dataset.pay); return; }
       const li = e.target.closest('[data-step]');
       if (li) { view.step = +li.dataset.step; render(); }
     });
@@ -2305,6 +2741,10 @@
       if (ra) { rowAct(ra.dataset.act, ra.dataset.no).catch(err => toast('出错：' + err.message)); return; }
       const sg = e.target.closest('[data-go]');
       if (sg) { goStatus(sg.dataset.go, sg.dataset.no); return; }
+      const lp = e.target.closest('[data-low]');
+      if (lp) { toggleLow(lp.dataset.low); return; }
+      const lt = e.target.closest('[data-lowno]');
+      if (lt) { toggleLowOrder(lt.dataset.lowno); return; }
       const line = e.target.closest('.line'); if (!line) return;
       const key = line.dataset.key;
       if (e.target.closest('[data-keep]')) { setKeep(key); return; }
@@ -2390,4 +2830,5 @@
   bind();
   render();
   devLoad();
+  attLoad().then(() => { if (S.orders.length) render(); });          // 本机存的截图、附件（IndexedDB）
 })();

@@ -138,6 +138,7 @@
     }
   ],
   "host_permissions": [
+    "<all_urls>",
     "https://*.aliyuncs.com/*",
     "https://invoice-ua.taobao.com/*",
     "https://*.alicdn.com/*"
