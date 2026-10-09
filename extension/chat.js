@@ -311,10 +311,10 @@
       // 「催卖家」是用户点了这一单要再催一次：不看 3 天内发过没有
       const recent = !q.follow && q.taxId && readMsgs().find(m => m.self && m.time >= since3 && squash(m.text).includes(squash(q.taxId)));
       if (recent) {
-        const { askSent } = await chrome.storage.local.get('askSent');
-        const all = Object.assign({}, askSent);
-        cur.nos.forEach(no => { all[no] = Date.parse(recent.time.replace(' ', 'T')) || Date.now(); });
-        await chrome.storage.local.set({ askSent: all });
+        const { askSent, askFirst } = await chrome.storage.local.get(['askSent', 'askFirst']);
+        const all = Object.assign({}, askSent), first = Object.assign({}, askFirst);
+        cur.nos.forEach(no => { all[no] = Date.parse(recent.time.replace(' ', 'T')) || Date.now(); if (!first[no] || first[no] > all[no]) first[no] = all[no]; });
+        await chrome.storage.local.set({ askSent: all, askFirst: first });
         next.skipped = next.skipped.concat(cur.shop + '（' + recent.time.slice(5, 16) + ' 已发送过）');
         panel.set(cur.shop + '：' + recent.time + ' 已发送过索要发票的消息，不再重复发送，正在打开下一家…');
         await sleep(1500); await go(); return true;
@@ -356,10 +356,11 @@
         clearMine(cur.msg);                       // 跳过的：填的字也清掉，别留着被带到下一个会话
         next.skipped = next.skipped.concat(cur.shop + (r === 'timeout' ? '（' + Math.round(waitMax / 60000) + ' 分钟内未处理）' : '')); await go(); return true;
       }
-      const { askSent } = await chrome.storage.local.get('askSent');
-      const all = Object.assign({}, askSent);
-      cur.nos.forEach(no => { all[no] = Date.now(); });
-      await chrome.storage.local.set({ askSent: all });
+      const { askSent, askFirst } = await chrome.storage.local.get(['askSent', 'askFirst']);
+      const all = Object.assign({}, askSent), first = Object.assign({}, askFirst);
+      cur.nos.forEach(no => { all[no] = Date.now(); if (!first[no]) first[no] = all[no]; });
+      // askFirst：第一次向卖家索要的时间（「催卖家」也会更新 askSent，开票截止日要从第一次索要算，用户 2026-10-09）
+      await chrome.storage.local.set({ askSent: all, askFirst: first });
       next.sent = next.sent.concat(cur.shop);
       panel.set('已发送至 ' + cur.shop + '，正在打开下一家…');
       await sleep(q.auto ? 8000 + Math.random() * 7000 : 1500);        // 自动发时每家之间隔 8～15 秒，别太快

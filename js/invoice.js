@@ -386,13 +386,77 @@
              refunded: items > 0 && lines.every(l => l.refundedQty >= l.qty), lines };
   }
 
+  // ── 应开票截止日（用户 2026-10-09 给的淘宝 / 天猫开票规定）──
+  //   天猫、平台在线申请：交易成功前申请的，卖家须在交易成功后 10 日内开票；交易成功后申请的，须在申请后 10 日内开票
+  //   淘宝、平台在线申请：淘宝通知卖家后 10 日内开票（通知日取「全部发票」页上的申请日期）
+  //   向卖家索要（线下）：没有约定时，以「确认收货」和「首次向卖家索要」两者中较晚的一天起算 10 日
+  // 超过截止日卖家仍未开票，淘宝官方客服才可介入，所以督促清单、「找客服督促」都从截止日之后开始（固定 10 日，不可调）。
+  // 日期一律按浏览器本地时间的 YYYY-MM-DD 比较（「今天」也是本地日期）
+  const DUE_DAYS = 10;
+  const pad = n => String(n).padStart(2, '0');
+  // 本地日期：时间戳、Date、'2026-10-08 10:11:12'、'2026-10-08' 都认；认不出给 ''
+  function localDay(v) {
+    if (v == null || v === '') return '';
+    if (typeof v === 'string') { const m = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(v.trim()); if (m) return m[1] + '-' + pad(m[2]) + '-' + pad(m[3]); }
+    const d = v instanceof Date ? v : new Date(typeof v === 'number' ? v : String(v).replace(' ', 'T'));
+    return isNaN(d) ? '' : d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+  }
+  function addDays(day, n) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day || '');
+    if (!m) return '';
+    return localDay(new Date(+m[1], +m[2] - 1, +m[3] + n));
+  }
+  const dayDiff = (a, b) => { const p = s => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s); return m ? Date.UTC(+m[1], +m[2] - 1, +m[3]) : NaN; }; return Math.round((p(b) - p(a)) / 864e5); };
+  /*
+   * ctx = { kind: 'platform'（平台在线申请，含按卖家的开票入口提交的）| 'seller'（向卖家索要）, tmall, applyAt, askAt, doneAt, today }
+   *   applyAt：平台申请日期；askAt：首次向卖家索要的时间；doneAt：交易成功（确认收货）日期，读不到时由主页给「第一次看到交易成功」的日期，没有就空
+   * 返回 { start, due, rule, late, over }（over：超过截止日几天，未超过为 0）；起点算不出来时返回 null（不提醒、不督促——没有任何日期的单本来也不会进等待中）
+   */
+  function invoiceDue(ctx) {
+    const done = localDay(ctx.doneAt), today = localDay(ctx.today || Date.now());
+    let start = '', rule = '';
+    if (ctx.kind === 'seller') {
+      const ask = localDay(ctx.askAt);
+      start = [ask, done].filter(Boolean).sort().pop() || '';
+      rule = '向卖家索要：确认收货、索要较晚者后 ' + DUE_DAYS + ' 日';
+    } else {
+      const apply = localDay(ctx.applyAt);
+      if (ctx.tmall) {
+        if (apply && done && apply < done) { start = done; rule = '天猫：交易成功后 ' + DUE_DAYS + ' 日'; }
+        else { start = apply; rule = '天猫：申请后 ' + DUE_DAYS + ' 日'; }
+      } else { start = apply; rule = '淘宝：通知后 ' + DUE_DAYS + ' 日'; }
+    }
+    if (!start) return null;
+    const due = addDays(start, DUE_DAYS), over = Math.max(0, dayDiff(due, today));
+    return { start, due, rule, late: today > due, over };
+  }
+  // 物流已签收（订单列表上的物流标签、订单详情页的物流信息）：「已签收」「签收成功」「已被…签收」；「未签收」「待签收」不算
+  const SIGNED_RE = /已签收|签收成功|已被.{0,10}签收|已由.{0,10}签收|本人签收|代签收/;
+  const isSigned = t => SIGNED_RE.test(String(t || '').replace(/未签收|待签收/g, ''));
+  // 订单详情页上的交易成功（确认收货）时间（待真实页面核对写法）：先找「确认收货时间」「交易成功时间」「完成时间」，都没有才用「成交时间」。
+  // 淘宝详情页的「成交时间」可能是下单时间：用它时起点只会偏早（截止日算出来比 申请 / 索要 日期早时，invoiceDue 按申请 / 索要日期算），督促宁可早不漏
+  function detailDone(text) {
+    const t = String(text || '').replace(/\s+/g, ' ');
+    for (const k of ['确认收货时间', '交易成功时间', '完成时间', '成交时间']) {
+      const m = new RegExp(k + '[:：]?\\s*(\\d{4}-\\d{2}-\\d{2}(?: \\d{2}:\\d{2}(?::\\d{2})?)?)').exec(t);
+      if (m) return m[1];
+    }
+    return '';
+  }
+  // 订单详情页上的物流一行（含「签收」的那一句，最多 60 字），没有就空
+  function detailLogi(text) {
+    const t = String(text || '').replace(/\s+/g, ' ');
+    const m = /[^。；;]{0,30}(?:已签收|签收成功|已被.{0,10}签收|已由.{0,10}签收|本人签收|代签收)[^。；;]{0,20}/.exec(t.replace(/未签收|待签收/g, ''));
+    return m ? m[0].trim().slice(0, 60) : '';
+  }
+
   // 下载后的文件名：日期_金额_店铺_订单号.pdf（Windows 不允许的字符换掉）
   function saveName(o, ext) {
     const clean = s => String(s || '').replace(/[\\/:*?"<>|\s]+/g, '').slice(0, 24);
     return [String(o.time || '').slice(0, 10), o.amount != null ? String(o.amount) : '', clean(o.shop), o.no].filter(Boolean).join('_') + '.' + (ext || 'pdf');
   }
 
-  const api = { LABEL, titleScore, cardOwner, taxIdOk, DEFAULT_TITLE, DEFAULT_TAX, DEFAULT_TEMPLATE, FOLLOW_TEMPLATE, renderMsg, parseInvoiceName, chatAnalyze, chatForOrder, status, findHave, matchHave, detailRefund, parseInvoiceText, notInvoiceText, saveName, checkFiles };
+  const api = { LABEL, titleScore, cardOwner, taxIdOk, DEFAULT_TITLE, DEFAULT_TAX, DEFAULT_TEMPLATE, FOLLOW_TEMPLATE, renderMsg, parseInvoiceName, chatAnalyze, chatForOrder, status, findHave, matchHave, detailRefund, parseInvoiceText, DUE_DAYS, localDay, addDays, invoiceDue, isSigned, detailDone, detailLogi, notInvoiceText, saveName, checkFiles };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Invoice = api;
 })(typeof self !== 'undefined' ? self : this);

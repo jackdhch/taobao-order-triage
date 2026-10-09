@@ -86,7 +86,8 @@ chrome.tabs.onRemoved.addListener(id => workTabs(ids => ids.includes(id) ? ids.f
 const selfClosing = new Set();
 const closeTab = id => { selfClosing.add(id); return chrome.tabs.remove(id).catch(e => { selfClosing.delete(id); throw e; }); };
 const PAGES = [[/^https:\/\/market\.m\.taobao\.com\/app\/im\//, 'chat', '旺旺页面'], [/\/my_itaobao\/invoice/, 'inv', '「我的发票」页面'],
-  [/\/pricelist\/batchInvoice/, 'batch', '「批量开票」页面'], [/consumerservice\.taobao\.com|alimebot\.taobao\.com/, 'vip', '淘宝客服页面']];
+  [/\/pricelist\/batchInvoice/, 'batch', '「批量开票」页面'], [/consumerservice\.taobao\.com|alimebot\.taobao\.com/, 'vip', '淘宝客服页面'],
+  [/^https:\/\/trade\.(taobao|tmall)\.com\//, 'recv', '确认收货的订单页面']];      // 插件为确认收货打开的订单详情页（openWorkTab）
 const pageOf = url => PAGES.find(([re]) => re.test(url || ''));
 // 插件开的干活页的网址（按 tab.id，session 存储）：标签页关掉以后就读不到它的网址了
 let pageChain = Promise.resolve();
@@ -192,12 +193,12 @@ chrome.runtime.onMessage.addListener((m, sender, reply) => {
   return true;
 });
 
-// 工具栏插件图标上的数字：还有几单没拿到发票（主页算好写进 invPending）；有超过设定天数还没开的，用红色
+// 工具栏插件图标上的数字：还有几单没拿到发票（主页算好写进 invPending）；有超过应开票截止日（10 日）还没开的，用红色
 function showBadge(p) {
   const n = p && p.n || 0;
   chrome.action.setBadgeText({ text: n ? String(n) : '' });
   chrome.action.setBadgeBackgroundColor({ color: p && p.late ? '#d0021b' : '#1c6e8c' });
-  chrome.action.setTitle({ title: n ? '订单分拣：' + n + ' 单尚未取得发票' + (p.late ? '，其中 ' + p.late + ' 单超过设定天数未开票' : '') : '打开订单分拣主页' });
+  chrome.action.setTitle({ title: n ? '订单分拣：' + n + ' 单尚未取得发票' + (p.late ? '，其中 ' + p.late + ' 单超过 10 日未开票' : '') : '打开订单分拣主页' });
 }
 chrome.storage.local.get('invPending').then(r => showBadge(r.invPending));
 chrome.storage.onChanged.addListener((ch, area) => { if (area === 'local' && ch.invPending) showBadge(ch.invPending.newValue); });

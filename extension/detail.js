@@ -43,6 +43,9 @@
   // 支付记录的线索（待真实页面核对写法）：「支付宝交易号：2026…」「付款时间：2026-08-14 10:00:00」
   const flat = txt.replace(/\s+/g, ' ');
   const pay = { alipay: (/支付宝交易号[:：]?\s*(\d{16,32})/.exec(flat) || [])[1] || '', paidAt: (/付款时间[:：]?\s*(\d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2})?)/.exec(flat) || [])[1] || '' };
+  // 开票时限要用的（用户 2026-10-09）：天猫订单（淘宝详情页地址被跳到 trade.tmall.com）、交易成功（确认收货）时间、物流是否已签收（待真实页面核对写法）
+  const tmall = location.hostname === 'trade.tmall.com';
+  const doneAt = window.Invoice.detailDone(txt), logi = window.Invoice.detailLogi(txt);
   const { detailFound } = await chrome.storage.local.get('detailFound');
-  await chrome.storage.local.set({ detailFound: Object.assign({}, detailFound, { [no]: Object.assign({ nick, pay, at: Date.now() }, r) }) });
+  await chrome.storage.local.set({ detailFound: Object.assign({}, detailFound, { [no]: Object.assign({ nick, pay, tmall, doneAt, logi, at: Date.now() }, r) }) });
 })().catch(e => console.warn('[订单分拣] 订单详情页', e));

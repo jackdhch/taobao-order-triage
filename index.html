@@ -115,6 +115,7 @@ button{font:inherit; color:inherit}
 .brand{display:flex; align-items:baseline; gap:10px; margin-right:auto; min-width:0; flex-wrap:wrap}
 .brand h1{font-size:19px; margin:0; font-weight:650; letter-spacing:.02em}
 .brand span{font-size:12.5px; color:var(--muted)}
+.brand .ver{font-size:11.5px; color:var(--faint); margin-left:-4px}
 details.more{position:relative}
 details.more > summary{list-style:none}
 details.more > summary::-webkit-details-marker{display:none}
@@ -371,6 +372,8 @@ dialog::backdrop{background:rgba(0,0,0,.35)}
 .inv-set{display:grid; grid-template-columns:1fr 1fr; gap:10px 12px; margin-bottom:6px}
 .inv-set label{display:flex; flex-direction:column; gap:4px; font-size:12.5px; color:var(--muted)}
 .inv-set .wide{grid-column:1/-1}
+.inv-set .due-note{margin:0; font-size:12px; color:var(--muted)}
+.inv-table .detail.due.late{color:var(--bad-ink)}
 .inv-set input{font:inherit; font-size:13px; padding:6px 8px; border:1px solid var(--line); border-radius:6px; background:var(--sunk); color:var(--text)}
 .inv-set .inline{flex-direction:row; align-items:center; gap:8px; flex-wrap:wrap}
 .inv-set .inline input[type=number]{width:4.5em}
@@ -420,7 +423,7 @@ footer p{margin:0 0 4px; max-width:90ch}
 <body>
 <div class="wrap">
   <header class="top">
-    <div class="brand"><h1>订单分拣</h1><span>淘宝订单报销整理：实验室采购分拣、发票申请与归档</span></div>
+    <div class="brand"><h1>订单分拣</h1><small class="ver" id="app-ver" title="当前版本"></small><span>淘宝订单报销整理：实验室采购分拣、发票申请与归档</span></div>
     <!-- 登录淘宝用（用户 2026-10-08：主页没有打开淘宝的入口，只能自己在地址栏输网址） -->
     <button class="btn" id="btn-taobao" title="在新标签页打开淘宝「已买到的宝贝」；未登录时会先打开登录页。读取订单、发票和旺旺消息都需要在本浏览器中登录淘宝">打开淘宝</button>
     <!-- 「更多」只放可选功能（用户 2026-10-07：主线一条线，同一件事只有一个入口） -->
@@ -510,7 +513,8 @@ footer p{margin:0 0 4px; max-width:90ch}
       <label>抬头（单位全称）<input id="inv-title" type="text" autocomplete="off" title="开票抬头，须与单位全称一致"></label>
       <label>税号（统一社会信用代码）<input id="inv-tax" type="text" autocomplete="off" spellcheck="false" title="18 位统一社会信用代码，保存时校验"><span class="err" id="inv-tax-err"></span></label>
       <label>接收发票的邮箱（可留空）<input id="inv-email" type="email" autocomplete="off" spellcheck="false" title="卖家要求邮箱时使用；填写后，索要发票的消息中附带此邮箱"></label>
-      <label>未开票超过几天请客服督促<input id="remind-days" type="number" min="1" max="60" step="1" title="1～60 天，默认 7 天"></label>
+      <!-- 督促时限固定 10 日（用户 2026-10-09，按淘宝 / 天猫的开票规定），不再可调 -->
+      <p class="wide due-note" id="due-note" title="应开票截止日：天猫平台申请从交易成功或申请（较晚者）起算，淘宝平台申请从淘宝通知（申请）起算，向卖家索要从确认收货或首次索要（较晚者）起算，各 10 日">超过 10 日未开票才请淘宝客服督促：淘宝规定卖家须在 10 日内开票，超过 10 日官方客服才可介入</p>
       <label class="wide">索要发票的消息模板<textarea id="inv-tpl" spellcheck="false" title="向卖家索要发票时发送的消息。可用 {订单号} {日期} {金额} {抬头} {税号} {邮箱}；同一店铺多单时自动合并为一条"></textarea></label>
     </div>
     <h4>每天自动刷新发票情况</h4>
@@ -523,6 +527,7 @@ footer p{margin:0 0 4px; max-width:90ch}
       <p>插件在已登录的淘宝页面上读取订单、开票记录和旺旺中卖家的回复（打开旺旺会话会使对方看到消息已读），并将发票下载到「订单分拣-发票」。
         提交开票申请、给卖家或客服发消息都先在主页确认清单；平台批量开票停在淘宝确认页，由用户点击「确认提交」。</p>
       <p>自动判断基于关键词，仅供参考；是否属于可报销的实验室物品，以报销规定为准。</p>
+      <p id="about-ver"></p>
     </details>
     <div class="row">
       <!-- 危险操作放在最左、红色，离「取消」「保存」远一点（以前紧挨「取消」、样式一样，容易点错） -->

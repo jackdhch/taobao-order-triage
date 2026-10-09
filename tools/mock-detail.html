@@ -2,7 +2,11 @@
 <meta charset="utf-8">
 <title>订单详情（模拟）</title>
 <!-- 模拟淘宝订单详情页 trade_order_detail.htm?biz_order_id=…：卖家旺旺图标上带着旺旺名（2026-10-04 实测：
-     <span data-nick="旺旺名" class="ww-light ww-small">，旁边 <a href="https://amos.alicdn.com/getcid.aw?…uid=旺旺名…">）。全部虚构 -->
+     <span data-nick="旺旺名" class="ww-light ww-small">，旁边 <a href="https://amos.alicdn.com/getcid.aw?…uid=旺旺名…">）。全部虚构
+     确认收货（tools/e2e-invoice.py [18]，用户 2026-10-09）：RECV 里的单是「卖家已发货、物流已签收」，页面上有「确认收货」按钮，
+     点了跳到确认页 trade.taobao.com/trade/confirm_goods.htm?biz_order_id=…（真实页面的地址和结构还没核对过，这里是假设的）。
+     确认页只有一个「确定」按钮；点了记下这单已确认（本页 localStorage），页面显示交易成功。
+     PWD 里的单确认页上多一个停用的密码框：只用来测插件看到密码框就停下、不碰它（模拟页不校验任何密码，测试也不往里填东西） -->
 <body style="margin:0;font-family:sans-serif">
 <div id="app">加载中…</div>
 <script>
@@ -14,16 +18,44 @@
   const ITEM = { '5190000000000000127': '虚构 防静电镊子 申请售后 退款成功 支付宝¥5.00 ￥9.90 ￥12.00 x1' };
   // 很长的详情页（tools/e2e-reimburse.py：超过 1000 元的单分段截图后拼接），顶上有一条固定的导航栏，订单信息区有支付宝交易号、付款时间
   const TALL = { '5190000000000000403': 3000, '5190000000000000407': 900 };
+  // 卖家已发货的单：物流一行（RECV 的已签收、有「确认收货」按钮）
+  const SHIP = { '5190000000000000141': '您的包裹已签收（虚构快递）', '5190000000000000142': '运输中 · 虚构快递', '5190000000000000143': '您的包裹已签收（虚构快递）',
+                 '5190000000000000144': '您的包裹已签收（虚构快递）' };
+  const RECV = ['5190000000000000141', '5190000000000000143', '5190000000000000144'], PWD = ['5190000000000000143'];
+  const done = () => { try { return JSON.parse(localStorage.getItem('mockRecvDone') || '{}'); } catch (e) { return {}; } };
+  const today = () => { const d = new Date(), p = n => String(n).padStart(2, '0'); return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':00'; };
   const no = (/[?&]biz_order_id=(\d+)/.exec(location.search) || [])[1] || '';
+  const app = document.getElementById('app');
+  // 密码框被碰过没有（focus / 输入 / 改值 / 按键）：测试读 window.__mockRecv.touched
+  const mock = window.__mockRecv = { touched: [], clicks: [] };
+  if (/confirm_goods/.test(location.pathname)) {
+    setTimeout(() => {
+      app.innerHTML = '<h3>确认收货（模拟）</h3><div>订单号：' + no + '</div><div>请确认已收到货物。确认收货后，货款将打给卖家。</div>'
+        + (PWD.includes(no) ? '<div>（模拟）<input type="password" disabled placeholder="模拟：不需要输入"></div>' : '')
+        + '<button type="button" id="ok">确定</button>';
+      const pw = app.querySelector('input[type=password]');
+      if (pw) for (const k of ['focus', 'input', 'change', 'keydown', 'paste']) pw.addEventListener(k, () => mock.touched.push(k));
+      document.getElementById('ok').addEventListener('click', () => {
+        mock.clicks.push('确定');
+        const d = done(); d[no] = today(); localStorage.setItem('mockRecvDone', JSON.stringify(d));
+        setTimeout(() => { app.innerHTML = '<h3>确认收货成功</h3><div>订单号：' + no + '</div><div>交易成功</div>'; }, 400);
+      });
+    }, 600);
+    return;
+  }
   setTimeout(() => {                                  // 详情页是异步渲染的
     const nick = NICK[no] || '某某虚构卖家';
-    const tall = TALL[no];
-    document.getElementById('app').innerHTML = (tall ? '<div style="position:fixed;top:0;left:0;right:0;height:40px;background:#f60;color:#fff">固定导航栏（模拟）</div>' : '')
+    const tall = TALL[no], ship = SHIP[no], ok = done()[no];
+    app.innerHTML = (tall ? '<div style="position:fixed;top:0;left:0;right:0;height:40px;background:#f60;color:#fff">固定导航栏（模拟）</div>' : '')
       + '<div style="padding-top:' + (tall ? 50 : 0) + 'px"><h3>订单详情</h3><div>订单号：' + no + '</div>'
       + (tall ? '<div class="pay">支付宝交易号：2026090122001400000000000403 付款时间：2026-09-01 10:00:05</div>' : '')
+      + (ship ? '<div class="status">' + (ok ? '交易成功 · 确认收货时间：' + ok : '卖家已发货') + '</div><div class="logi">物流：' + ship + '</div>'
+        + (!ok && RECV.includes(no) ? '<div><button type="button" class="confirm">确认收货</button><button type="button">延长收货时间</button></div>' : '') : '')
       + '<div class="item">' + (ITEM[no] || '虚构商品 ￥10.00 x1') + '</div><div class="seller">卖家：<span class="ww-light ww-small" data-nick="' + nick + '"></span>'
       + '<a class="ww-inline" href="https://amos.alicdn.com/getcid.aw?v=3&uid=' + encodeURIComponent(nick) + '&site=cntaobao">和我联系</a></div>'
       + (tall ? '<div style="height:' + tall + 'px;background:linear-gradient(#e8f0ff,#335)">（虚构的长页面）</div><div>页面底部</div>' : '') + '</div>';
+    const b = app.querySelector('button.confirm');
+    if (b) b.addEventListener('click', () => { mock.clicks.push('确认收货'); setTimeout(() => { location.href = 'https://trade.taobao.com/trade/confirm_goods.htm?biz_order_id=' + no; }, 300); });
   }, 800);
 })();
 </script>

@@ -33,6 +33,7 @@ MOCKS = [(INV_URL, 'mock-invoice.html'),
          ('https://market.m.taobao.com/app/im/chat-core/', 'mock-chat-core.html'),
          ('https://trade.taobao.com/trade/detail/', 'mock-detail.html'),               # 订单详情页：旺旺图标上有卖家旺旺名
          ('https://trade.tmall.com/detail/', 'mock-detail.html'),                      # 天猫店的订单详情（淘宝详情页地址会重定向到这里）
+         ('https://trade.taobao.com/trade/confirm_goods', 'mock-detail.html'),         # 确认收货的确认页（地址是假设的，待真实页面核对）
          ('https://dppt.zhejiang.chinatax.gov.cn:8443/', 'mock-qr.html'),                # 税务局电子发票页（卖家发的二维码）
          ('https://ai.alimebot.taobao.com/', 'mock-alime.html')]                         # 淘宝官方客服（找 88VIP 人工客服督促）
 TITLE, TAX = '某大学', '121000009999999996'
@@ -72,6 +73,16 @@ X17 = {
     'W3': ('5190000000000000133', '2026-09-12', '交易成功', '某某虚构改版店', '14.00', [('排针 2.54mm', '40P', 1, '14.00')]),
 }
 NICK17 = {'W1': 'nick店名会话', 'W2': 'nick打不开', 'W3': 'nick改版'}
+# [18] 天猫订单先确认收货、再申请平台开票（用户 2026-10-09）：卖家已发货的实验室订单
+#   K1 天猫（订单列表上认出）、已签收 → 确认收货；K2 天猫、运输中 → 不确认；K3 列表上认不出天猫（详情页跳到 trade.tmall.com）、已签收，
+#   确认页上有密码框 → 插件停下等用户；K4 不是天猫、已签收 → 不确认
+X18 = {
+    'K1': ('5190000000000000141', '2026-09-20', '卖家已发货', '某某虚构天猫型材', '36.00', [('虚构 铝型材 2020 黑色', '300mm', 1, '36.00')]),
+    'K2': ('5190000000000000142', '2026-09-21', '卖家已发货', '某某虚构天猫五金', '18.00', [('虚构 内六角扳手 套装', '9 支', 1, '18.00')]),
+    'K3': ('5190000000000000143', '2026-09-22', '卖家已发货', '某某虚构天猫电子', '25.00', [('虚构 面包板 830 孔', '1 块', 1, '25.00')]),
+    'K4': ('5190000000000000144', '2026-09-23', '卖家已发货', '某某虚构淘宝小店', '12.00', [('虚构 热熔胶棒 7mm', '20 根', 1, '12.00')]),
+}
+N18 = {k: v[0] for k, v in X18.items()}
 N17 = {k: v[0] for k, v in X17.items()}
 INVOICE_HTML = '''<!doctype html><meta charset="utf-8"><body style="font-family:sans-serif;padding:40px">
 <h2>电子发票（普通发票）</h2><p>发票号码：{inv}</p><p>开票日期：{y}年{m}月{d}日</p>
@@ -229,8 +240,9 @@ def run(p, tmp):
             return route.fulfill(status=200, content_type='text/html; charset=utf-8',
                                  body='<meta charset="utf-8"><script>location.replace("https://ai.alimebot.taobao.com/intl/index.htm?from=mock")</script>')
         # 天猫店：淘宝订单详情页的地址会被重定向到 trade.tmall.com/detail/orderDetail.htm（2026-10-05 实测），A 单这样模拟
-        if url.startswith('https://trade.taobao.com/trade/detail/') and O['A'][0] in url:
-            return route.fulfill(status=302, headers={'Location': 'https://trade.tmall.com/detail/orderDetail.htm?biz_order_id=' + O['A'][0] + '&forward_action='})
+        for tm in (O['A'][0], N18['K3']):
+            if url.startswith('https://trade.taobao.com/trade/detail/') and tm in url:
+                return route.fulfill(status=302, headers={'Location': 'https://trade.tmall.com/detail/orderDetail.htm?biz_order_id=' + tm + '&forward_action='})
         if url == 'https://img.alicdn.com/mock/qr-dppt-106.png':     # 能解码的二维码：税务局电子发票地址
             return route.fulfill(status=200, content_type='image/png', body=(TOOLS / 'fixtures' / 'qr-dppt-106.png').read_bytes())
         for prefix, f in MOCKS:
@@ -365,7 +377,7 @@ def run(p, tmp):
           f'会命中外层 .message-item-line，所有图片都被滤掉）')
     app.wait_for_timeout(500)
     rows = check_status(AFTER_SCAN, '扫描后主页状态：E 卖家已发送文件，F 图片（二维码），G 要求提供邮箱，I 已向卖家索要等回复，H 仍需向卖家索要', F_HINT)
-    # 「操作」列按状态只有一个主要操作（用户 2026-10-08）；I 单等了 7 天以上，所以是「找客服督促」而不是「催卖家」
+    # 「操作」列按状态只有一个主要操作（用户 2026-10-08）；I 单 09-11 索要、已过应开票截止日（10 日），所以是「找客服督促」而不是「催卖家」；C 单 09-02 申请、也已过截止日
     want_acts = {'A': '下载', 'B': '换开发票', 'C': '找客服督促', 'D': '申请开票', 'E': '下载', 'F': '下载', 'G': '回复邮箱', 'H': '索要发票', 'I': '找客服督促'}
     acts = {k: rows.get(NO[k], {}).get('btns') for k in LAB}
     check(all(acts[k] == [v] for k, v in want_acts.items()), '「操作」列每行只有一个主要操作：待下载 → 下载，抬头不符 → 换开发票，已申请 / 超期 → 找客服督促，可平台申请 → 申请开票，需索要 → 索要发票',
@@ -516,8 +528,8 @@ def run(p, tmp):
     check(app.locator('#summary .flow-acts button').count() == 1 and app.inner_text('#summary .flow-acts') == '自动处理发票', '「处理发票」这一步只有一个按钮「自动处理发票」', app.inner_text('#summary .flow-acts'))
     t_run = app.evaluate('Date.now()')
     app.click('#summary [data-flow="inv-run"]')
-    prog = wait_until(app, lambda: (t := app.inner_text('#summary')) and re.search(r'第 \d / 9 段：刷新淘宝开票记录 · .+ · 已等 \d+ 秒', t) and t, 60) or app.inner_text('#summary')
-    check(bool(re.search(r'第 \d / 9 段：刷新淘宝开票记录 · .+ · 已等 \d+ 秒', prog)), '处理中步骤条下方显示分段进度：第几段、在等什么、已等多久', prog[:300])
+    prog = wait_until(app, lambda: (t := app.inner_text('#summary')) and re.search(r'第 \d+ / 10 段：刷新淘宝开票记录 · .+ · 已等 \d+ 秒', t) and t, 60) or app.inner_text('#summary')
+    check(bool(re.search(r'第 \d+ / 10 段：刷新淘宝开票记录 · .+ · 已等 \d+ 秒', prog)), '处理中步骤条下方显示分段进度：第几段、在等什么、已等多久', prog[:300])
     s1 = wait_until(app, lambda: (v := at('invSync')) != s0 and v, 120)
     check(bool(s1), '① 同步发票状态：写回了新的 invSync')
     c1 = wait_until(app, lambda: (v := at('chatScan')) != c0 and v, 180)
@@ -532,9 +544,9 @@ def run(p, tmp):
     app.click('#list-cancel')
     fin = wait_until(app, lambda: (t := app.inner_text('#summary')) and '发票处理完成' in t and t, 120) or app.inner_text('#summary')
     check('发票处理完成' in fin, '取消清单后只做下载，处理结束后步骤条下方写明结果', fin[:300])
-    lines = [l for l in fin.split('\n') if re.match(r'^[①-⑨] ', l)]
-    check([l.split('：')[0][2:] for l in lines] == ['读取订单详情', '刷新淘宝开票记录', '读取卖家旺旺回复', '下载已开具的发票', '确认对外操作', '向卖家索要发票', '按开票入口申请', '请淘宝客服督促', '申请平台开票']
-          and '已取消' in lines[4], '总结逐段列出 9 段的结果（确认清单那段写明已取消）', lines)
+    lines = [l for l in fin.split('\n') if re.match(r'^[①-⑩] ', l)]
+    check([l.split('：')[0][2:] for l in lines] == ['读取订单详情', '刷新淘宝开票记录', '读取卖家旺旺回复', '下载已开具的发票', '确认对外操作', '向卖家索要发票', '按开票入口申请', '请淘宝客服督促', '确认收货', '申请平台开票']
+          and '已取消' in lines[4], '总结逐段列出 10 段的结果（确认清单那段写明已取消）', lines)
     check('仍需处理' in fin and '某某虚构电池配件' in fin, '总结写明仍需处理的订单（抬头不符的 B）', fin[:300])
     log = app.evaluate('chrome.storage.local.get("autoLog").then(r => r.autoLog || [])')
     mine = [e for e in log if e.get('t', 0) >= t_run and e.get('src') == 'home']
@@ -656,7 +668,7 @@ def run(p, tmp):
     fin = wait_until(app, lambda: (t := app.inner_text('#summary')) and '发票处理完成' in t and t, 120) or ''
     check('索要发票' in fin and not [pg for pg in ctx.pages if 'batchInvoice' in pg.url or 'alimebot' in pg.url], '结果写明向卖家索要了；没勾的平台申请、客服督促没有执行', fin[:300])
 
-    print('\n[8d] 发票表里点「催卖家」（已向卖家索要、还没超过 7 天）：打开这家的旺旺会话，填好一句催开票的话，不发送')
+    print('\n[8d] 发票表里点「催卖家」（已向卖家索要、还没过应开票截止日）：打开这家的旺旺会话，填好一句催开票的话，不发送')
     for pg in [pg for pg in ctx.pages if '/app/im/' in pg.url]: pg.close()
     app.bring_to_front(); app.reload(); app.wait_for_timeout(1500)
     app.click('.flow li[data-step="2"]'); app.wait_for_timeout(500)
@@ -755,7 +767,7 @@ def run(p, tmp):
 
     print('\n[12] 请淘宝官方人工客服督促：先发「人工」直到转人工，再一单一句督促；转人工之前一句督促的话都不发')
     n_vip = app.evaluate('__otDev.lists()')['vip']
-    check(n_vip >= 1, '有超过 7 天还没开票、要请客服督促的单', n_vip)
+    check(n_vip >= 1, '有超过应开票截止日（10 日）还没开票、要请客服督促的单', n_vip)
     app.evaluate('() => { __otDev.vip(); }')       # 确认清单在 [8c] 测过；这里单独测督促这一段
     core = lambda: next((pg for pg in ctx.pages if 'alimebot' in pg.url), None)
     done = wait_until(app, lambda: (pg := core()) and len([t for t in pg.evaluate('window.__mock.sent') if '督促' in t]) >= n_vip and pg, 60)
@@ -769,7 +781,7 @@ def run(p, tmp):
     sent = wait_until(app, lambda: (v := app.evaluate("chrome.storage.local.get('vipSent').then(r => r.vipSent || {})")) and len(v) == n_vip and v, 10)
     check(bool(sent), '插件记下了哪几单督促过', sent)
     app.bring_to_front(); app.wait_for_timeout(800)
-    check(app.evaluate('__otDev.lists()')['vip'] == 0, '督促过的 7 天内不再督促：督促清单变成 0 单', app.evaluate('__otDev.lists()'))
+    check(app.evaluate('__otDev.lists()')['vip'] == 0, '督促过的 10 日内不再督促：督促清单变成 0 单', app.evaluate('__otDev.lists()'))
     check('已由淘宝客服督促，等待开票' in app.inner_text('#list'), '督促过的单状态变成「已由淘宝客服督促，等待开票」')
     pu = app.evaluate("() => { const s = [...document.querySelectorAll('.inv-table .st')].find(s => s.textContent.includes('已由淘宝客服督促')); return s ? { cls: s.className, title: s.title } : {}; }")
     check('tone-urge' in pu.get('cls', '') and '投诉' in pu.get('title', ''), '督促状态是单独的颜色（青色），点击打开淘宝投诉记录', pu)
@@ -896,6 +908,7 @@ def run(p, tmp):
     check(bool(home), '主页没开着时，点按钮新开一个主页', [pg.url[:60] for pg in ctx.pages])
     if home:
         part17(ctx, home, tmp, pdfs, dl_dir)
+        part18(ctx, home, tmp)
     ctx.close()
 
 
@@ -1072,6 +1085,100 @@ def part17(ctx, app, tmp, pdfs, dl_dir):
     shown = [row17(k).get('st') for k in ('W2',)]
     check(shown == ['旺旺会话未能读取'], '没读成的单在发票表里是红色「旺旺会话未能读取」', shown)
     chat_ls("localStorage.removeItem('mockHideList')")
+
+
+
+def part18(ctx, app, tmp):
+    print('\n[18] 开票时限（固定 10 日）与天猫订单先确认收货：等待中的单写应开票截止日；天猫、已签收的单列进确认清单，确认后自动确认收货、排进平台申请；密码框一律不碰')
+    store = lambda k: app.evaluate('k => chrome.storage.local.get(k).then(r => r[k])', k)
+    app.bring_to_front(); app.wait_for_selector('#main:not([hidden])')
+    # 等待中的单：应开票截止日一行；C（淘宝平台 09-02 申请）已过截止，H（插件刚索要过：这里直接记一次刚发过）还没到截止
+    app.evaluate('no => chrome.storage.local.get(["askSent", "askFirst"]).then(r => chrome.storage.local.set({ askSent: Object.assign({}, r.askSent, { [no]: Date.now() }), askFirst: Object.assign({}, r.askFirst, { [no]: Date.now() }) }))', NO['H'])
+    app.wait_for_timeout(800)
+    app.click('.flow li[data-step="2"]'); app.wait_for_timeout(600)
+    row = lambda no: app.evaluate("no => { const tr = [...document.querySelectorAll('.inv-table tbody tr')].find(tr => tr.innerText.includes(no)); if (!tr) return null; "
+                                  "const d = tr.querySelector('.detail.due'); const b = tr.querySelector('button[data-act]'); "
+                                  "return { due: d ? d.textContent : '', late: !!d && d.classList.contains('late'), tip: d ? d.title : '', act: b ? b.textContent : '' }; }", no)
+    rc, rh = row(NO['C']) or {}, row(NO['H']) or {}
+    check(rc.get('due', '').startswith('已超过应开票截止 09-12（淘宝：通知后 10 日）') and rc.get('late') and '官方客服才可介入' in rc.get('tip', '') and rc.get('act') == '找客服督促',
+          'C（淘宝平台 09-02 申请）：说明行「已超过应开票截止 09-12（淘宝：通知后 10 日）」标红，操作「找客服督促」', rc)
+    check(re.match(r'^应开票截止 \d\d-\d\d（向卖家索要：确认收货、索要较晚者后 10 日）$', rh.get('due', '')) and not rh.get('late') and rh.get('act') == '催卖家',
+          'H（刚向卖家索要过）：「应开票截止 MM-DD（向卖家索要…后 10 日）」，没超过截止就只有「催卖家」，不出「找客服督促」', rh)
+    dues = app.evaluate('__otDev.dues()')
+    check(not dues.get(NO['H'], {}).get('late') and dues.get(NO['C'], {}).get('late'), '截止日计算：C 已超过、H 未超过', {k: dues.get(NO[k]) for k in ('C', 'H')})
+    dash = app.inner_text('#remind')
+    check(re.search(r'超过 10 日未开票 \d+ 单', dash), '顶上进度写「超过 10 日未开票 N 单」', dash[-120:])
+
+    # 卖家已发货的实验室订单：订单列表上读到的天猫标记、物流标签
+    csv3 = tmp / '虚构订单表3.csv'
+    write_csv(csv3, X18)
+    app.set_input_files('#file', str(csv3)); app.wait_for_timeout(800)
+    lst = {'K1': {'tmall': True, 'logi': '已签收 您的包裹已签收'}, 'K2': {'tmall': True, 'logi': '已发货 运输中 · 虚构快递'},
+           'K3': {'logi': '已签收 您的包裹已签收'}, 'K4': {'logi': '已签收 您的包裹已签收'}}
+    app.evaluate('s => chrome.storage.local.get("scraped").then(r => chrome.storage.local.set({ scraped: Object.assign({}, r.scraped, s) }))',
+                 {N18[k]: dict({'no': N18[k], 'status': '卖家已发货', 'nick': 'nick' + N18[k][-3:], 'lines': [{'title': X18[k][5][0][0]}]}, **v) for k, v in lst.items()})
+    app.wait_for_timeout(800)
+    app.evaluate("""nos => { const S = JSON.parse(localStorage.getItem('orderTriage.app.v1'));
+        for (const o of S.orders) if (nos.includes(o.no)) for (const l of o.lines) S.decisions[l.key] = 'lab';
+        localStorage.setItem('orderTriage.app.v1', JSON.stringify(S)); }""", list(N18.values()))
+    app.reload(); app.wait_for_selector('#main:not([hidden])'); app.wait_for_timeout(800)
+    recv0 = app.evaluate('__otDev.lists()')['recv']
+    check(recv0 == [N18['K1']], '读详情页之前：只有列表上认出天猫、已签收的 K1 要确认收货（K2 运输中、K3 还不知道是不是天猫、K4 不是天猫）', recv0)
+    app.evaluate('nos => __otDev.inspect(nos)', [N18['K3'], N18['K4']])
+    o3, o4 = app.evaluate('no => __otDev.order(no)', N18['K3']), app.evaluate('no => __otDev.order(no)', N18['K4'])
+    check(o3.get('tmall') is True and '已签收' in (o3.get('logi') or '') and o4.get('tmall') is False,
+          '详情页：K3 跳到 trade.tmall.com，记为天猫；K4 没跳，记为不是天猫', {'K3': (o3.get('tmall'), o3.get('logi')), 'K4': o4.get('tmall')})
+    recv1 = sorted(app.evaluate('__otDev.lists()')['recv'])
+    check(recv1 == sorted([N18['K1'], N18['K3']]), '确认收货的范围：天猫 AND 已签收 AND 卖家已发货的实验室订单（K1、K3）；未签收的 K2、非天猫的 K4 不进', recv1)
+
+    # 自动处理发票：确认清单里多一组「确认收货（天猫，确认后申请平台开票）」，默认勾选；只留这一组确认
+    for pg in [pg for pg in ctx.pages if '/app/im/' in pg.url or pg.url.startswith(INV_URL)]: pg.close()
+    app.bring_to_front()
+    app.evaluate('() => { __otDev.tmo = { apply: 4000 }; }')            # 离线没有批量开票页：申请那一段 4 秒就结束，只看排进去的单
+    app.evaluate('chrome.storage.local.set({ applyJob: null })')
+    app.click('.flow li[data-step="2"]'); app.wait_for_timeout(500)
+    wait_until(app, lambda: not app.evaluate('__otDev.run()')['busy'], 60)
+    app.click('#summary [data-flow="inv-run"]')
+    app.wait_for_selector('#dlg-list[open]', timeout=600000)
+    heads = app.evaluate("[...document.querySelectorAll('#list-rows h4.grp')].map(h => [h.textContent, h.title])")
+    gi = next((i for i, h in enumerate(heads) if h[0].startswith('确认收货（天猫，确认后申请平台开票）')), -1)
+    check(gi >= 0 and heads[gi][0].endswith('（2）') and '确认收货会把货款打给卖家，且不可撤销；只对物流已签收的订单确认' in heads[gi][1] and '密码' not in heads[gi][1],
+          '确认清单里有「确认收货（天猫，确认后申请平台开票）（2）」，悬停写明货款打给卖家、不可撤销、只对已签收的确认', heads)
+    rows = app.evaluate("gi => [...document.querySelectorAll('#list-rows input[data-g=\"' + gi + '\"]')].map(i => ({ on: i.checked, tip: i.title, text: i.closest('label').innerText }))", gi)
+    check(len(rows) == 2 and all(r['on'] for r in rows) and all('签收：' in r['text'] and '订单号' in r['text'] and '¥' in r['text'] for r in rows)
+          and {N18['K1'], N18['K3']} == {n for r in rows for n in N18.values() if n in r['text']} and all('不可撤销' in r['tip'] for r in rows),
+          '这一组列出 K1、K3（店铺、下单日期、商品、金额、订单号、签收信息），默认勾选', rows)
+    app.evaluate("gi => document.querySelectorAll('#list-rows input[data-g]').forEach(i => { i.checked = +i.dataset.g === gi; })", gi)
+    app.click('#list-ok')
+    # K1：插件自己点「确认收货」→ 确认页点「确定」→ 交易成功
+    k1 = wait_until(app, lambda: (o := app.evaluate('no => __otDev.order(no)', N18['K1'])) and o.get('statusLive') == '交易成功' and o, 120)
+    today = app.evaluate("(() => { const d = new Date(), p = n => String(n).padStart(2, '0'); return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()); })()")
+    check(bool(k1) and k1.get('doneAt') == today, 'K1：自动确认收货，订单变成交易成功，交易成功日期记为今天（本机日期）', k1 and (k1.get('statusLive'), k1.get('doneAt')))
+    # K3：确认页上有密码框 → 插件停下、切到前台、什么都不填；主页进度写明在等用户
+    man = wait_until(app, lambda: (r := store('recvRun')) and r.get('no') == N18['K3'] and r.get('state') == 'manual' and r, 90)
+    cpg = next((pg for pg in ctx.pages if 'confirm_goods' in pg.url and N18['K3'] in pg.url), None)
+    prog = wait_until(app, lambda: '请在淘宝页面自行完成验证后确认收货（第 2 / 2 单' in (t := app.inner_text('#summary')) and t, 10) or app.inner_text('#summary')
+    check(bool(man) and bool(cpg), 'K3：确认页上出现密码框，插件停下（state = manual），没有点「确定」', man)
+    check('请在淘宝页面自行完成验证后确认收货（第 2 / 2 单' in prog, '主页进度写「请在淘宝页面自行完成验证后确认收货（第 2 / 2 单…）」', prog[:300])
+    if cpg:
+        cpg.wait_for_timeout(2500)
+        m = cpg.evaluate('({ touched: window.__mockRecv.touched, clicks: window.__mockRecv.clicks, value: document.querySelector(\'input[type=password]\').value, '
+                         'vis: document.visibilityState, panel: (document.querySelector(\'div[style*="2147483647"]\') || {}).innerText || \'\' })')
+        check(m['touched'] == [] and m['value'] == '' and m['clicks'] == [], '密码框没被聚焦、输入、改值（插件不碰密码框），也没替用户点「确定」', m)
+        check(m['vis'] == 'visible' and '插件不填写任何内容' in m['panel'], '这一页切到了前台，面板写明请用户自行完成', m)
+        cpg.click('#ok')                                                # 用户自己在页面上完成
+    fin = wait_until(app, lambda: (t := app.inner_text('#summary')) and '发票处理完成' in t and t, 180) or app.inner_text('#summary')
+    rl = next((l for l in fin.split('\n') if l.startswith('⑨ ')), '')
+    check(rl.startswith('⑨ 确认收货：已确认收货 2 / 2 单，已排进申请平台开票'), '总结：确认收货 2 / 2 单，已排进申请平台开票', fin[:500])
+    job = store('applyJob') or {}
+    check(sorted(job.get('nos') or []) == sorted([N18['K1'], N18['K3']]), '确认收货后的 K1、K3 排进了同一轮的「申请平台开票」（applyJob）', job.get('nos'))
+    k3 = app.evaluate('no => __otDev.order(no)', N18['K3'])
+    check(k3.get('statusLive') == '交易成功' and not store('recvRun'), 'K3：用户在页面上完成后插件检测到交易成功，任务清掉', (k3.get('statusLive'), store('recvRun')))
+    if cpg and not cpg.is_closed():
+        check(cpg.evaluate('window.__mockRecv.touched') == [], '直到最后密码框都没被碰过')
+    left = app.evaluate('__otDev.lists()')['recv']
+    check(left == [], '确认收货以后清单里不再有这两单', left)
+    app.evaluate('() => { __otDev.tmo = null; }')
 
 
 def main():

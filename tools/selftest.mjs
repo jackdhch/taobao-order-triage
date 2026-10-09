@@ -344,7 +344,7 @@ assert.equal(I.detailRefund('某商品 退款完成 ￥12.25 x1').refunded, true
   assert.ok(scriptsFor('https://invoice-ua.taobao.com/e-invoice/invoice-apply-online.html?disableNav=YES%2CYES&orderId=1&channel=card').includes('extension/apply-card.js'));
   assert.ok(scriptsFor('https://invoice-ua.taobao.com/e-invoice/invoice-detail-tm.html?disableNav=YES&orderId=1').includes('extension/apply-card.js'));
   assert.ok(scriptsFor('https://market.m.taobao.com/app/im/chat-core/index.html').includes('extension/chat-main.js'));
-  assert.equal(mf.version, '0.20.0');
+  assert.equal(mf.version, '0.21.0');
   // 备份文件里写的插件版本：网页版读不到 manifest，用 app.js 里写死的版本号，两处要一致
   const appJs = fs.readFileSync(new URL('../js/app.js', import.meta.url), 'utf8');
   assert.equal((/const VERSION = EXT \? chrome\.runtime\.getManifest\(\)\.version : '([\d.]+)'/.exec(appJs) || [])[1], mf.version);
@@ -504,4 +504,61 @@ const RB = req('../js/reimburse.js'), OF = req('../js/office.js');
   const mf = JSON.parse(fs.readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
   assert.ok(mf.host_permissions.includes('<all_urls>'), 'chrome.tabs.captureVisibleTab 要 <all_urls>');
 }
-console.log('自检通过：读表（xml:space）、合并规则、日期格式、先抓后导表、关键词建议、发票逻辑、已整理发票去重、读发票 PDF 文字、补差价待定、同店默认实验室、下载发票按金额日期对单、给卖家的消息、详情页退款、zip 打包、开票卡片、manifest 匹配与版本号、回主页按钮、措辞、调试日志不进备份、催卖家话术、发票状态的文件名、低值品判断表、与科研无关的字样、3D 打印识别、到账差额组合、历史批次文件夹名、xlsx / docx 结构、整理目录结构');
+// 应开票截止日（用户 2026-10-09 给的淘宝 / 天猫开票规定）：固定 10 日，按规定算起点；超过截止日才督促
+{
+  const D = (ctx, today) => I.invoiceDue(Object.assign({ today }, ctx));
+  // 天猫、交易成功前申请：从交易成功算
+  let d = D({ kind: 'platform', tmall: true, applyAt: '2026-10-01 10:11:12', doneAt: '2026-10-05 08:00:00' }, '2026-10-15');
+  assert.deepEqual([d.start, d.due, d.late, d.rule], ['2026-10-05', '2026-10-15', false, '天猫：交易成功后 10 日']);
+  assert.equal(D({ kind: 'platform', tmall: true, applyAt: '2026-10-01', doneAt: '2026-10-05' }, '2026-10-16').late, true);
+  // 天猫、交易成功后申请：从申请算
+  d = D({ kind: 'platform', tmall: true, applyAt: '2026-10-08', doneAt: '2026-10-05' }, '2026-10-18');
+  assert.deepEqual([d.start, d.due, d.late, d.rule], ['2026-10-08', '2026-10-18', false, '天猫：申请后 10 日']);
+  // 天猫、读不到交易成功日期：按申请日算（宁可早督促，不漏）
+  assert.equal(D({ kind: 'platform', tmall: true, applyAt: '2026-10-01' }, '2026-10-12').start, '2026-10-01');
+  // 淘宝（非天猫）平台申请：从淘宝通知（申请）日算，交易成功日期不管
+  d = D({ kind: 'platform', tmall: false, applyAt: '2026-10-01', doneAt: '2026-10-07' }, '2026-10-12');
+  assert.deepEqual([d.start, d.due, d.late, d.over, d.rule], ['2026-10-01', '2026-10-11', true, 1, '淘宝：通知后 10 日']);
+  // 向卖家索要（线下）：确认收货、首次索要两者较晚者起算
+  assert.equal(D({ kind: 'seller', askAt: '2026-09-20 09:00', doneAt: '2026-09-25' }, '2026-10-05').due, '2026-10-05');
+  assert.equal(D({ kind: 'seller', askAt: '2026-09-20 09:00', doneAt: '2026-09-25' }, '2026-10-05').late, false);
+  assert.equal(D({ kind: 'seller', askAt: '2026-09-28', doneAt: '2026-09-25' }, '2026-10-09').start, '2026-09-28');
+  assert.equal(D({ kind: 'seller', askAt: new Date(2026, 8, 28, 23, 30).getTime() }, '2026-10-09').start, '2026-09-28');   // 时间戳按本机日期
+  assert.equal(D({ kind: 'seller' }, '2026-10-09'), null);
+  // 跨月、跨年
+  assert.equal(I.addDays('2026-12-25', 10), '2027-01-04');
+  // 签收：「已签收」「签收成功」算，「未签收」「待签收」「运输中」不算
+  assert.ok(I.isSigned('已签收 您的包裹已签收') && I.isSigned('快件已被 菜鸟驿站 签收') && !I.isSigned('未签收') && !I.isSigned('待签收') && !I.isSigned('运输中 · 某快递'));
+  assert.equal(I.detailDone('成交时间：2026-09-01 10:00:00 确认收货时间：2026-09-05 11:00:00'), '2026-09-05 11:00:00');
+  assert.equal(I.detailDone('成交时间：2026-09-01 10:00:00'), '2026-09-01 10:00:00');
+  assert.ok(I.detailLogi('物流：您的包裹已签收（虚构快递） 卖家：某').includes('已签收'));
+  // 订单列表：天猫标记、物流标签，第一次看到交易成功的日期
+  const os = [];
+  N.mergeScraped(os, [{ no: '5', time: '2026-09-01', status: '卖家已发货', shop: '某', tmall: true, logi: '运输中', lines: [{ title: 'x' }] }], { addNew: true });
+  assert.ok(os[0].tmall && os[0].logi === '运输中' && !os[0].doneSeen);
+  N.mergeScraped(os, [{ no: '5', status: '交易成功', logi: '已签收', lines: [{ title: 'x' }], scrapedAt: '2026-09-06T10:00:00' }]);
+  assert.ok(os[0].tmall && os[0].doneSeen === '2026-09-06' && os[0].doneGuess === false && os[0].statusLive === '交易成功');
+  N.mergeScraped(os, [{ no: '6', time: '2026-09-01', status: '交易成功', shop: '某', lines: [{ title: 'y' }] }], { addNew: true });
+  assert.ok(os[1].doneGuess === true && !os[1].tmall, '第一次看到就已交易成功：日期是估计的');
+  // 设置里没有可调的督促天数；设置里一行说明 10 日规则；页头有版本号
+  const appJs = fs.readFileSync(new URL('../js/app.js', import.meta.url), 'utf8');
+  const html = fs.readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+  assert.ok(!html.includes('remind-days') && !/remindDays\(\)/.test(appJs), '设置里不能再有可调的督促天数');
+  assert.ok(html.includes('超过 10 日未开票才请淘宝客服督促') && html.includes('id="app-ver"') && html.includes('title="当前版本"'));
+  // 确认收货：只在 recv.js 里点按钮；插件的任何脚本都不往密码框里写东西（recv.js 只看密码框在不在）
+  const recv = fs.readFileSync(new URL('../extension/recv.js', import.meta.url), 'utf8').replace(/^\s*\/\/.*$/gm, '');
+  assert.ok(!/\.value\s*=[^=]|setRangeText|execCommand|insertText|\.focus\(|KeyboardEvent|InputEvent/.test(recv), 'recv.js 不能输入任何东西');
+  assert.ok((recv.match(/password/g) || []).length === 1 && recv.includes(`querySelectorAll('input[type="password"]')`), 'recv.js 只查密码框在不在');
+  for (const f of fs.readdirSync(new URL('../extension/', import.meta.url))) {
+    const src = fs.readFileSync(new URL('../extension/' + f, import.meta.url), 'utf8');
+    for (const m of src.matchAll(/password/gi)) {
+      const line = src.slice(src.lastIndexOf('\n', m.index) + 1, src.indexOf('\n', m.index));
+      assert.ok(/querySelectorAll?\(|^\s*\/\//.test(line) && !/\.value\s*=[^=]/.test(line), f + ' 里对密码框的用法只能是查找：' + line.trim());
+    }
+  }
+  const mf = JSON.parse(fs.readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
+  const scriptsFor = url => mf.content_scripts.filter(c => c.matches.some(m => new RegExp('^' + m.replace(/[.?+^$()|[\]{}\\]/g, '\\$&').replace(/\*/g, '.*') + '$').test(url))).flatMap(c => c.js);
+  for (const u of ['https://trade.taobao.com/trade/detail/trade_order_detail.htm?biz_order_id=1', 'https://trade.tmall.com/detail/orderDetail.htm?biz_order_id=1',
+    'https://trade.taobao.com/trade/confirm_goods.htm?biz_order_id=1']) assert.ok(scriptsFor(u).includes('extension/recv.js'), u);
+}
+console.log('自检通过：读表（xml:space）、合并规则、日期格式、先抓后导表、关键词建议、发票逻辑、已整理发票去重、读发票 PDF 文字、补差价待定、同店默认实验室、下载发票按金额日期对单、给卖家的消息、详情页退款、zip 打包、开票卡片、manifest 匹配与版本号、回主页按钮、措辞、调试日志不进备份、催卖家话术、发票状态的文件名、低值品判断表、与科研无关的字样、3D 打印识别、到账差额组合、历史批次文件夹名、xlsx / docx 结构、整理目录结构、应开票截止日（10 日）、签收与交易成功日期、确认收货不碰密码框');

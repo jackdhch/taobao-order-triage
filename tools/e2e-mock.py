@@ -83,6 +83,11 @@ def compare(got, o):
     for k, want in (('time', o['d']), ('status', o['st']), ('shop', o['shop']), ('pay', float(o['pay'])), ('ship', float(o['ship']))):
         if got.get(k) != want:
             bad.append(f'{k}: 抓到 {got.get(k)!r}，应为 {want!r}')
+    # 天猫标记（店名前图标写着「天猫」、或店名链接是 tmall.com）、订单上的物流标签（确认收货前看是否已签收，用户 2026-10-09）
+    if bool(got.get('tmall')) != bool(o.get('tmall')):
+        bad.append(f'tmall: 抓到 {got.get("tmall")!r}，应为 {bool(o.get("tmall"))!r}')
+    if o.get('label') and not all(x in (got.get('logi') or '') for x in o['label']):
+        bad.append(f'logi: 抓到 {got.get("logi")!r}，应含 {o["label"]!r}')
     lines = got.get('lines') or []
     if len(lines) != len(o['items']):               # 多了就是「常买常逛」推荐栏混进来了
         bad.append(f'件数: 抓到 {len(lines)}，应为 {len(o["items"])}（标题：{[l.get("title") for l in lines]}）')
@@ -415,7 +420,7 @@ def run(p, base, tmp):
     check(set(scraped) == visible and sorted(res['nos']) == sorted(visible), f'列表里的 {len(visible)} 单全读到（含刚打开时没渲染、要往下滚才出齐的；含订单表里没有的新订单）',
           f'多了 {sorted(set(scraped) - visible)}，少了 {sorted(visible - set(scraped))}')
     bad = {o['no']: b for o in mock['orders'] if o['no'] in scraped and (b := compare(scraped[o['no']], o))}
-    check(not bad, '逐单核对：日期/状态/店铺/实付/运费，逐件：标题/规格/单价/数量/图片/退款/链接；件数对（推荐栏没混进来）',
+    check(not bad, '逐单核对：日期/状态/店铺/实付/运费/天猫标记/物流标签，逐件：标题/规格/单价/数量/图片/退款/链接；件数对（推荐栏没混进来）',
           '\n          '.join(f'{no}: {x}' for no, b in bad.items() for x in b))
     check(m.evaluate('localStorage.length') == 0, '淘宝页（模拟页）自己的 localStorage 是空的', m.evaluate('Object.keys(localStorage)'))
     hidden = {o['no'] for o in mock['orders'] if o.get('hideDefault')}

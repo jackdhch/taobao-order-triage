@@ -324,7 +324,7 @@ def load_invoice(page, home, nos=None, plat=None, store=None):
         const orders = window.Normalize.rowsToOrders(rows), decisions = {};
         for (const o of orders) for (const l of o.lines) { l.img = imgs[l.title] || ''; decisions[l.key] = 'lab'; }
         localStorage.setItem('orderTriage.app.v1', JSON.stringify({ orders, decisions, refunds: {}, rules: null, since: 'none',
-            prefs: { autoNext: true, sort: 'desc', remindDays: 7 }, invoice: { title, taxId: tax, template: '', email: '' },
+            prefs: { autoNext: true, sort: 'desc' }, invoice: { title, taxId: tax, template: '', email: '' },
             invFiles: {}, haveIdx: [], person: { name: '张三', sid: '12345678' } }));
     }''', [rows, imgs, TITLE, FAKE_TAX])
     at = ts('2026-10-05T09:12:00+08:00')

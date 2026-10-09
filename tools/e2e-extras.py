@@ -228,15 +228,15 @@ def run(p, tmp):
     app.evaluate('() => { __otDev.tmo = { sync: 4000 }; }')
     app.evaluate("chrome.storage.local.set({ autoLast: '' })")
     app.click('#summary [data-flow="inv-run"]')
-    prog = wait_until(app, lambda: (t := app.inner_text('#summary')) and '第 2 / 9 段：刷新淘宝开票记录' in t and re.search(r'已等 \d+ 秒', t) and t, 15) or ''
-    check(bool(prog), '处理中显示「第 2 / 9 段：刷新淘宝开票记录 · 等什么 · 已等几秒」', app.inner_text('#summary')[:200])
+    prog = wait_until(app, lambda: (t := app.inner_text('#summary')) and '第 2 / 10 段：刷新淘宝开票记录' in t and re.search(r'已等 \d+ 秒', t) and t, 15) or ''
+    check(bool(prog), '处理中显示「第 2 / 10 段：刷新淘宝开票记录 · 等什么 · 已等几秒」', app.inner_text('#summary')[:200])
     dlg = wait_until(app, lambda: app.locator('#dlg-list[open]').count() and app.inner_text('#dlg-list'), 40) or ''
     check('需手动处理' in dlg and '5195000000000000001' in dlg and '换开发票' in dlg and app.inner_text('#list-ok') == '知道了' and not app.is_visible('#list-cancel'),
           '只有一单需处理、而且插件做不了：清单照样弹出，列出这一单和该点的操作（「知道了」）', dlg[:300])
     if dlg:
         app.click('#list-ok')
     fin = wait_until(app, lambda: (t := app.inner_text('#summary')) and '发票处理完成' in t and t, 30) or app.inner_text('#summary')
-    check('发票处理完成' in fin and '② 刷新淘宝开票记录：超时：4 秒内未读到开票记录' in fin and '沿用上次' in fin and '⑨ 申请平台开票' in fin,
+    check('发票处理完成' in fin and '② 刷新淘宝开票记录：超时：4 秒内未读到开票记录' in fin and '沿用上次' in fin and '⑨ 确认收货' in fin and '⑩ 申请平台开票' in fin,
           '「刷新淘宝开票记录」超时：写明原因，接着做完后面几段，总结逐段列出结果', fin[:600])
     check('仍需处理 1 单：某某虚构五金（已开票，抬头不符）' in fin, '总结里列出仍需处理的那一单', fin[:300])
     dash = app.inner_text('#remind')
@@ -277,13 +277,23 @@ def run(p, tmp):
     # 两个主页标签：一个改了数据，另一个不再把旧数据写回，提示后刷新
     app.evaluate('window.__mark = 1')
     app2 = ctx.new_page(); app2.goto(f'chrome-extension://{eid}/index.html'); app2.wait_for_selector('#main:not([hidden])')
-    app2.click('#btn-settings'); app2.fill('#remind-days', '9'); app2.click('#rules-save'); app2.wait_for_timeout(300)
+    app2.click('#btn-settings')
+    # 督促时限固定 10 日（用户 2026-10-09）：设置里没有可调的天数，只有一行说明；页头和「关于」里有版本号
+    note = app2.inner_text('#due-note')
+    check(app2.locator('#remind-days').count() == 0 and '超过 10 日未开票才请淘宝客服督促' in note and '官方客服才可介入' in note,
+          '设置里没有「未开票超过几天」可调项，只有一行 10 日规则说明', note)
+    mver = json.loads((ROOT / 'manifest.json').read_text(encoding='utf-8'))['version']
+    ver = app2.locator('#app-ver')
+    check(ver.inner_text() == 'v' + mver and ver.get_attribute('title') == '当前版本' and app2.evaluate('chrome.runtime.getManifest().version') == mver
+          and 'v' + mver in app2.evaluate("document.getElementById('about-ver').textContent"),
+          f'页头标题旁显示版本号 v{mver}（等于 manifest 版本，悬停「当前版本」），设置 → 关于里一致', ver.inner_text())
+    app2.fill('#inv-email', 'nobody@example.com'); app2.click('#rules-save'); app2.wait_for_timeout(300)
     def unmarked():
         try: return app.evaluate('window.__mark') is None
         except Exception: return False                      # 正在刷新
     reloaded = wait_until(app, unmarked, 10)
-    st9 = app.evaluate("JSON.parse(localStorage.getItem('orderTriage.app.v1')).prefs.remindDays")
-    check(bool(reloaded) and st9 == 9, '另一个主页标签改了数据：本页刷新、不把旧数据写回（改动保留）', st9)
+    st9 = app.evaluate("JSON.parse(localStorage.getItem('orderTriage.app.v1')).invoice.email")
+    check(bool(reloaded) and st9 == 'nobody@example.com', '另一个主页标签改了数据：本页刷新、不把旧数据写回（改动保留）', st9)
     app2.close()
     app.wait_for_selector('#main:not([hidden])'); app.wait_for_timeout(500)
     # 示例数据：第 3、4 步主按钮置灰，不排淘宝页的活；点旺旺图标不去打开淘宝页
@@ -344,7 +354,7 @@ def part5d(ctx, app, blocked):
     app.click(f'.inv-table tbody tr:has-text("{O1}") button[data-act]')
     app.wait_for_timeout(600)
     t = toast()
-    check('正在自动处理发票（第 2 / 9 段：刷新淘宝开票记录）。等它结束，或' in t and app.locator('#toast #toast-act').count() == 1
+    check('正在自动处理发票（第 2 / 10 段：刷新淘宝开票记录）。等它结束，或' in t and app.locator('#toast #toast-act').count() == 1
           and app.inner_text('#toast-act') == '停止' and len(ctx.pages) == n0, '手动「自动处理发票」进行中点逐单操作：提示写明在等哪一段，一行内给「停止」，不打开页面', t)
     app.click('#toast-act')
     st = wait_until(app, lambda: not run()['busy'], 10)

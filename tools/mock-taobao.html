@@ -110,7 +110,7 @@ if (NEW) (function () {
   // 订单从新到旧。items: t 标题, sku 规格（没有就是只有服务说明）, svc 服务说明, p 成交单价, orig 划线原价, q 数量, refund 逐件退款
   const ORDERS = [
     { no: '5190000000000000016', d: '2026-09-26', shop: '某某虚构杂货铺', st: '卖家已发货', pay: '12.00', ship: '0.00',
-      items: [{ t: '虚构 MGN12H 直线导轨滑块 验证码模块', sku: '透明', svc: SVC3, p: '12.00', q: 1 }], label: ['已发货', '运输中 · 虚构快递'] },   // 标题带「滑块」「验证码」：不能被当成安全验证
+      items: [{ t: '虚构 MGN12H 直线导轨滑块 验证码模块', sku: '透明', svc: SVC3, p: '12.00', q: 1 }], label: ['已发货', '运输中 · 虚构快递'], tmall: 'alt' },   // 标题带「滑块」「验证码」：不能被当成安全验证
     { no: '5190000000000000015', d: '2026-09-20', shop: '某某虚构电子元件', st: '交易成功', pay: '43.17', ship: '0.00',
       items: [{ t: 'XT60 公母插头 带护套 航模电池接头', sku: '5对装', svc: SVC1, p: '12.50', orig: '15.00', q: 2 },
               { t: '硅胶线 16AWG 红黑各1米', sku: '【红黑 1米】', svc: SVC2, p: '8.27', q: 1, refund: '退款成功' },
@@ -120,7 +120,7 @@ if (NEW) (function () {
     { no: '5190000000000000013', d: '2026-09-10', shop: '某某虚构数码', st: '交易关闭', pay: '39.00', ship: '0.00',
       items: [{ t: '虚构手机壳 磁吸 防摔', sku: '樱粉 单壳', svc: SVC1, p: '39.00', q: 1 }] },
     { no: '5190000000000000012', d: '2026-09-05', shop: '某某虚构五金', st: '交易成功', pay: '24', ship: '0',
-      items: [{ t: '304不锈钢内六角螺丝 杯头 M3', sku: 'M3×12 200个', svc: SVC1, p: '8', orig: '10', q: 3 }], label: ['已签收', '您的包裹已签收'] },
+      items: [{ t: '304不锈钢内六角螺丝 杯头 M3', sku: 'M3×12 200个', svc: SVC1, p: '8', orig: '10', q: 3 }], label: ['已签收', '您的包裹已签收'], tmall: 'url' },
     { no: '5190000000000000011', d: '2026-08-30', shop: '某某虚构量具', st: '交易成功', pay: '88.70', ship: '0.00', hideDefault: true,
       items: [{ t: '数显游标卡尺 0-150mm 高精度', sku: '标准款', svc: SVC1, p: '68.80', q: 1 },
               { t: '什锦锉 套装 10支', sku: '10支装', svc: SVC3, p: '19.90', q: 1 }] },
@@ -151,7 +151,8 @@ if (NEW) (function () {
   ];
   // 商品图、链接都是假的；这里算好放进数据，测试拿去当期望值
   ORDERS.forEach((o, k) => {
-    o.shopUrl = 'https://shop19000' + String(k).padStart(4, '0') + '.taobao.com/?mock=1';
+    // 天猫店（用户 2026-10-09）：tmall 'alt' = 店名前的小图标写着「天猫」，'url' = 店名链接是 xxx.tmall.com（真实页面的写法待核对）
+    o.shopUrl = o.tmall === 'url' ? 'https://mockshop' + String(k).padStart(4, '0') + '.tmall.com/?mock=1' : 'https://shop19000' + String(k).padStart(4, '0') + '.taobao.com/?mock=1';
     o.items.forEach((it, i) => {
       it.img = IMG + 'item-' + o.no.slice(-3) + '-' + i + '.jpg';
       // 图片坏的两种情况（e2e 的假图片服务按地址回应）：_200x200 小图不带淘宝 Referer 只回 1×1 灰点 → 应换成 _.webp 存；全坏 → 不存地址
@@ -203,7 +204,7 @@ if (NEW) (function () {
     return '<div id="shopOrderContainer_' + o.no + '" class="trade-container type-of-normal trade-bought-list-order-container">'
       + '<div class="' + h('shopInfo') + ' trade-bought-list-shop-info"><div class="' + h('shopInfoLeft') + '">'
       + '<span class="' + h('shopInfoOrderTime') + '">' + o.d + '</span><span class="' + h('shopInfoOrderId') + '">订单号: ' + o.no + '</span>'
-      + '<img class="' + h('shopInfoIcon') + '" src="' + IMG + 'badge.png" width="30" height="14" alt="">'
+      + '<img class="' + h('shopInfoIcon') + '" src="' + IMG + 'badge.png" width="30" height="14" alt="' + (o.tmall === 'alt' ? '天猫' : '淘宝') + '">'
       + '<span class="' + h('shopInfoNameContainer') + '"><a class="' + h('shopInfoName') + '" href="' + o.shopUrl + '" target="_blank">' + o.shop + '</a>'
       + '<a class="' + h('shopInfoWangwang') + '" href="#"' + bg(IMG + 'ww.gif') + '></a></span>'
       + '<a class="' + h('shopInfoOrderDetail') + '" href="#">订单详情</a></div>'

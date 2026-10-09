@@ -160,7 +160,8 @@ function orderTriageScraper(want, opts) {
       && !rowEls.some(r => r.contains(a)) && text(a).length >= 2 && text(a).length <= 40);
     const pay = money((/实付款\s*[¥￥]\s*[\d,]+\.\d{1,2}/.exec(t) || [''])[0]);
     const ship = money((/含运费[:：]?\s*[¥￥]\s*[\d,]+\.\d{1,2}/.exec(t) || [''])[0]);
-    return { no, time: date, status, shop: shopA ? text(shopA) : '', nick: nickOf(el), pay, ship, lines: rows.map(parseItem) };
+    return { no, time: date, status, shop: shopA ? text(shopA) : '', nick: nickOf(el), pay, ship, lines: rows.map(parseItem),
+             tmall: !!shopA && /\.tmall\.(com|hk)/i.test(shopA.href), logi: ((/(已签收|签收成功)[^\n]{0,30}/.exec(t) || [])[0] || '') };
   }
 
   // 新版「已买到的宝贝」（2026-09 在真实页面上核对过）：每单一个 #shopOrderContainer_订单号；
@@ -210,8 +211,16 @@ function orderTriageScraper(want, opts) {
     });
     // 操作栏里的开票按钮：「申请开票」= 能在淘宝平台开票；「查看发票」= 已经开过；没有 = 多半是个人卖家，要发消息要
     const inv = [...box.querySelectorAll('[class*="operations--"] .trade-button')].map(text).find(t => /开票|发票/.test(t)) || '';
+    // 天猫店（用户 2026-10-09：天猫的订单都能平台开票，开票时限从交易成功算起）：订单头店名前的小图标是「淘宝 / 天猫 / 企」标记，
+    // 店名链接是 xxx.tmall.com。图标的写法（图片地址、alt、文字）还没在真实页面核对，几种都认；认不出时由订单详情页补（天猫订单会跳到 trade.tmall.com）
+    const shopA = box.querySelector('a[class*="shopInfoName"]');
+    const marks = [...box.querySelectorAll('[class*="shopInfo"] img, [class*="shopInfo"] [class*="Icon"], [class*="shopInfo"] [class*="icon"]')]
+      .map(e => [e.getAttribute('src'), e.getAttribute('alt'), e.getAttribute('title'), e.getAttribute('aria-label'), e.childElementCount ? '' : e.textContent].join(' '));
+    const tmall = /\.tmall\.(com|hk)/i.test((shopA && shopA.href) || '') || marks.some(t => /tmall|天猫/i.test(t));
+    // 订单上的物流 / 售后标签（「已签收 您的包裹已签收」「运输中 …」「退款成功 …」）：确认收货前看是否已签收
+    const logi = [...box.querySelectorAll('[class*="label--"]')].map(text).filter(Boolean).join(' ').slice(0, 80);
     return { no: box.id.slice(BOX_ID.length), time: pick('[class*="shopInfoOrderTime"]'), status: pick('[class*="shopInfoStatus"]'),
-             shop: pick('a[class*="shopInfoName"]'), nick: nickOf(box), pay: payField(/实付款/), ship: payField(/运费/), inv, lines };
+             shop: pick('a[class*="shopInfoName"]'), nick: nickOf(box), pay: payField(/实付款/), ship: payField(/运费/), inv, lines, tmall, logi };
   }
   // 能认出新版结构就精确解析；认不出（旧版页面、以后改版）再退回按文字特征猜
   function pageOrders() {

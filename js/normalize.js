@@ -162,6 +162,21 @@
     return pairs;
   }
 
+  // 订单列表上读到的天猫标记、物流标签，和「第一次看到交易成功」的日期（doneSeen，本机日期）。
+  // 交易成功日期以订单详情页上的「确认收货时间」为准（o.doneAt，主页读详情页时记）；读不到时开票截止日退回用 doneSeen。
+  // doneGuess：第一次看到这单时它就已经交易成功了（真正的交易成功日期可能更早），主页会找机会去详情页读准确的日期
+  const DONE_RE = /交易成功|交易完成/;
+  function listMarks(o, s) {
+    if (s.tmall) o.tmall = true;                          // 只会从「不知道」变成「是」：详情页认出的天猫不被列表上认不出的盖掉
+    if (s.logi !== undefined) o.logi = s.logi || o.logi || '';
+    if (s.status && DONE_RE.test(s.status) && !o.doneSeen) {
+      const d = new Date(s.scrapedAt || Date.now()), p = n => String(n).padStart(2, '0');
+      o.doneSeen = d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+      o.doneGuess = !o.statusSeen;
+    }
+    if (s.status && !DONE_RE.test(s.status)) o.statusSeen = true;   // 见过它没交易成功的样子：之后第一次看到交易成功的日期就是真的
+  }
+
   // 把抓取数据并进导出数据：以导出表为准，同订单号的只补图片、退款文字、链接。
   // 导出表里没有的订单默认忽略（抓取可能多翻了页）；只有完全没有导出表时（addNew）才用抓取数据建单
   function mergeScraped(orders, scraped, opts) {
@@ -181,6 +196,7 @@
                     pay: money(s.pay), ship: money(s.ship), source: 'scrape', lines: [] };
         if (s.inv !== undefined) n.inv = s.inv;
         if (s.nick) n.nick = s.nick;
+        listMarks(n, s);
         if (!addNew) n.older = true;                        // 用户要的「订单表之前」那段：再导入订单表时要留着
         s.lines.forEach((l, i) => n.lines.push({
           id: s.no + '#' + i, title: l.title || '', sku: l.sku || '', link: l.link || '', img: l.img || '',
@@ -194,6 +210,7 @@
       if (s.status && !o.status) o.status = s.status;
       if (s.status && s.status !== o.status) o.statusLive = s.status;
       else if (s.status) delete o.statusLive;                // 订单页和订单表又一致了（比如后来都交易关闭了）
+      listMarks(o, s);
       const noImg = o.lines.filter(l => !l.img).length;
       unmatched += o.lines.length - fillLines(o.lines, s.lines).length;
       filled += noImg - o.lines.filter(l => !l.img).length;
