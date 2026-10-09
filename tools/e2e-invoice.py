@@ -54,6 +54,55 @@ O = {
 }
 NO = {k: v[0] for k, v in O.items()}
 LAB = [k for k in O if k not in ('P', 'R')]         # 该出现在发票栏的
+# [17] 另导入的一批（下载的发票核对与整理）：同店合开、挪到同店另一单、不是发票、少 1 元以上、按用券前价格开、部分退款
+X17 = {
+    'M1': ('5190000000000000121', '2026-09-02', '交易成功', '某某虚构合开店', '10.00', [('杜邦线 母对母 40P', '20cm', 1, '10.00')]),
+    'M2': ('5190000000000000122', '2026-09-03', '交易成功', '某某虚构合开店', '15.00', [('杜邦线 公对公 40P', '30cm', 1, '15.00')]),
+    'V1': ('5190000000000000128', '2026-09-04', '交易成功', '某某虚构挪单店', '20.00', [('热缩管 套装', '黑色', 1, '20.00')]),
+    'V2': ('5190000000000000129', '2026-09-05', '交易成功', '某某虚构挪单店', '66.00', [('热风枪 858D', '标准款', 1, '66.00')]),
+    'N1': ('5190000000000000123', '2026-09-06', '交易成功', '某某虚构说明书店', '30.00', [('USB 示波器 入门款', '标准款', 1, '30.00')]),
+    'S1': ('5190000000000000124', '2026-09-07', '交易成功', '某某虚构少票店', '50.00', [('焊台 936 恒温', '标准款', 1, '50.00')]),
+    'C1': ('5190000000000000125', '2026-09-08', '交易成功', '某某虚构券店', '10.00', [('XT30 插头 公母', '一对', 1, '10.00')]),
+    'P2': ('5190000000000000126', '2026-09-08', '交易成功', '某某虚构券店', '10.50', [('牙膏 家庭装', '3支', 1, '10.50')]),      # 个人
+    'R1': ('5190000000000000127', '2026-09-09', '交易成功', '某某虚构价保店', '9.90', [('防静电镊子', 'ESD-15', 1, '9.90')]),   # 详情页：退了 5.00
+}
+N17 = {k: v[0] for k, v in X17.items()}
+INVOICE_HTML = '''<!doctype html><meta charset="utf-8"><body style="font-family:sans-serif;padding:40px">
+<h2>电子发票（普通发票）</h2><p>发票号码：{inv}</p><p>开票日期：{y}年{m}月{d}日</p>
+<p>购买方信息 名称：某大学 统一社会信用代码/纳税人识别号：121000009999999996</p><p>销售方信息 名称：某某虚构商店</p>
+<p>项目名称 虚构商品 金额 ¥{a1} 税额 ¥{a2}</p><p>价税合计（小写）¥{amt}</p></body>'''
+
+
+def make_pdfs(p):
+    """虚构发票 PDF（浏览器现场打印），按发票号给出：O 里每单一张（金额 = 实付；末尾注释写着订单号，测试核对下载的文件用），
+    以及 [17] 那一批的几张。返回 {发票号: PDF 字节}"""
+    b = p.chromium.launch()
+    pg = b.new_page()
+
+    def mk(inv, date, amt, no='', html=None):
+        y, m, d = date.split('-')
+        pg.set_content(html or INVOICE_HTML.format(inv=inv, y=y, m=m, d=d, amt=f'{amt:.2f}', a1=f'{amt * 0.9:.2f}', a2=f'{amt * 0.1:.2f}'))
+        return pg.pdf() + f'\n%虚构测试发票 订单 {no} 发票号 {inv}\n'.encode()
+    out = {}
+    for k, (no, d, _, _, pay, _) in O.items():
+        inv = '2644200000000000' + no[-4:]
+        day = '2026-08-09' if k == 'A' else d[:8] + f'{min(28, int(d[8:]) + 3):02d}'
+        out[inv] = mk(inv, day, float(pay), no)
+    for inv, date, amt in (('26990000000000000121', '2026-09-06', 25.0), ('26990000000000000128', '2026-09-10', 66.0),
+                           ('26990000000000000124', '2026-09-10', 45.0), ('26990000000000000125', '2026-09-10', 10.5),
+                           ('26990000000000000127', '2026-09-12', 4.9)):
+        out[inv] = mk(inv, date, amt)
+    out['26990000000000000123'] = mk('', '2026-09-10', 0, html='<meta charset="utf-8"><h2>USB 示波器 产品说明书</h2>'
+                                     '<p>型号 X1，额定电压 5V，额定电流 1A。使用前请仔细阅读本说明书，按图连接探头后开机，保修一年。</p>')
+    b.close()
+    return out
+
+
+def pdf_of(pdfs, inv):
+    """发票号 → PDF：[17] 那几张按全号；O 里的按末 3 位对订单（模拟页上的发票号和这里起的不一样）"""
+    if inv in pdfs:
+        return pdfs[inv]
+    return next((v for k, v in pdfs.items() if k.startswith('2644') and k[-3:] == inv[-3:]), None)
 # 各阶段每单的发票状态（主页发票栏「发票」列的文字）
 ASK = '需向卖家索要发票'
 AFTER_SYNC = {'A': '已开票，待下载', 'B': '已开票，抬头不符', 'C': '已申请淘宝开票，等待商家开具', 'D': '可在淘宝平台申请', 'E': ASK,
@@ -101,12 +150,12 @@ def save_name(k):
     return f'{d}_{js_num(pay)}_{re.sub(r"[\\/:*?\"<>|\s]+", "", shop)}_{no}.pdf'
 
 
-def write_csv(path):
+def write_csv(path, orders=None):
     # 淘宝导出表的样子：一单多件时，后续行订单号（和整单字段）留空
     with open(path, 'w', newline='', encoding='utf-8') as f:
         w = csv.writer(f)
         w.writerow(['订单号', '订单提交时间', '订单状态', '店铺名称', '商品名称', '型号款式', '商品数量', '商品金额', '实付金额', '运费'])
-        for no, d, st, shop, pay, items in O.values():
+        for no, d, st, shop, pay, items in (orders or O).values():
             for i, (t, sku, q, p) in enumerate(items):
                 head = [no, d + ' 10:00:00', st, shop] if i == 0 else ['', '', '', '']
                 w.writerow(head + [t, sku, q, p] + ([pay, '0.00'] if i == 0 else ['', '']))
@@ -122,9 +171,9 @@ def wait_until(page, fn, timeout):
     return None
 
 
-def fake_oss(tmp):
+def fake_oss(tmp, pdfs):
     # 假的「阿里云发票文件」服务器：扩展自己发起的下载不走 ctx.route，只能让浏览器把这个域名解析到本机。
-    # 用自签证书起 https（浏览器加 --ignore-certificate-errors），回应的 PDF 里写着是哪一单，照样不联网
+    # 用自签证书起 https（浏览器加 --ignore-certificate-errors），回应虚构发票 PDF（末尾注释写着是哪一单），照样不联网
     import http.server, ssl, subprocess, threading
     key, crt = tmp / 'oss.key', tmp / 'oss.crt'
     subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-subj', '/CN=einvoice-file.oss-cn-beijing.aliyuncs.com',
@@ -133,11 +182,9 @@ def fake_oss(tmp):
     class H(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
             m = re.match(r'/mock/OSTB_(\d+)\.pdf', self.path)
-            if not m:
+            body = m and pdf_of(pdfs, m.group(1))
+            if not body:
                 self.send_error(404); return
-            inv = m.group(1)
-            no = next((v[0] for v in O.values() if v[0][-3:] == inv[-3:]), '?')
-            body = f'%PDF-1.4\n%虚构测试发票 订单 {no} 发票号 {inv}\n%%EOF\n'.encode()
             self.send_response(200); self.send_header('Content-Type', 'application/pdf'); self.send_header('Content-Length', str(len(body))); self.end_headers()
             self.wfile.write(body)
 
@@ -151,7 +198,8 @@ def fake_oss(tmp):
 
 
 def run(p, tmp):
-    oss = fake_oss(tmp)
+    pdfs = make_pdfs(p)
+    oss = fake_oss(tmp, pdfs)
     # 下载只能落在临时目录：配置里指定下载文件夹，HOME 也指过去（万一配置没生效，默认的 ~/Downloads 也在临时目录里）
     dl_dir = tmp / '下载'
     (tmp / 'profile' / 'Default').mkdir(parents=True)
@@ -169,10 +217,8 @@ def run(p, tmp):
     def handle(route):
         url = route.request.url
         m = re.match(r'https://einvoice-file\.oss-cn-beijing\.aliyuncs\.com/mock/OSTB_(\d+)\.pdf', url)
-        if m:                                           # 模拟阿里云上的发票文件：内容里写着是哪一单的
-            inv = m.group(1)
-            no = next((v[0] for v in O.values() if v[0][-3:] == inv[-3:]), '?')
-            return route.fulfill(status=200, content_type='application/pdf', body=f'%PDF-1.4\n%虚构测试发票 订单 {no} 发票号 {inv}\n%%EOF\n'.encode())
+        if m and pdf_of(pdfs, m.group(1)):              # 模拟阿里云上的发票文件：虚构发票 PDF，末尾注释写着是哪一单
+            return route.fulfill(status=200, content_type='application/pdf', body=pdf_of(pdfs, m.group(1)))
         if url.startswith('https://consumerservice.taobao.com/online-help'):      # 官方客服入口：真实页面会跳到 alimebot
             return route.fulfill(status=200, content_type='text/html; charset=utf-8',
                                  body='<meta charset="utf-8"><script>location.replace("https://ai.alimebot.taobao.com/intl/index.htm?from=mock")</script>')
@@ -745,7 +791,103 @@ def run(p, tmp):
     cp.bring_to_front(); cp.click('#ot-home')
     home = wait_until(cp, lambda: next((pg for pg in ctx.pages if pg.url.startswith(f'chrome-extension://{eid}/index.html')), None), 10)
     check(bool(home), '主页没开着时，点按钮新开一个主页', [pg.url[:60] for pg in ctx.pages])
+    if home:
+        part17(ctx, home, tmp, pdfs, dl_dir)
     ctx.close()
+
+
+def part17(ctx, app, tmp, pdfs, dl_dir):
+    print('\n[17] 下载的发票核对与整理：同店合开、挪到同店另一单、不是发票、票面少 1 元以上、按用券前价格开、部分退款')
+    app.bring_to_front(); app.wait_for_selector('#main:not([hidden])')
+    ctx.new_cdp_session(app).send('Browser.setDownloadBehavior', {'behavior': 'default'})
+    csv2 = tmp / '虚构订单表2.csv'
+    write_csv(csv2, X17)
+    app.set_input_files('#file', str(csv2)); app.wait_for_timeout(800)
+    app.evaluate('''nos => { const S = JSON.parse(localStorage.getItem('orderTriage.app.v1'));
+        for (const o of S.orders) if (nos.includes(o.no)) for (const l of o.lines) S.decisions[l.key] = o.no.endsWith('126') ? 'personal' : 'lab';
+        localStorage.setItem('orderTriage.app.v1', JSON.stringify(S)); }''', list(N17.values()))
+    app.reload(); app.wait_for_selector('#main:not([hidden])'); app.wait_for_timeout(800)
+    S = lambda: app.evaluate("JSON.parse(localStorage.getItem('orderTriage.app.v1'))")
+
+    # 部分退款：详情页上写着退了 5.00（单价 9.90），以前四舍五入成整件退、整单不再开票
+    app.evaluate('no => __otDev.inspect([no])', N17['R1'])
+    due = app.evaluate('no => __otDev.due(no)', N17['R1'])
+    check(due == 4.9, '部分退款（单价 9.90 退 5.00）：应报金额 = 实付 − 退款 = 4.90，没被当成整单退款', due)
+
+    # 旺旺：挪单店两单共用一个会话（要发票没写订单号），卖家发了一个文件；说明书店卖家发了一份说明书
+    app.evaluate('''([v1, v2, n1]) => chrome.storage.local.get('chatScan').then(r => { const c = r.chatScan || { at: 0, convs: {} };
+        c.convs['某某虚构挪单店'] = { at: Date.now(), orders: [v1, v2], first: '2026-09-05 10:00:00', asks: [{ time: '2026-09-06 10:00:00', text: '需要发票', nos: [] }],
+          files: [{ time: '2026-09-10 10:00:00', name: 'fp_挪单店发票.pdf', size: '80 KB', parsed: null }], images: [], email: [], cards: [] };
+        c.convs['某某虚构说明书店'] = { at: Date.now(), orders: [n1], first: '2026-09-06 10:00:00', asks: [{ time: '2026-09-07 10:00:00', text: '需要发票', nos: [] }],
+          files: [{ time: '2026-09-08 10:00:00', name: '产品说明书.pdf', size: '1 MB', parsed: null }], images: [], email: [], cards: [] };
+        c.at = Date.now(); return chrome.storage.local.set({ chatScan: c }); })''', [N17['V1'], N17['V2'], N17['N1']])
+    folder = tmp / '订单分拣-发票17'
+    folder.mkdir()
+    oss = 'https://einvoice-file.oss-cn-beijing.aliyuncs.com/mock/OSTB_'
+    files = {}
+    for k, inv, src in (('M1', '26990000000000000121', '合开发票.pdf'), ('V1', '26990000000000000128', 'fp_挪单店发票.pdf'),
+                        ('N1', '26990000000000000123', '产品说明书.pdf'), ('S1', '26990000000000000124', '少票.pdf'),
+                        ('C1', '26990000000000000125', '券前价.pdf'), ('R1', '26990000000000000127', '价保.pdf')):
+        no, d, _, shop, pay, _ = X17[k]
+        name = f'{d}_{js_num(pay)}_{shop}_{no}.pdf'
+        (folder / name).write_bytes(pdfs[inv])
+        files[no] = [{'file': name, 'path': str(folder / name), 'at': int(time.time() * 1000), 'from': 'chat', 'src': src, 'url': oss + inv + '.pdf'}]
+    app.evaluate('f => chrome.storage.local.get("dlDone").then(r => chrome.storage.local.set({ dlDone: Object.assign({}, r.dlDone, f) }))', files)
+    checked = wait_until(app, lambda: (fc := (S() or {}).get('fileChecks') or {}) and len([k for k in fc if '订单分拣-发票17' in k]) >= 6 and fc, 60) or {}
+    check(len([k for k in checked if k.startswith('p:') and '订单分拣-发票17' in k]) == 6, '6 个新下载的文件都读 PDF 核对过（核对结果按下载位置记）', list(checked)[-6:])
+    app.wait_for_timeout(800)
+    app.click('.flow li[data-step="2"]'); app.wait_for_timeout(600)
+    rows = app.evaluate('''() => Object.fromEntries([...document.querySelectorAll('.inv-table tbody tr')].map(tr => [tr.children[2].querySelector('.detail').textContent.trim(),
+        { st: tr.querySelector('.st').textContent.trim(), cls: tr.querySelector('.st').className, detail: [...tr.children[5].querySelectorAll('.detail')].map(d => d.textContent).join(' | '),
+          btns: [...tr.querySelectorAll('.acts button')].map(b => b.textContent.trim()) }]))''')
+    r = lambda k: rows.get(N17[k], {})
+    check(r('M1').get('st') == '已下载' and r('M2').get('st') == '已下载' and '合开' in r('M2').get('detail', ''),
+          '同店两单合开一张（10.00 + 15.00 = 25.00）：两单都算拿到了票', (r('M1'), r('M2')))
+    check(r('V2').get('st') == '已下载' and r('V1').get('st') == '需向卖家索要发票' and '已归入同店另一单' in r('V1').get('detail', ''),
+          '文件名那单对不上、同店另一单正好 66.00：挪过去；原来那单退回「需向卖家索要」，写明已归入同店另一单', (r('V1'), r('V2')))
+    check(r('N1').get('st') == '需向卖家索要发票' and '不是发票' in r('N1').get('detail', ''),
+          '卖家发的说明书（没有「发票」字样）：不当成发票，这单退回「需向卖家索要」', r('N1'))
+    check(r('S1').get('st') == '下载的发票核对不通过' and 'tone-bad' in r('S1').get('cls', '') and r('S1').get('btns', [])[:1] == ['联系卖家']
+          and '少' in r('S1').get('detail', ''), '票面 45.00、应报 50.00（少 1 元以上）：红色「下载的发票核对不通过」，操作「联系卖家」', r('S1'))
+    check(r('C1').get('st') == '已下载' and '略高于实付' in r('C1').get('detail', '') and N17['P2'] not in rows,
+          '按用券前价格开的票（实付 10.00、票面 10.50）：留在这单，没被挪给同店正好 10.50 的个人订单', r('C1'))
+    check(r('R1').get('st') == '已下载' and '相符' in r('R1').get('detail', ''), '部分退款的单：票面 4.90 = 实付 − 退款，核对相符', r('R1'))
+    dash = app.inner_text('#remind')
+    check('需处理' in dash, '顶上进度把核对不通过的单算进「需处理」', dash[:200])
+    jobs = app.evaluate('nos => __otDev.jobsFor(nos)', [N17['V1'], N17['N1']])
+    check(jobs == [], '挪走的、不是发票的文件：原来那单不会再把同一个文件下载一遍', jobs)
+
+    print('\n[17b] 整理报销文件：合开的一张票一行（序号 a+b），少 1 元以上写进备注；整理后这一批记为已整理')
+    app.click('.flow li[data-step="3"]'); app.wait_for_timeout(400)
+    app.set_input_files('#inv-pack-dir', str(folder))
+    app.wait_for_selector('#dlg-pack[open]', timeout=20000)
+    plan = app.input_value('#pack-list')
+    lines = [l for l in plan.split('\n') if '    ← ' in l]
+    merged = [l for l in lines if re.match(r'\d+\+\d+_\d{6}_25\.00-', l)]
+    short = [l for l in lines if '_45.00-' in l]
+    check(len(merged) == 1 and len(lines) == 5, '预览：合开的两单合成一行（序号 a+b，金额 25.00）；共 5 张票', lines)
+    check(short and '票面比应报少 5.00 元' in short[0], '票面少 1 元以上的那张：预览里写明少了多少', short)
+    app.fill('#pack-name', '测试批二'); app.click('#pack-go')
+    out = dl_dir / '订单分拣-报销'
+    folder2 = wait_until(app, lambda: next((x for x in out.iterdir() if x.is_dir() and x.name.startswith('测试批二_') and (x / '汇总.csv').is_file()), None), 30)
+    app.wait_for_timeout(1000)
+    rows_csv = list(csv.reader((folder2 / '汇总.csv').read_text(encoding='utf-8-sig').splitlines())) if folder2 else []
+    m2 = next((x for x in rows_csv if N17['M2'] in x), [])
+    s1 = next((x for x in rows_csv if N17['S1'] in x), [])
+    total = next((x for x in rows_csv if x and x[0] == '合计'), [])
+    check(m2 and m2[8] == '' and '合开' in m2[11], '汇总表：合开的第二单不再重复写发票金额，备注写明合开', m2)
+    check(s1 and '票面比应报少 5.00 元' in s1[11], '汇总表备注写明票面比应报少 5.00 元', s1)
+    check(total and abs(float(total[8]) - (25 + 66 + 45 + 10.5 + 4.9)) < 0.005, '合计 = 每张票只算一次', total)
+    st = S()
+    packed = st.get('packed') or {}
+    check(all(N17[k] in packed for k in ('M1', 'M2', 'V2', 'S1', 'C1', 'R1')) and any(x.get('invNo') == '26990000000000000121' for x in st.get('haveIdx', [])),
+          '整理完这一批记为已整理（订单和读到的发票号），下一批不会再放进来', sorted(packed)[-6:])
+    app.wait_for_timeout(500)
+    app.set_input_files('#inv-pack-dir', str(folder))
+    app.wait_for_selector('#dlg-pack[open]', timeout=20000)
+    note = app.inner_text('#pack-note')
+    check(note.startswith('找到发票 0 张') and app.is_disabled('#pack-go'), '再选同一个文件夹：这一批已整理，不再重复整理', note)
+    app.click('#pack-cancel')
 
 
 def main():

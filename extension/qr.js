@@ -23,8 +23,10 @@
     const buyerOk = !j.title || t.includes(squash(j.title));
     const taxOk = !j.taxId || t.toUpperCase().includes(String(j.taxId).toUpperCase());
     const eq = (a, b) => a != null && Math.abs(a - b) < 0.005;
-    // 金额：这一单 → 同店另一单 → 比这单实付多一点（不超过 3 成，平台常按用券前的价开）
-    const target = eq(amt, j.amount) ? j : (j.alts || []).find(a => eq(amt, a.amount)) || (amt > j.amount && amt <= j.amount * 1.3 ? j : null);
+    // 金额（j.amount 是应报金额 = 实付 − 退款，和主页核对下载的发票同一套规则）：这一单 → 比这单多一点（不超过 3 成，平台常按用券前的价开）
+    // 或少 1 元以内 → 同店另一单
+    const near = amt > j.amount ? amt <= j.amount * 1.3 : j.amount - amt <= 1 + 0.005;
+    const target = eq(amt, j.amount) || (amt > 0 && near) ? j : (j.alts || []).find(a => eq(amt, a.amount)) || null;
     const why = !btnOf() ? '页面上未找到「PDF下载」' : !buyerOk ? '购买方不是 ' + j.title : !taxOk ? '税号不是 ' + j.taxId
       : !target ? '价税合计 ¥' + amt + '，与该店铺待开票的订单均不符' : '';
     if (why) {

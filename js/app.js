@@ -62,7 +62,7 @@
   // chat：只给旺旺页「还需要卖家回复」的单（需找卖家 / 已要过 / 卖家回了还没下）——打开会话会让对方看到已读，
   // 已经开好票、平台申请中、已下载的店就别去打开了
   // 还要卖家回复的单（旺旺要看的范围）：需向卖家索要 / 已索要 / 卖家已回 / 卖家发来开票卡片 / 已索要后又找客服督促过的
-  const needsChat = st => ['ask', 'asked', 'replied', 'card'].includes(st.key) || (st.key === 'urged' && st.base === 'asked');
+  const needsChat = st => ['ask', 'asked', 'replied', 'card', 'chatfail'].includes(st.key) || (st.key === 'urged' && st.base === 'asked');
   function invWant() {
     if (!derived) return null;
     const list = invOrders();
@@ -153,25 +153,38 @@
             ? { cat: 'unsure', via: 'invoice', why: '关键词判为个人，但本单' + inv + '，需确认' }
             : { cat: 'lab', via: 'invoice', why: '本单' + inv });
         const r = manual ? { cat: manual, via: 'manual', why: '手动判断', hits: a.hits } : a;
-        // 退款由插件按每一件旁边的退款文字判断，不用用户核对：
-        //   退款成功 → 这一件退了；退款关闭 → 申请撤销了，东西留下；交易关闭 → 整单关闭。一单多件只退了几件时，只有那几件算退款。
-        // 同一件买了几个只退了其中几个（比如买 3 个退 2 个）在订单列表上看不出数量，记在 S.partial：{ key: 留下的个数 }
-        const mr = S.refunds[l.key];
-        const keep = S.partial && S.partial[l.key];
-        let ref = mr === true ? 'refunded' : mr === false ? '' : N.refundState(l, o);
-        let share = shares[i];
-        // 用户 2026-10-05 的规则：「退款成功」要看退了多少钱——退款 ≥ 实付才算退掉；少于实付是部分退款，照样要开票，金额 = 实付 − 退款
-        // （退款金额来自订单详情页，见 inspectOrders；用户手动标过的以手动为准）
-        const ra = mr === undefined && S.refundAmt ? S.refundAmt[l.key] : null;
-        if (ra != null) {
-          if (ra + 0.005 < share) { ref = ''; share = Math.round((share - ra) * 100) / 100; }
-          else ref = 'refunded';
-        } else if (keep != null && ref === 'refunded' && l.qty > 1) { ref = ''; share = Math.round(share * keep / l.qty * 100) / 100; }
-        rows.push({ o, l, share, r, ref, past, keep: keep != null && !ref && ra == null ? keep : null, refAmt: ra != null && !ref ? ra : null, refManual: mr !== undefined });
+        const d = lineDue(o, l, shares[i]);
+        rows.push({ o, l, share: d.share, share0: shares[i], r, ref: d.ref, past, keep: d.keep, refAmt: d.refAmt, refManual: S.refunds[l.key] !== undefined });
       });
     }
     derived = { rows, byKey: new Map(rows.map(x => [x.l.key, x])) };
     if (EXT && !restoring) chrome.storage.local.set({ invWant: invWant() });      // 判断一变，要报销的订单就跟着变
+  }
+
+  // 一件商品退没退、按多少报销（derive 和应报金额 dueOf 共用这一份规则）：
+  //   退款由插件按每一件旁边的退款文字判断，不用用户核对：退款成功 → 这一件退了；退款关闭 → 申请撤销了，东西留下；交易关闭 → 整单关闭。
+  //   同一件买了几个只退了其中几个（比如买 3 个退 2 个）在订单列表上看不出数量，记在 S.partial：{ key: 留下的个数 }
+  //   用户 2026-10-05 的规则：「退款成功」要看退了多少钱——退款 ≥ 实付才算退掉；少于实付是部分退款，照样要开票，金额 = 实付 − 退款
+  //   （退款金额来自订单详情页，见 inspectOrders；用户手动标过的以手动为准）
+  function lineDue(o, l, share0) {
+    const mr = S.refunds[l.key];
+    const keep = S.partial && S.partial[l.key];
+    let ref = mr === true ? 'refunded' : mr === false ? '' : N.refundState(l, o);
+    let share = share0;
+    const ra = mr === undefined && S.refundAmt ? S.refundAmt[l.key] : null;
+    if (ra != null) {
+      if (ra + 0.005 < share) { ref = ''; share = Math.round((share - ra) * 100) / 100; }
+      else ref = 'refunded';
+    } else if (keep != null && ref === 'refunded' && l.qty > 1) { ref = ''; share = Math.round(share * keep / l.qty * 100) / 100; }
+    return { ref, share, keep: keep != null && !ref && ra == null ? keep : null, refAmt: ra != null && !ref ? ra : null };
+  }
+  // 应报金额 = 本单实付 − 退款（整件退的、部分退款的退款金额、退了几个只留几个的）。要报销多少、给卖家的消息里写多少、
+  // 发票核对、已整理发票对单、整理报销的兜底金额都用这一个数
+  function dueOf(o) {
+    const shares = N.lineShares(o);
+    let off = 0;
+    o.lines.forEach((l, i) => { const d = lineDue(o, l, shares[i]); off += d.ref === 'refunded' ? shares[i] : shares[i] - d.share; });
+    return Math.round(((+o.pay || 0) - off) * 100) / 100;
   }
 
   const effCat = x => x.r.cat;                         // lab / personal / unsure
@@ -215,7 +228,7 @@
     }
     const all = g.platform.length + g.seller.length + g.you.length;
     const late = [...g.platform, ...g.seller].filter(r => r.days != null && r.days > remindDays());
-    const sum = [...g.platform, ...g.seller, ...g.you].reduce((a, r) => a + (+r.o.pay || 0), 0);
+    const sum = [...g.platform, ...g.seller, ...g.you].reduce((a, r) => a + dueOf(r.o), 0);
     return { g, all, late, sum };
   }
   function vipList() {
@@ -314,8 +327,6 @@
   // ── 顶上的进度条：分拣、发票、金额三个分数，加上发票在等谁。替代原来一大段文字提醒（用户 2026-10-05）──
   // 数字同时写进扩展存储（invPending），后台把「还差几单」显示在工具栏的插件图标上
   let lastBadge = '';
-  // 应报金额 = 本单实付 − 部分退款的退款金额
-  const dueOf = o => { const ra = S.refundAmt || {}; return Math.round(((+o.pay || 0) - o.lines.reduce((a, l) => a + (ra[l.key] || 0), 0)) * 100) / 100; };
   const pct = (a, b) => b ? Math.round(a / b * 100) : 0;
   const meter = (a, b) => '<span class="meter"><b style="width:' + pct(a, b) + '%"></b></span>';
   function renderDash() {
@@ -381,8 +392,9 @@
   }
 
   // 发票的三类：还没开 / 开好了还没下载 / 已开好并下载
+  // badinv：下载的票核对不通过（少 1 元以上、金额不符、读不出等），不算已取得；chatfail：旺旺会话没能读取（不退回「需向卖家索要」）
   const INV_GROUP = { apply: 'todo', ask: 'todo', asked: 'todo', applying: 'todo', urged: 'todo', card: 'todo', wrong: 'todo', check: 'todo',
-                      ready: 'ready', replied: 'ready', paper: 'ready', done: 'done', have: 'done' };
+                      badinv: 'todo', chatfail: 'todo', ready: 'ready', replied: 'ready', paper: 'ready', done: 'done', have: 'done' };
   function invCounts() {
     const c = { todo: 0, ready: 0, done: 0 };
     for (const x of invOrders()) { const g = INV_GROUP[invStatus(x).key]; if (g) c[g]++; }
@@ -452,7 +464,7 @@
   // 第 4 步：上次整理时已下载的发票都整理进去了，就算做完；之后又下了新发票，就又要整理
   function packState() {
     const lp = S.lastPack;
-    const got = invOrders().filter(x => invStatus(x).key === 'done').map(x => x.o.no);
+    const got = invOrders().filter(x => ['done', 'badinv'].includes(invStatus(x).key)).map(x => x.o.no);
     const left = lp ? got.filter(no => !(lp.nos || []).includes(no)).length : got.length;
     return { done: !!lp && left === 0, text: lp ? (left ? '新增 ' + left + ' 单发票' : '已整理 ' + lp.n + ' 张') : got.length ? got.length + ' 单可整理' : '暂无发票' };
   }
@@ -793,7 +805,7 @@
     const r = N.mergeExport(S.orders, incoming);
     // 按抓取数据建的单换成订单表的写法后，商品的 key 变了，手动判断和退款标记跟着挪
     for (const [a, b] of Object.entries(r.keyMap))
-      for (const box of [S.decisions, S.refunds]) if (a in box) { box[b] = box[a]; delete box[a]; }
+      for (const box of [S.decisions, S.refunds, S.refundAmt, S.partial]) if (box && a in box) { box[b] = box[a]; delete box[a]; }
     return name + '：新增 ' + r.added + ' 单，更新 ' + r.updated + ' 单' + lost;
   }
 
@@ -848,16 +860,22 @@
   }
   const platOf = o => X.invSync && X.invSync.rows && X.invSync.rows[o.no];
   // 已整理的发票和订单一对一配（I.matchHave）；订单、同步结果、已整理的发票变了才重配
+  // S.packed：插件「整理报销文件」整理过的订单 → { file: 报销文件夹里的文件, invNo }（以后不再整理、不再索要）。
+  // 它们的票和单已经一一对上，不再参加按金额的对单（不然同金额的另一单会被认成「疑似已整理」）
   let haveCache = { key: '', have: new Map(), contested: new Map() };
   function haveMatch() {
-    const key = S.orders.length + '|' + (S.haveIdx || []).length + '|' + ((X.invSync && X.invSync.at) || 0);
+    const packed = S.packed || {};
+    const key = S.orders.length + '|' + (S.haveIdx || []).length + '|' + ((X.invSync && X.invSync.at) || 0) + '|' + Object.keys(S.refundAmt || {}).length
+      + '|' + Object.keys(S.refunds || {}).length + '|' + Object.keys(packed).length;
     if (haveCache.key !== key) {
       const byNo = new Map(S.orders.map(o => [o.no, o]));
-      haveCache = Object.assign({ key }, I.matchHave(S.haveIdx, S.orders.map(o => ({ no: o.no, time: o.time, amount: o.pay })), no => platOf(byNo.get(no))));
+      const used = new Set(Object.values(packed).map(p => p.invNo).filter(Boolean));
+      haveCache = Object.assign({ key }, I.matchHave((S.haveIdx || []).filter(x => !used.has(x.invNo)),
+        S.orders.filter(o => !packed[o.no]).map(o => ({ no: o.no, time: o.time, amount: dueOf(o) })), no => platOf(byNo.get(no))));
     }
     return haveCache;
   }
-  const haveOf = o => haveMatch().have.get(o.no)
+  const haveOf = o => (S.packed && S.packed[o.no] ? { file: S.packed[o.no].file } : null) || haveMatch().have.get(o.no)
       || ((S.haveNos || []).includes(o.no) ? { file: '（导入的已报销订单号清单）' } : null);
   const settled = o => !!haveOf(o) || !!(X.dlDone[o.no] || []).length || !!(S.invFiles[o.no] || []).length;
   function invStatus(x) {
@@ -896,7 +914,7 @@
       const o = x.o;
       if (!o.nick) { noNick.add(o.shop); noNickOrders.push(o); continue; }
       const g = by.get(o.nick) || { nick: o.nick, shop: o.shop, orders: [] };
-      g.orders.push({ no: o.no, date: (o.time || '').slice(0, 10), amount: o.pay,
+      g.orders.push({ no: o.no, date: (o.time || '').slice(0, 10), amount: dueOf(o),
         lines: x.lines.map(l => ({ title: l.title, img: l.img || '', qty: l.qty || 1 })) });
       by.set(o.nick, g);
     }
@@ -939,14 +957,11 @@
   //   ok 绿 已取得 / info 紫 已开具待取得 / plat 蓝 已进入淘宝开票流程 / wait 黄 等待卖家回复 / urge 青 已由淘宝客服督促 / bad 红 需处理 / off 灰 无需开票
   //   off 只给退款的单用，invOrders 已排除退款商品，发票栏里实际不出现，所以图例里没有它
   const TONE = { have: 'ok', done: 'ok', ready: 'info', paper: 'info', replied: 'info', applying: 'plat', asked: 'wait', urged: 'urge',
-                 card: 'bad', apply: 'bad', ask: 'bad', wrong: 'bad', check: 'bad', none: 'off' };
+                 card: 'bad', apply: 'bad', ask: 'bad', wrong: 'bad', check: 'bad', badinv: 'bad', chatfail: 'bad', none: 'off' };
   const WAIT_TONES = ['plat', 'wait', 'urge'];
-  const BAD_CHECK = ['short', 'amount', 'many', 'title'];     // 下载的票读出来有问题，要你核对
+  // 下载的票读出来有问题，要用户核对：少了 1 元以上、金额对不上、分不清、抬头不符、读不出金额（扫描版的真发票也读不出，所以不直接判成「不是发票」）、没能取回核对
+  const BAD_CHECK = ['short', 'amount', 'many', 'title', 'unread', 'error'];
   function invTone(o, st) {
-    if (st.key === 'done') {
-      const got = (X.dlDone[o.no] || []).concat(S.invFiles[o.no] || []);
-      return got.some(g => BAD_CHECK.includes(((S.fileChecks || {})[g.file] || {}).kind)) ? 'bad' : 'ok';
-    }
     if (st.key === 'replied' && (st.shared || needsMsg(st))) return 'bad';     // 分不清是哪单的、卖家要邮箱的
     return TONE[st.key] || 'off';
   }
@@ -994,6 +1009,7 @@
     dl: '下载本单已开具的发票（卖家发送的文件、二维码发票、平台发票），按订单命名存入「订单分拣-发票」',
     inv: '打开本单的淘宝发票详情页：抬头与设置不符，请在该页申请换开',
     chat: '打开与该店铺的旺旺聊天，请卖家核对发票（下载的 PDF 核对不通过）',
+    open: '打开与该店铺的旺旺聊天：上次读取卖家回复时未能打开这个会话；下次「自动处理发票」会重新读取',
   };
   function rowAction(x, s, isLate) {
     const k = s.key === 'check' ? s.base : s.key, A = (act, label) => ({ act, label, tip: ACT_TIP[act] });
@@ -1005,7 +1021,8 @@
     if (k === 'apply') return A('apply', '申请开票');
     if (k === 'ready' || k === 'replied') return A('dl', '下载');
     if (k === 'wrong') return A('inv', '换开发票');
-    if (k === 'done' && invTone(x.o, s) === 'bad') return A('chat', '联系卖家');
+    if (k === 'badinv') return A('chat', '联系卖家');
+    if (k === 'chatfail') return A('open', '打开旺旺');
     return null;
   }
   // 逐单操作：设好这一单的活、打开对应的淘宝页面就返回（不占住主页）；结果由各页面写回，主页照常刷新状态
@@ -1017,13 +1034,13 @@
     const o = x.o, who = o.shop + '（' + (o.time || '').slice(0, 10) + '，' + yuan(+o.pay) + '）';
     alog('start', 'row-' + act, who + ' ' + no);
     if (act === 'inv') return openUrl(invDetailUrl(no));
-    if (act === 'chat') return openChat(no);
+    if (act === 'chat' || act === 'open') return openChat(no);
     if (act === 'ask' || act === 'nudge') {
       if (!o.nick) await inspectOrders([o]);                 // 顺便核对是不是已经整单退款
       if (!invOrders().some(g => g.o.no === no)) return;      // 整单退款了：inspectOrders 已提示
       if (!o.nick) { toast('未读取到卖家旺旺名，已打开订单详情页，请在该页点击旺旺图标联系卖家'); openDetail(no); return; }
       const g = act === 'ask' ? askList().items.find(it => it.nos.includes(no)) : null;
-      const item = g || { nick: o.nick, shop: o.shop, nos: [no], orders: [{ no, date: (o.time || '').slice(0, 10), amount: o.pay,
+      const item = g || { nick: o.nick, shop: o.shop, nos: [no], orders: [{ no, date: (o.time || '').slice(0, 10), amount: dueOf(o),
         lines: x.lines.map(l => ({ title: l.title, img: l.img || '', qty: l.qty || 1 })) }] };
       if (!g) item.msg = I.renderMsg(act === 'nudge' ? I.FOLLOW_TEMPLATE : (S.invoice.template || I.DEFAULT_TEMPLATE),
         { orders: item.orders, title: S.invoice.title, taxId: S.invoice.taxId, email: S.invoice.email });
@@ -1147,7 +1164,7 @@
       const doc = await task.promise;
       for (let p = 1; p <= Math.min(doc.numPages, 3); p++) t += (await (await doc.getPage(p)).getTextContent()).items.map(x => x.str).join(' ') + '\n';
     } finally { task.destroy(); }                        // PDF.js 6：关文档要关「加载任务」，文档对象上已经没有 destroy 了
-    return Object.assign(I.parseInvoiceText(t, S.invoice.title), { file: file.webkitRelativePath || file.name });
+    return Object.assign(I.parseInvoiceText(t, S.invoice.title), { file: file.webkitRelativePath || file.name, noInv: I.notInvoiceText(t) });
   }
   async function readPdfFolder(files, what) {
     const pdfs = [...files].filter(f => /\.pdf$/i.test(f.name));
@@ -1168,24 +1185,31 @@
     persist(); derive(); render();
     toast('已读取 ' + total + ' 个 PDF：识别发票 ' + got.length + ' 张（' + notInv.length + ' 个非发票文件，如扫描件或说明文档），已整理的发票共 ' + S.haveIdx.length + ' 张');
   }
-  // 能确定的改过来：归错单的挪到对的那单名下；比下单还早的票从这单拿掉（这单又会出现在「还没开发票」里）
+  // 能确定的改过来：归错单的挪到对的那单名下；比下单还早的、已报销过的、不是发票的从这单拿掉（这单又会出现在「还没开发票」里）；
+  // 同店几单合开一张的，同一条下载记录也挂到其余几单下面（整理报销文件时按发票号合成一行）
   async function applyFileCheck(res) {
-    const fix = res.filter(r => r.kind === 'move' || r.kind === 'old' || r.kind === 'dup');
+    const fix = res.filter(r => ['move', 'old', 'dup', 'notinv', 'merged'].includes(r.kind));
     if (!fix.length) return 0;
     const baseName = p => String(p || '').split(/[\\/]/).pop();
     const dl = EXT ? Object.assign({}, (await chrome.storage.local.get('dlDone')).dlDone) : {};
     let n = 0;
     for (const r of fix) {
       const name = baseName(r.file);
+      // 合开：文件名那单也在合开的几单里，就只把记录挂到其余几单；不在（票是同店另外几单的），就整个挪过去
+      const merged = r.kind === 'merged', keepHere = merged && (r.nos || []).includes(r.no);
+      const to = merged ? (r.nos || []).filter(no => no !== r.no) : r.kind === 'move' ? [r.to] : [];
       for (const store of [dl, S.invFiles]) {
         const list = store[r.no] || [];
-        const i = list.findIndex(g => baseName(g.path) === name || g.file === name);
+        const i = list.findIndex(g => (r.path ? g.path === r.path : baseName(g.path) === name || g.file === name));
         if (i < 0) continue;
-        const [g] = list.splice(i, 1);
+        const g = keepHere ? list[i] : list.splice(i, 1)[0];
         if (!list.length) delete store[r.no];
-        // 不是这单的（比下单还早、和报销过的重复）：记下卖家发来时的原文件名，以后不再当成这单的票去下载
-        if (r.kind !== 'move' && g.src) (S.rejectedSrc = S.rejectedSrc || {})[g.src] = { kind: r.kind, no: r.no, at: Date.now() };
-        if (r.kind === 'move') (store[r.to] = store[r.to] || []).push(Object.assign({}, g, { movedFrom: r.no }));
+        // 不是这单的：记下卖家发来时的原文件名，以后不再当成这单的票去下载（同店几单共用一个会话，挪走后原订单不能再下一遍）
+        if (!keepHere && g.src) (S.rejectedSrc = S.rejectedSrc || {})[g.src] = { kind: merged ? 'move' : r.kind, no: r.no, to: to.join(','), at: Date.now() };
+        for (const t of to) {
+          const l2 = store[t] = store[t] || [];
+          if (!l2.some(x => x.path === g.path && x.file === g.file)) l2.push(Object.assign({}, g, merged ? { mergedWith: r.no } : { movedFrom: r.no }));
+        }
         n++;
       }
     }
@@ -1201,13 +1225,14 @@
   const baseOf = p => String(p || '').split(/[\\/]/).pop();
   function nextSeq() {
     let max = 0;
-    for (const x of S.haveIdx || []) { const m = /(?:^|\/)(\d{1,4})(?:\+\d{1,4})*_\d{6}_/.exec(x.file || ''); if (m) max = Math.max(max, +m[1]); }
+    const files = (S.haveIdx || []).map(x => x.file).concat(Object.values(S.packed || {}).map(p => p.file));
+    for (const f of files) { const m = /(?:^|\/)(\d{1,4})((?:\+\d{1,4})*)_\d{6}_/.exec(f || ''); if (m) max = Math.max(max, +m[1], ...(m[2].match(/\d+/g) || []).map(Number)); }
     return max + 1;
   }
   const yymmdd = d => String(d || '').replace(/-/g, '').slice(2, 8);
   const shortTitle = t => String(t || '').replace(/【[^】]*】|\[[^\]]*\]|（[^）]*）|\([^)]*\)/g, '').replace(/[\\/:*?"<>|\s]+/g, '').slice(0, 14) || '商品';
   let packFiles = null;
-  // 每张发票一行：同一张票（同一个文件）对着几单的，序号写成「261+262」
+  // 每张发票一行：同一张票（同一个发票号，或同一个文件）对着几单的（卖家合开），序号写成「261+262」
   function packPlan(seq0) {
     const byName = new Map(packFiles.map(f => [f.name, f]));
     const groups = new Map(), miss = [];
@@ -1218,8 +1243,9 @@
       const g = got.find(g => byName.has(baseOf(g.path)) || byName.has(g.file));
       if (!g) { miss.push({ x, st }); continue; }
       const f = byName.get(baseOf(g.path)) || byName.get(g.file);
-      const k = f.name;
-      if (!groups.has(k)) groups.set(k, { f, xs: [], chk: packRead.get(f.name) || (S.fileChecks || {})[g.file] || null });
+      const chk = packRead.get(f.name) || fcOf(g) || null;
+      const k = (chk && chk.invNo) || f.name;
+      if (!groups.has(k)) groups.set(k, { f, xs: [], chk });
       groups.get(k).xs.push(x);
     }
     const rows = [...groups.values()].sort((a, b) => (a.xs[0].o.time || '').localeCompare(b.xs[0].o.time || ''));
@@ -1228,13 +1254,16 @@
       r.xs.sort((a, b) => (a.o.time || '').localeCompare(b.o.time || ''));
       const nos = r.xs.map(() => seq++);
       const good = r.chk && r.chk.amount != null && !['error', 'unread', 'old', 'dup', 'title'].includes(r.chk.kind);
-      r.amount = good ? +r.chk.amount : r.xs.reduce((a, x) => a + (+x.o.pay || 0), 0);
+      const due = Math.round(r.xs.reduce((a, x) => a + dueOf(x.o), 0) * 100) / 100;
+      r.amount = good ? +r.chk.amount : due;
       r.date = (good && r.chk.date) || (r.xs[0].o.time || '').slice(0, 10);
       const qty = r.xs.reduce((a, x) => a + x.lines.reduce((b, l) => b + (l.qty || 1), 0), 0);
       const ext = ((/\.(pdf|ofd|xml)$/i.exec(r.f.name) || [, 'pdf'])[1]).toLowerCase();
       r.seq = nos.join('+');
       const same = r.chk && r.chk.invNo && (S.haveIdx || []).find(h => h.invNo === r.chk.invNo);
-      r.warn = same ? '与已整理的 ' + same.file + ' 为同一张发票' : (r.chk && r.chk.titleOk === false ? '抬头不是 ' + S.invoice.title : '');
+      // 票面比应报金额少超过 1 元：预览和汇总表备注里写明少了多少（用户 2026-10-05：少 1 元以内没关系）
+      const short = good && r.amount + 1.005 < due ? '票面比应报少 ' + (due - r.amount).toFixed(2) + ' 元' : '';
+      r.warn = [same ? '与已整理的 ' + same.file + ' 为同一张发票' : '', r.chk && r.chk.titleOk === false ? '抬头不是 ' + S.invoice.title : '', short].filter(Boolean).join('；');
       r.name = r.seq + '_' + yymmdd(r.date) + '_' + r.amount.toFixed(2) + '-' + shortTitle(r.xs[0].lines[0].title) + '-' + qty + '件.' + ext;
     }
     return { rows, miss, total: rows.reduce((a, r) => a + r.amount, 0) };
@@ -1278,8 +1307,10 @@
     const dir = batch + '_' + td + '_' + p.total.toFixed(2);
     const cell = v => { const s = String(v == null ? '' : v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
     const lines = [['序号', '报销文件名', '原文件名', '下单日期', '店铺', '商品', '数量', '实付', '发票金额', '开票日期', '订单号', '备注', '类别'].join(',')];
-    for (const r of p.rows) for (const x of r.xs)
-      lines.push([r.seq, r.name, r.f.name, (x.o.time || '').slice(0, 10), x.o.shop, x.lines.map(l => l.title).join('；'), x.lines.reduce((a, l) => a + (l.qty || 1), 0), x.o.pay, r.amount.toFixed(2), r.date, x.o.no, r.warn || '', r.amount > 200 ? '低值品（超过200元）' : ''].map(cell).join(','));
+    // 合开的一张票对着几单：发票金额只写在第一行，其余行注明合开，合计不重复算
+    for (const r of p.rows) r.xs.forEach((x, i) =>
+      lines.push([r.seq, r.name, r.f.name, (x.o.time || '').slice(0, 10), x.o.shop, x.lines.map(l => l.title).join('；'), x.lines.reduce((a, l) => a + (l.qty || 1), 0), x.o.pay,
+        i ? '' : r.amount.toFixed(2), r.date, x.o.no, [i ? '与上一行合开一张发票' : '', r.warn || ''].filter(Boolean).join('；'), r.amount > 200 ? '低值品（超过200元）' : ''].map(cell).join(',')));
     lines.push(['合计', '', '', '', '', '', '', '', p.total.toFixed(2)].map(cell).join(','));
     if (p.miss.length) {
       lines.push('', '尚无发票的实验室订单');
@@ -1297,7 +1328,14 @@
     for (const e of entries) { await saveBlob(new Blob([e.data], { type: mime(e.name) }), '订单分拣-报销/' + e.name); await sleepMs(300); }
     await saveBlob(new Blob([Z.makeZip(entries)], { type: 'application/zip' }), '订单分拣-报销/' + dir + '.zip');
     S.lastPack = { at: Date.now(), dir, n: p.rows.length, nos: p.rows.flatMap(r => r.xs.map(x => x.o.no)) };
-    persist(); render();
+    // 这一批记为「已整理」：订单记进 S.packed（以后不再整理、不再索要），读到发票号的票记进已整理的发票（序号接着编、识别重复报销）
+    S.packed = S.packed || {}; S.haveIdx = S.haveIdx || [];
+    for (const r of p.rows) {
+      const file = dir + '/' + (r.amount > 200 ? '低值品（单张超过200元）/' : '') + r.name, invNo = (r.chk && r.chk.invNo) || '';
+      for (const x of r.xs) S.packed[x.o.no] = { file, invNo, at: Date.now() };
+      if (invNo && !S.haveIdx.some(h => h.invNo === invNo)) S.haveIdx.push({ invNo, date: r.date, amount: r.amount, file });
+    }
+    persist(); derive(); render();
     $('dlg-pack').close();
     toast('整理完成：下载文件夹「订单分拣-报销/' + dir + '」中已生成 ' + p.rows.length + ' 张发票及汇总表，并附同名压缩包', true);
   }
@@ -1325,8 +1363,9 @@
       // 分不清是哪单的（同店几单共用一个会话）也下：下完主页读 PDF 上的金额、开票日期，归错的自动挪到对的那单（用户 2026-10-04）
       c.files.forEach((f, i) => {
         const k = c.name + '|' + f.name + '|' + f.time;
-        if (seen.has(k) || (S.rejectedSrc || {})[f.name]) return; seen.add(k);
-        jobs.push(Object.assign({ id: 'c' + no + '_' + i, kind: 'chat', conv: c.name, file: f.name, time: f.time },
+        if (seen.has(k) || rejectedFor(f.name, no)) return; seen.add(k);
+        // nick：会话不在旺旺左侧列表里时，按卖家旺旺名打开（会话名可能是店名，不能拿来拼地址）
+        jobs.push(Object.assign({ id: 'c' + no + '_' + i, kind: 'chat', conv: c.name, nick: o.nick || c.nick || '', file: f.name, time: f.time },
           base, { saveAs: c.files.length > 1 ? base.saveAs.replace(/\.pdf$/, '_' + (i + 1) + '.pdf') : base.saveAs }));
       });
       // 卖家发的二维码：是税务局电子发票地址（dppt.<省>.chinatax.gov.cn…2_<20 位发票号>_…）就打开它下载 PDF
@@ -1336,8 +1375,8 @@
         if (!m || seen.has('q' + m[1])) continue;
         seen.add('q' + m[1]);
         const alts = invOrders().filter(y => y.o.shop === o.shop && y.o.no !== no && !settled(y.o))
-          .map(y => ({ no: y.o.no, amount: y.o.pay, saveAs: I.saveName({ time: y.o.time, amount: y.o.pay, shop: y.o.shop, no: y.o.no }) }));
-        jobs.push(Object.assign({ id: 'q' + m[1], kind: 'qr', url, invNo: m[1], amount: o.pay, title: S.invoice.title, taxId: S.invoice.taxId, alts }, base));
+          .map(y => ({ no: y.o.no, amount: dueOf(y.o), saveAs: I.saveName({ time: y.o.time, amount: y.o.pay, shop: y.o.shop, no: y.o.no }) }));
+        jobs.push(Object.assign({ id: 'q' + m[1], kind: 'qr', url, invNo: m[1], amount: dueOf(o), title: S.invoice.title, taxId: S.invoice.taxId, alts }, base));
       }
     }
     const { dlJobs } = await chrome.storage.local.get('dlJobs'), now = Date.now();
@@ -1369,43 +1408,55 @@
     try {
       const done = S.fileChecks || (S.fileChecks = {});
       const todo = [];
-      for (const list of Object.values(X.dlDone || {})) for (const g of list) if (g.url && !done[g.file]) todo.push(g);
+      for (const [no, list] of Object.entries(X.dlDone || {})) for (const g of list) if (g.url && !fcOf(g)) todo.push({ g, no });
       if (!todo.length) return;
-      // 应报金额 = 实付 − 部分退款的退款金额
-      const ra = S.refundAmt || {};
-      const orders = S.orders.map(o => ({ no: o.no, shop: o.shop, time: o.time, amount: Math.round((o.pay - o.lines.reduce((a, l) => a + (ra[l.key] || 0), 0)) * 100) / 100 }));
+      // 候选订单：要报销的实验室订单（应报金额 = 实付 − 退款），加上文件现在挂着的那一单。个人的、已报销的、关闭的单不参加，
+      // 不然按用券前价格开的票会被挪给同店正好同价的个人订单
+      const pick = new Map(invOrders().map(x => [x.o.no, x.o]));
+      for (const t of todo) { const o = S.orders.find(y => y.no === t.no); if (o) pick.set(o.no, o); }
+      const orders = [...pick.values()].map(o => ({ no: o.no, shop: o.shop, time: o.time, amount: dueOf(o) }));
       const have = new Map((S.haveIdx || []).map(x => [x.invNo, x]));
       const res = [];
-      for (const g of todo) {
+      for (const { g, no } of todo) {
+        const key = fcKey(g);
         try {
           const r = await readInvoicePdf(new File([await (await fetch(g.url)).blob()], g.file));
-          if (!r.isInvoice || r.amount == null) { done[g.file] = { kind: 'unread' }; continue; }
+          // 读得出字、却没有「发票」字样的（说明书、报价单）：不是发票，从这单拿掉，这单退回「需向卖家索要」
+          if (r.noInv) { done[key] = { kind: 'notinv' }; res.push({ file: g.file, path: g.path, no, kind: 'notinv' }); continue; }
+          if (!r.isInvoice || r.amount == null) { done[key] = { kind: 'unread' }; continue; }
           const [c0] = I.checkFiles([Object.assign(r, { file: g.file })], orders);
           // 发票号和已整理（已报销）的一样：是那一单的票，不是这单的（2026-10-04 实测：一张票被「多一点」规则算到同店另一单，其实是以前已报销过的票）
-          const c = have.has(r.invNo) ? Object.assign({}, c0, { kind: 'dup' }) : c0;
-          done[g.file] = { kind: c.kind, amount: c.amount, date: c.date, invNo: c.invNo, to: c.to || '', nos: c.nos || [], short: c.short || 0, dup: have.has(r.invNo) ? have.get(r.invNo).file : '' };
+          const c = Object.assign({}, c0, { path: g.path, no: c0.no || no }, have.has(r.invNo) ? { kind: 'dup' } : {});
+          done[key] = { kind: c.kind, amount: c.amount, date: c.date, invNo: c.invNo, to: c.to || '', nos: c.nos || [], short: c.short || 0, dup: have.has(r.invNo) ? have.get(r.invNo).file : '' };
           res.push(c);
-        } catch (e) { done[g.file] = { kind: 'error', err: String(e.message || e) }; }    // 下载链接过期等：到「核对下载的发票」里手动核
+        } catch (e) { done[key] = { kind: 'error', err: String(e.message || e) }; }    // 下载链接过期等：标红，请用户打开文件核对
       }
       persist();
       await applyFileCheck(res);
       const n = k => res.filter(c => k.includes(c.kind)).length;
-      const good = n(['ok', 'more', 'merged', 'less']), moved = n(['move']), gone = n(['old', 'dup']), bad = res.length - good - moved - gone;
+      const good = n(['ok', 'more', 'merged', 'less']), moved = n(['move']), gone = n(['old', 'dup', 'notinv']), bad = todo.length - good - moved - gone;
       toast('已核对 ' + todo.length + ' 张新下载的发票（按金额和开票日期）：相符 ' + good + ' 张'
-        + (moved ? '，' + moved + ' 张归属有误、已移至正确订单' : '') + (gone ? '，' + gone + ' 张不属于本单（以往或已报销的发票），已移除' : '')
-        + (bad > 0 ? '，' + bad + ' 张需核对（发票栏中已标出）' : ''), true);
+        + (moved ? '，' + moved + ' 张归属有误、已移至正确订单' : '') + (gone ? '，' + gone + ' 张不属于本单（以往、已报销的发票或不是发票），已移除' : '')
+        + (bad > 0 ? '，' + bad + ' 张需核对（发票栏中已标红）' : ''), true);
       render();
     } finally { verifying = false; if (verifyAgain) verifyDownloads(); }
   }
   const CHECK_NOTE = { ok: '✓ PDF 金额、日期相符', more: '✓ 票面略高于实付（按用券前价格开具）', merged: '✓ 同店多单合开', less: '✓ 票面低于实付不足 1 元',
     short: '⚠ 票面低于应报金额 1 元以上，请联系卖家核对',
     move: '已移至正确订单', old: '⚠ 开票日期早于下单日期：属于以往其他订单', dup: '⚠ 与已整理（已报销）的发票为同一张，不属于本单', amount: '⚠ PDF 金额不符', many: '⚠ 同店多单均可匹配，请核对',
-    title: '⚠ 抬头不符', unread: '⚠ 无法读取 PDF 金额', error: '（未能取回 PDF 核对）' };
+    title: '⚠ 抬头不符', unread: '⚠ 无法读取 PDF 金额，请打开文件核对', error: '⚠ 未能取回 PDF 核对，请打开文件核对' };
+  // 核对结果按下载的实际位置记（同一个建议文件名可能先后下过两次：挪走后原订单又下了一次），旧版本按文件名记的照样认
+  const fcKey = g => g.path ? 'p:' + g.path : g.file;
+  const fcOf = g => { const fc = S.fileChecks || {}; return fc[fcKey(g)] || fc[g.file] || null; };
+  // 卖家发来的文件经核对不是这单的（挪到同店另一单、以往的票、已报销的票、不是发票）：记在 S.rejectedSrc（按卖家发来时的文件名），
+  // 以后不再当成这单的票去下载；挪走的只对挪去的那单（to，合开时几单用「,」隔开）照常算
+  const rejectedFor = (name, no) => { const r = (S.rejectedSrc || {})[name]; return !!r && !(r.kind === 'move' && String(r.to || '').split(',').includes(no)); };
+  const REJ_WHY = { dup: '已报销的发票', notinv: '不是发票', move: '已归入同店另一单' };
   function rejectedOnly(o, st) {
     if (st.key !== 'replied') return st;
     const c = chatOf(o), rej = S.rejectedSrc || {};
-    if (!c || !c.files.length || (c.images || []).length || (c.email || []).length || !c.files.every(f => rej[f.name])) return st;
-    return { key: 'ask', label: I.LABEL.ask, detail: '卖家发送的 ' + c.files.length + ' 个文件经核对均不属于本单（' + c.files.map(f => rej[f.name].kind === 'dup' ? '已报销的发票' : '以往的发票').join('、') + '）' };
+    if (!c || !c.files.length || (c.images || []).length || (c.email || []).length || !c.files.every(f => rejectedFor(f.name, o.no))) return st;
+    return { key: 'ask', label: I.LABEL.ask, detail: '卖家发送的 ' + c.files.length + ' 个文件经核对均不属于本单（' + c.files.map(f => REJ_WHY[rej[f.name].kind] || '以往的发票').join('、') + '）' };
   }
   // 找淘宝客服督促过（vipSent）、还在等的单（已进入淘宝开票流程 / 已向卖家索要）：单独一个状态「已由淘宝客服督促」（用户 2026-10-05）。
   // base 记着原来在等谁，提醒和「请淘宝客服督促」按原来的等待时间算；别的还没到手的状态只在说明里注明督促过
@@ -1423,12 +1474,14 @@
     }
     return Object.assign({}, st, { detail: (st.detail ? st.detail + ' · ' : '') + note });
   }
+  // 下载的票的核对结果写进说明；有一张核对不通过的，这单改成红色的「下载的发票核对不通过」（不算已取得，计入要用户动手的）
   function withCheck(o, st) {
     if (st.key !== 'done') return st;
     const got = (X.dlDone[o.no] || []).concat(S.invFiles[o.no] || []);
-    const notes = got.map(g => (S.fileChecks || {})[g.file]).filter(Boolean)
-      .map(c => (CHECK_NOTE[c.kind] || '') + (c.kind === 'short' ? '（少 ' + yuan(+c.short) + '）' : '') + (c.amount != null && c.kind !== 'error' ? '（' + yuan(+c.amount) + '，' + (c.date || '日期未读取') + '）' : '') + (c.dup ? '；与已整理的 ' + c.dup + ' 为同一张' : ''));
-    return notes.length ? Object.assign({}, st, { detail: st.detail + ' · ' + notes.join('；'), checks: notes.join('；') }) : st;
+    const cs = got.map(fcOf).filter(Boolean);
+    const notes = cs.map(c => (CHECK_NOTE[c.kind] || '') + (c.kind === 'short' ? '（少 ' + yuan(+c.short) + '）' : '') + (c.amount != null && c.kind !== 'error' ? '（' + yuan(+c.amount) + '，' + (c.date || '日期未读取') + '）' : '') + (c.dup ? '；与已整理的 ' + c.dup + ' 为同一张' : ''));
+    const s2 = notes.length ? Object.assign({}, st, { detail: st.detail + ' · ' + notes.join('；'), checks: notes.join('；') }) : st;
+    return cs.some(c => BAD_CHECK.includes(c.kind)) ? Object.assign({}, s2, { key: 'badinv', label: '下载的发票核对不通过' }) : s2;
   }
 
   // 打开每一单的订单详情页（extension/detail.js）：读旺旺图标上的卖家旺旺名，并看商品是不是已经退款成功了。
@@ -1449,8 +1502,10 @@
         if (d.nick) o.nick = d.nick;
         // 整单退款：每件都退了，或者各件退款加起来 ≥ 本单实付（退货退款时详情页上的件数、单价可能和订单表对不上，
         // 之前件数不一样就什么都不记，整单退了的单还被当成要开票，2026-10-05 排查一单退货退款后仍被督促的问题时补上）
+        // 整单退款只看退款合计 ≥ 实付；只有页面写了「退款成功」却没写金额（按整件算）的，才按每件都退完算整单退款。
+        // 写了金额的部分退款（价保、赔偿，比如单价 9.90 退 5.00）照样开票，金额 = 实付 − 退款
         const refundSum = (d.lines || []).reduce((a, x) => a + (x.refund || 0), 0);
-        if (d.refunded || (o.pay > 0 && refundSum + 0.005 >= o.pay)) {
+        if ((o.pay > 0 && refundSum + 0.005 >= o.pay) || (d.refunded && (d.lines || []).every(x => !x.stated))) {
           o.lines.forEach(l => { S.refunds[l.key] = true; l.refund = l.refund || '退款成功'; });
           refunded++;
         } else if (d.lines && d.lines.length === o.lines.length) {
@@ -1737,7 +1792,7 @@
       const head = J.results.find(r => r.key === 'download');
       J.note = '发票处理完成（' + whenShort(Date.now()) + '）'
         + (head && /^下载 [1-9]/.test(head.text) ? '：' + head.text.split('，')[0] : '') + '。'
-        + (bad.length ? '仍需处理 ' + bad.length + ' 单：' + bad.slice(0, 5).map(x => { const s = invStatus(x); return x.o.shop + '（' + (s.key === 'done' ? '下载的发票核对不通过' : s.label) + '）'; }).join('、') + (bad.length > 5 ? ' 等' : '') + '，见发票表中标红的行。' : '')
+        + (bad.length ? '仍需处理 ' + bad.length + ' 单：' + bad.slice(0, 5).map(x => x.o.shop + '（' + invStatus(x).label + '）').join('、') + (bad.length > 5 ? ' 等' : '') + '，见发票表中标红的行。' : '')
         + '\n' + J.results.map((r, i) => (NUMS[i] || (i + 1) + '.') + ' ' + r.name + '：' + r.text).join('\n');
       J.bad = J.results.some(r => r.bad);
       render();
@@ -1753,6 +1808,11 @@
     lists: () => ({ ask: askList().items.length + askList().noNick.length, card: cardList().length, vip: vipList().length, apply: applyList().length }),
     ask: async auto => doAsk((await prepareAsk()).items, auto), card: () => runCards(cardList()), vip: () => doVip(vipList()), apply: () => doApply(applyList()),
     row: (act, no) => rowAct(act, no),
+    inspect: nos => inspectOrders(nos.map(no => S.orders.find(o => o.no === no)).filter(Boolean)),
+    due: no => { const o = S.orders.find(x => x.no === no); return o ? dueOf(o) : null; },
+    // 这几单现在会排哪些下载（只看不排：排完把下载清单放回原样）
+    jobsFor: async nos => { const { dlJobs } = await chrome.storage.local.get('dlJobs'); const r = await queueDownloads(nos);
+      await chrome.storage.local.set({ dlJobs: dlJobs || [] }); return r.add.map(j => j.no + ' ' + (j.file || j.kind)); },
   };
   // 手动挂 PDF（比如卖家发到邮箱的）：用扩展的下载功能复制一份进「订单分拣-发票」，按订单改好名
   async function attachFile(no, file) {

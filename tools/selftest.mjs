@@ -135,6 +135,12 @@ assert.equal(I.status({ refunded: true }, want).key, 'none');
 assert.equal(I.status({ plat: { tab: 'issued', title: '企业-某大学', type: '普通发票-电子' } }, want).key, 'ready');
 assert.equal(I.status({ plat: { tab: 'issued', title: '个人' } }, want).key, 'wrong');
 assert.equal(I.status({ plat: { tab: 'issued', title: '企业-某大学', type: '普通发票-纸质', canDownload: false } }, want).key, 'paper');
+// 「下载到本地」按钮改名没认出来时，类型写着「电子」的不判成纸质（不然显示「随快递寄送」，等一个不会到的快递）
+assert.equal(I.status({ plat: { tab: 'issued', title: '企业-某大学', type: '电子普通发票', canDownload: false } }, want).key, 'ready');
+// 不是发票的 PDF：读得出不少字却没有「发票」字样；读不出字的（扫描版）不算
+assert.equal(I.notInvoiceText('虚构 产品说明书 型号 X1 额定电压 5V 额定电流 1A 使用前请仔细阅读本说明 保修一年'), true);
+assert.equal(I.notInvoiceText('电子发票（普通发票） 发票号码 26990000001234567890 开票日期 2026年08月01日 价税合计 ¥9.90'), false);
+assert.equal(I.notInvoiceText(''), false);
 assert.equal(I.status({ plat: { tab: 'issued', title: '企业-某大学' }, got: [{ file: 'a.pdf' }] }, want).key, 'done');
 // 「申请中」「开票中」合并成一种状态，进度原文、商家剩余处理时间放在说明里
 assert.equal(I.status({ plat: { tab: 'applying', progress: '开票中' } }, want).label, '已申请淘宝开票，等待商家开具');
@@ -252,6 +258,13 @@ assert.equal(I.parseInvoiceText('电子发票 发票号码： 开票日期： 1 
     { file: 'random.pdf', amount: 20, date: '2026-07-02' },
   ], orders);
   assert.deepEqual(r.map(x => x.kind), ['ok', 'ok', 'move', 'many', 'merged', 'old', 'amount', 'more', 'less', 'short', 'title', 'none']);
+  // 按用券前价格开的票（实付 10.00、票面 10.50），同店正好有一单实付 10.50：先认文件名那一单（多一点），不挪走
+  const coupon = [{ no: '100000000000000201', shop: '丙店', time: '2026-07-01 10:00:00', amount: 10 }, { no: '100000000000000202', shop: '丙店', time: '2026-07-02 10:00:00', amount: 10.5 }];
+  assert.equal(I.checkFiles([f('100000000000000201', 10.5, '2026-07-03')], coupon)[0].kind, 'more');
+  // 少 1 元以内也先认它；同店另一单正好等于票面也不挪
+  assert.equal(I.checkFiles([f('100000000000000202', 10, '2026-07-03')], coupon)[0].kind, 'less');
+  // 明显不符（多出 3 成以上）才去同店找：正好是另一单的金额 → 挪过去
+  assert.equal(I.checkFiles([f('100000000000000201', 30, '2026-07-03')], coupon.concat({ no: '100000000000000203', shop: '丙店', time: '2026-07-02', amount: 30 }))[0].to, '100000000000000203');
   assert.equal(r[2].to, '100000000000000102');
   assert.deepEqual(r[3].nos, ['100000000000000102', '100000000000000105']);
   assert.deepEqual(r[4].nos, ['100000000000000102', '100000000000000103']);
@@ -259,15 +272,21 @@ assert.equal(I.parseInvoiceText('电子发票 发票号码： 开票日期： 1 
 // 订单详情页判断退款（照真实页面文字的排列，内容虚构）
 {
   const one = '虚构热缩管 套装 黑色 内径10mm[不带胶] 退货宝 7天无理由退货 加入购物车售后成功 退款成功 平台支持退款 ￥9.90 ￥10.00 x1 付款详情 商品总价 ￥10.00 运费 ￥0.00 实付款 ￥9.90';
-  assert.deepEqual(I.detailRefund(one), { items: 1, refundedItems: 1, refunded: true, lines: [{ unit: 9.9, qty: 1, refundedQty: 1, refund: 9.9 }] });
+  assert.deepEqual(I.detailRefund(one), { items: 1, refundedItems: 1, refunded: true, lines: [{ unit: 9.9, qty: 1, refundedQty: 1, refund: 9.9, stated: false }] });
   const two = '商品A 退款成功 ￥10.00 x1 商品B 申请售后 ￥5.00 ￥6.00 x2 实付款 ￥20.00';
-  assert.deepEqual(I.detailRefund(two), { items: 2, refundedItems: 1, refunded: false, lines: [{ unit: 10, qty: 1, refundedQty: 1, refund: 10 }, { unit: 5, qty: 2, refundedQty: 0, refund: 0 }] });
+  assert.deepEqual(I.detailRefund(two), { items: 2, refundedItems: 1, refunded: false, lines: [{ unit: 10, qty: 1, refundedQty: 1, refund: 10, stated: false }, { unit: 5, qty: 2, refundedQty: 0, refund: 0, stated: false }] });
   // 部分退款（照真实页面文字的排列，内容虚构：买 3 个退 2 个）
   const km = '虚构舵机 黑色 退货宝 极速退款 7天无理由退货 加入购物车申请售后 退款成功 支付宝¥20.00 ￥10.00 ￥10.50 x3 付款详情 商品总价 ￥31.50';
-  assert.deepEqual(I.detailRefund(km), { items: 1, refundedItems: 1, refunded: false, lines: [{ unit: 10, qty: 3, refundedQty: 2, refund: 20 }] });
+  assert.deepEqual(I.detailRefund(km), { items: 1, refundedItems: 1, refunded: false, lines: [{ unit: 10, qty: 3, refundedQty: 2, refund: 20, stated: true }] });
   assert.equal(I.detailRefund('交易成功 ￥22.00 x1').refunded, false);
   // 部分退款（虚构）：实付 20、退了 2 元（价保之类）→ 不算退掉，退款金额 2
-  assert.deepEqual(I.detailRefund('某商品 申请售后 退款成功 支付宝¥2.00 ￥20.00 ￥22.00 x1 付款详情').lines, [{ unit: 20, qty: 1, refundedQty: 0, refund: 2 }]);
+  assert.deepEqual(I.detailRefund('某商品 申请售后 退款成功 支付宝¥2.00 ￥20.00 ￥22.00 x1 付款详情').lines, [{ unit: 20, qty: 1, refundedQty: 0, refund: 2, stated: true }]);
+  // 退了单价一半以上（价保、赔偿：单价 9.90 退 5.00）：不能四舍五入成整件退，整单照样开票（以前被当成整单退款，悄悄漏报）
+  const half = I.detailRefund('虚构 镊子 退款成功 支付宝¥5.00 ￥9.90 ￥12.00 x1 付款详情');
+  assert.equal(half.refunded, false);
+  assert.deepEqual(half.lines, [{ unit: 9.9, qty: 1, refundedQty: 0, refund: 5, stated: true }]);
+  // 写了金额、而且退够了整件：算退完
+  assert.equal(I.detailRefund('虚构 镊子 退款成功 支付宝¥9.90 ￥9.90 x1').refunded, true);
 }
 // zip：CRC32 对得上标准值；打出来的包结构对（文件数、中文名用 UTF-8 标志）
 {

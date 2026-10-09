@@ -170,8 +170,9 @@
     if (p && p.tab === 'issued') {
       const bad = want && want.title && p.title && !p.title.includes(want.title);
       if (bad) return { key: 'wrong', label: '已开票，抬头不符', detail: p.title + ' / ' + (p.type || '') };
-      // 纸质发票页面上没有「下载到本地」，排进下载只会翻遍「已开具」也找不到；实物在卖家寄来的快递里
-      if (p.canDownload === false) return { key: 'paper', label: '已开纸质发票（无电子文件）', detail: (p.type || '') + (p.date ? ' · ' + p.date : '') + '，随快递寄送' };
+      // 纸质发票页面上没有「下载到本地」，排进下载只会翻遍「已开具」也找不到；实物在卖家寄来的快递里。
+      // 类型写着「电子」的不算纸质（下载按钮改名、没认出来时，别让人等一个不会到的快递）
+      if (p.canDownload === false && !/电子/.test(p.type || '')) return { key: 'paper', label: '已开纸质发票（无电子文件）', detail: (p.type || '') + (p.date ? ' · ' + p.date : '') + '，随快递寄送' };
       return { key: 'ready', label: '已开票，待下载', detail: (p.type || '') + (p.date ? ' · ' + p.date : '') };
     }
     // 「全部发票 → 申请中」里的单：淘宝写的进度可能是「申请中」或「开票中」，对用户都是同一件事——等商家开出（用户 2026-10-05）。
@@ -238,11 +239,16 @@
              titleOk: title ? flat.includes(String(title).replace(/\s+/g, '')) : null };
   }
 
+  // 卖家发来的 PDF 读得出不少文字、却一个「发票」字样都没有：是说明书、报价单、检测报告之类，不是发票。
+  // 读不出字的（扫描版的真发票也是这样）不算，交给用户核对
+  const notInvoiceText = t => { const flat = String(t || '').replace(/\s+/g, ''); return flat.length >= 30 && !/发票|fapiao|invoice/i.test(flat); };
+
   /*
    * 下载的发票文件 → 核对它是不是文件名里那一单的（同一家店买过好几次时，卖家发的文件常常归错单）。
    *   pdfs:   [{ file, invNo, date: 'YYYY-MM-DD', amount, titleOk }]（parseInvoiceText 读出来的）
    *   orders: [{ no, shop, time, amount }]
-   * 规则：价税合计 = 实付；开票日期不早于下单日期（淘宝页面上的时间可能差几天，放宽 3 天）、不晚于下单后 180 天。
+   * 规则：价税合计 = 应报金额（实付 − 退款）；开票日期不早于下单日期（淘宝页面上的时间可能差几天，放宽 3 天）、不晚于下单后 180 天。
+   * 先看文件名那一单（相符 → 多一点 / 少 1 元以内），明显不符才去同店找别的单（挪单、合开、分不清）。
    * 返回每个文件一条：
    *   ok     对得上
    *   move   不是文件名那单的；同店另一单金额、日期都对得上（只有一单符合）→ to
@@ -269,6 +275,10 @@
       if (f.titleOk === false) return Object.assign(base, { kind: 'title' });
       if (!o) return Object.assign(base, { kind: 'none' });
       if (eq(f.amount, o.amount) && dateOk(f, o)) return Object.assign(base, { kind: 'ok' });
+      // 文件名那一单差得不多（少 1 元以内、多不超过 3 成）就先认它，明显不符才去同店找别的单：
+      // 卖家按用券前的价开（实付 10.00、票面 10.50）时，同店正好有一单实付 10.50，以前这张票会被挪过去
+      if (dateOk(f, o) && f.amount != null && f.amount > o.amount && f.amount <= o.amount * 1.3) return Object.assign(base, { kind: 'more' });
+      if (dateOk(f, o) && f.amount != null && f.amount < o.amount && o.amount - f.amount <= 1 + 0.005) return Object.assign(base, { kind: 'less', short: Math.round((o.amount - f.amount) * 100) / 100 });
       const same = orders.filter(x => x.shop === o.shop && dateOk(f, x));
       const hit = same.filter(x => eq(f.amount, x.amount));
       if (hit.length === 1) return Object.assign(base, { kind: 'move', to: hit[0].no });
@@ -281,10 +291,8 @@
           if (eq(f.amount, pool[i].amount + pool[j].amount + pool[k].amount)) return Object.assign(base, { kind: 'merged', nos: [pool[i].no, pool[j].no, pool[k].no] });
       }
       if (f.date && o.time && day(f.date) < day(o.time) - SLACK) return Object.assign(base, { kind: 'old' });
-      // 票面比实付多一点：平台常按用券、补贴之前的价开（2026-10 实测：实付 10.00，票面 10.50）
-      if (dateOk(f, o) && f.amount > o.amount && f.amount <= o.amount * 1.3) return Object.assign(base, { kind: 'more' });
-      // 票面比应报金额少：少 1 元以内没关系；少了超过 1 元要提醒用户（用户 2026-10-05）
-      if (dateOk(f, o) && f.amount < o.amount) return Object.assign(base, { kind: o.amount - f.amount <= 1 + 0.005 ? 'less' : 'short', short: Math.round((o.amount - f.amount) * 100) / 100 });
+      // 票面比应报金额少了超过 1 元：要提醒用户（用户 2026-10-05；少 1 元以内的在上面已认作这单的）
+      if (dateOk(f, o) && f.amount < o.amount) return Object.assign(base, { kind: 'short', short: Math.round((o.amount - f.amount) * 100) / 100 });
       return Object.assign(base, { kind: 'amount' });
     });
   }
@@ -339,17 +347,20 @@
     while ((m = re.exec(t))) {
       const seg = t.slice(prev, m.index), unit = money(m[1]), qty = +m[2];
       prev = m.index + m[0].length;
-      let refundedQty = 0, refund = 0;
+      let refundedQty = 0, refund = 0, stated = false;
       // 「退货退款成功」也含「退款成功」；有的页面写「退款完成」「已退款」
       if (/退款成功|退款完成|已退款/.test(seg)) {
         // refund：退了多少钱（没写金额的「退款成功」按整件全退，退款 = 单价 × 数量）
         const a = /(?:退款成功|退款完成|已退款)[^￥¥]{0,12}[￥¥]([\d,]+\.\d{2})/.exec(seg);
+        stated = !!a;
         refund = a ? money(a[1]) : Math.round(unit * qty * 100) / 100;
-        refundedQty = a && unit > 0 ? Math.max(0, Math.min(qty, Math.round(money(a[1]) / unit))) : qty;
+        // 写了金额的：退够几个整件才算退了几个（向下取整）。以前四舍五入，单价 9.90 退 5.00（价保、赔偿）被算成整件退，整单不再开票
+        refundedQty = !a ? qty : refund + 0.005 >= unit * qty ? qty : unit > 0 ? Math.max(0, Math.floor((refund + 0.005) / unit)) : 0;
       }
-      lines.push({ unit, qty, refundedQty, refund });
+      lines.push({ unit, qty, refundedQty, refund, stated });
     }
     const items = lines.length;
+    // refunded（整单退了）：每件都退完。是否整单退款，主页还要再看退款合计是否 ≥ 实付（inspectOrders）
     return { items, refundedItems: lines.filter(l => l.refundedQty > 0).length,
              refunded: items > 0 && lines.every(l => l.refundedQty >= l.qty), lines };
   }
@@ -360,7 +371,7 @@
     return [String(o.time || '').slice(0, 10), o.amount != null ? String(o.amount) : '', clean(o.shop), o.no].filter(Boolean).join('_') + '.' + (ext || 'pdf');
   }
 
-  const api = { LABEL, titleScore, cardOwner, taxIdOk, DEFAULT_TITLE, DEFAULT_TAX, DEFAULT_TEMPLATE, FOLLOW_TEMPLATE, renderMsg, parseInvoiceName, chatAnalyze, chatForOrder, status, findHave, matchHave, detailRefund, parseInvoiceText, saveName, checkFiles };
+  const api = { LABEL, titleScore, cardOwner, taxIdOk, DEFAULT_TITLE, DEFAULT_TAX, DEFAULT_TEMPLATE, FOLLOW_TEMPLATE, renderMsg, parseInvoiceName, chatAnalyze, chatForOrder, status, findHave, matchHave, detailRefund, parseInvoiceText, notInvoiceText, saveName, checkFiles };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Invoice = api;
 })(typeof self !== 'undefined' ? self : this);

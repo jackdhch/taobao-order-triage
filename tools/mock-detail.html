@@ -9,11 +9,13 @@
 (function () {
   const NICK = { '5190000000000000106': '某某虚构传感器店', '5190000000000000107': '某某虚构碳纤维加工', '5190000000000000108': '某某虚构轴承',
                  '5190000000000000109': '某某虚构焊工小王', '5190000000000000105': '某某虚构电子元器件专营店' };
+  // 价保、赔偿这类部分退款：退了单价一半以上，但没退完（tools/e2e-invoice.py [17]）
+  const ITEM = { '5190000000000000127': '虚构 防静电镊子 申请售后 退款成功 支付宝¥5.00 ￥9.90 ￥12.00 x1' };
   const no = (/[?&]biz_order_id=(\d+)/.exec(location.search) || [])[1] || '';
   setTimeout(() => {                                  // 详情页是异步渲染的
     const nick = NICK[no] || '某某虚构卖家';
     document.getElementById('app').innerHTML = '<h3>订单详情</h3><div>订单号：' + no + '</div>'
-      + '<div class="item">虚构商品 ￥10.00 x1</div><div class="seller">卖家：<span class="ww-light ww-small" data-nick="' + nick + '"></span>'
+      + '<div class="item">' + (ITEM[no] || '虚构商品 ￥10.00 x1') + '</div><div class="seller">卖家：<span class="ww-light ww-small" data-nick="' + nick + '"></span>'
       + '<a class="ww-inline" href="https://amos.alicdn.com/getcid.aw?v=3&uid=' + encodeURIComponent(nick) + '&site=cntaobao">和我联系</a></div>';
   }, 800);
 })();
