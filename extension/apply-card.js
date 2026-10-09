@@ -52,16 +52,17 @@
   (async () => {
     const { cardJobs, cardRun } = await chrome.storage.local.get(['cardJobs', 'cardRun']);
     const job = cardJobs && cardJobs[orderId];
-    if (!job || Date.now() > job.exp) {
-      // 主页正在按卡片申请另一单，打开的却是这单：卡片归错了单，不提交
-      if (!onDetail && cardRun && cardRun.clicked && !cardRun.error && cardRun.no !== orderId && Date.now() - cardRun.clicked < 60000) {
-        const why = '申请页的订单号 ' + orderId + ' 与任务订单 ' + cardRun.no + ' 不符，未提交';
-        show(why + '。本页 10 秒后关闭。');
-        await result(cardRun.no, { ok: false, why });
-        closeLater(10000);
-      }
+    // 主页刚点了另一单的卡片（60 秒内），打开的却是这单：卡片归错了单，不提交——这单自己也排着任务时同样不提交
+    // （同店几单都排进了任务，点 A 的卡片打开的是 B 的申请页，以前会把 B 提交掉，A 没申请，轮到 B 时又提交一次）
+    const wrongCard = !onDetail && cardRun && cardRun.clicked && !cardRun.error && cardRun.no !== orderId && Date.now() - cardRun.clicked < 60000;
+    if (wrongCard) {
+      const why = '申请页的订单号 ' + orderId + ' 与任务订单 ' + cardRun.no + ' 不符，未提交';
+      show(why + '。本页 10 秒后关闭。');
+      await result(cardRun.no, { ok: false, why });
+      closeLater(10000);
       return;
     }
+    if (!job || Date.now() > job.exp) return;
     // 确认提交后跳到这里：确认成功
     if (onDetail) { if (job.state === 'confirming' || job.state === 'unconfirmed') await finish(); return; }
     if (job.state && job.state !== 'queued') return;                 // 已经有页面在处理（或处理过）这单

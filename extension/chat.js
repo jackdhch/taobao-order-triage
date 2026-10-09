@@ -26,8 +26,16 @@
       if (dc >= 2) { clearInterval(tick); chrome.runtime.sendMessage({ type: 'chatDisconnected' }).catch(() => {}); }
     }, 3000);
   }
-  // 聊天界面是异步渲染的，外层页面里也会注入本脚本：等 30 秒还没有会话列表，就不是聊天那个框架
-  window.otWaitFor(() => document.querySelector('.ww_conversation_list, .ww_conversation'), 30000).then(ok => { if (ok) boot(); });
+  // 聊天界面是异步渲染的，外层页面里也会注入本脚本：等 30 秒还没有会话列表，就不是聊天那个框架。
+  // 聊天框架（或没有聊天框架的外层页面）30 秒还没出会话列表、主页又正等着这个旺旺页干活：报给主页（以前什么都不出，主页干等到超时）
+  window.otWaitFor(() => document.querySelector('.ww_conversation_list, .ww_conversation'), 30000).then(async ok => {
+    if (ok) return boot();
+    if (!/\/chat-core\//.test(location.pathname) && !(window.top === window && !document.querySelector('iframe'))) return;
+    const { invJobs, chatQueue, cardRun } = await chrome.storage.local.get(['invJobs', 'chatQueue', 'cardRun']);
+    const fresh = t => !!t && Date.now() - t < 5 * 60000;
+    if (fresh((invJobs || {}).scan) || fresh((invJobs || {}).chatDownload) || (chatQueue && fresh(chatQueue.at)) || (cardRun && fresh(cardRun.at)))
+      window.otFail('chat', '旺旺页 30 秒内未显示会话列表（可能未登录淘宝、网络慢或页面已改版）');
+  });
 
   function boot() {
     const I = window.Invoice;
@@ -131,29 +139,59 @@
       try { window.top.location.href = url; } catch (e) { location.href = url; }
     }
     const uidHere = () => { const m = /[?&]uid=([^&#]+)/.exec(location.href); try { return m ? decodeURIComponent(m[1]).replace(/^cntaobao/, '') : ''; } catch (e) { return ''; } };
+    // 读出来的消息靠不住（旺旺页改版、选择器失效）：页面上有消息却一条没读出来、标题是空的、上次读到过内容这次却是空的。
+    // 这时不覆盖这家店上次的结果（不然已要过票、卖家已回过的店全部退回「需向卖家索要」），记成读取失败
+    const unreliable = (msgs, prev) => !header() || (!msgs.length && (document.querySelectorAll('.message-item').length > 0
+      || !!(prev && (prev.first || (prev.asks || []).length || (prev.files || []).length))));
+    const MAYBE_CHANGED = '消息未能读取（旺旺页可能改版）';
+    // 扫描结束：写 chatScan（convs 读到的会话；failed 没读成的 [{ name, nick, nos, why }]，主页把这几单标成「旺旺会话未能读取」，
+    // 不退回「需向卖家索要」；read 这一轮读成的个数）。一个都没读成就报错
+    async function finishScan(out, failed, read) {
+      await chrome.storage.local.set({ chatScan: { at: Date.now(), convs: out, failed, read } });
+      const fl = failed.length ? '；未能读取 ' + failed.length + ' 个：' + failed.map(f => f.name + '（' + f.why + '）').join('、') : '';
+      if (!read && failed.length) window.otFail('scan', '旺旺页一个会话都没能读取' + fl);
+      else window.otLog('scan', 'end', '读取 ' + read + ' 个会话' + fl);
+      panel.set('已读取 ' + read + ' 个会话，结果已送回分拣主页' + fl);
+    }
     // 页面因为 goChat 重新加载后：看当前这个会话，记结果，跳下一家；最后一家看完写 chatScan
     async function resumeQueue() {
-      const { chatQueue: q } = await chrome.storage.local.get('chatQueue');
+      const { chatQueue: q, askBeat } = await chrome.storage.local.get(['chatQueue', 'askBeat']);
       if (!q || Date.now() - q.at > (q.kind === 'compose' ? 60 : 20) * 60000 || !q.items || !q.items.length) return false;
       const cur = q.items[0];
       if (squash(uidHere()) !== squash(cur.nick)) return false;          // 不是插件打开的（用户自己在用旺旺）
+      // 自动发送只在主页那一轮还在等它的时候做（主页每两秒写一次 askBeat，编号要对得上）：主页关了、刷新了、超时停了，
+      // 留下的队列不能在用户之后自己打开这家的会话时接着自动发
+      if (q.kind === 'compose' && q.auto && !(askBeat && askBeat.id === q.id && Date.now() - askBeat.t < 20000)) {
+        await chrome.storage.local.remove('chatQueue');
+        panel.set('分拣主页已不在等待发送（任务已停止），未自动发送。');
+        window.otLog('ask', 'skip', '队列已过期，未接管：' + cur.shop);
+        return false;
+      }
       if (q.kind === 'dl') return resumeDownload(q, cur);
       if (q.kind === 'compose') return resumeCompose(q, cur);
-      if (window.otNeedsVerify()) { alert('页面出现安全验证，请手动完成后在分拣主页重新操作。'); await chrome.storage.local.remove('chatQueue'); return true; }
+      const verify = async () => { window.otFail('scan', '旺旺页出现安全验证，请在该页面手动完成后，在分拣主页重新点「自动处理发票」'); await chrome.storage.local.remove('chatQueue'); return true; };
+      if (window.otNeedsVerify()) return verify();
       const n0 = q.done + 1, total = q.done + q.items.length;
       panel.set('正在读取第 ' + n0 + ' / ' + total + ' 个会话：' + cur.shop + '（' + cur.nick + '）');
-      const opened = await window.otWaitFor(() => sameShop(cur.nick, header()), 15000);
-      const next = Object.assign({}, q, { items: q.items.slice(1), done: q.done + 1, at: Date.now() });
+      // 会话标题可能是旺旺名，也可能是店名；按地址打开的页面加载慢，和发消息一样等 30 秒
+      const isTarget = () => sameShop(cur.nick, header()) || sameShop(cur.shop, header());
+      const opened = await window.otWaitFor(isTarget, 30000);
+      const next = Object.assign({}, q, { items: q.items.slice(1), done: q.done + 1, at: Date.now(), failed: (q.failed || []).slice(), read: q.read || 0 });
+      const fail = why => next.failed.push({ name: cur.shop, nick: cur.nick, nos: cur.nos, why });
       if (opened) {
         await sleep(1200);
-        if (!await loadBack(q.since)) { alert('页面出现安全验证，请手动完成后在分拣主页重新操作。'); await chrome.storage.local.remove('chatQueue'); return true; }
+        if (!await loadBack(q.since)) return verify();
         const msgs = collected();
         const orders = [...document.querySelectorAll('.ww_tab .order-id')].map(text).filter(x => /^\d{15,20}$/.test(x));
         // 保险：右侧「我的订单」里要有这一单，才算是这一单的卖家；没有就记下来，不去猜
         const matched = cur.nos.some(no => orders.includes(no));
-        next.out = Object.assign({}, q.out, { [header()]: Object.assign({ at: Date.now(), orders, first: (msgs[0] || {}).time || '', byNick: cur.nick, matched },
-          I.chatAnalyze(msgs, { taxId: q.taxId })) });
-      } else next.failed = (q.failed || []).concat(cur.shop);
+        if (unreliable(msgs, (q.out || {})[header()])) fail(MAYBE_CHANGED);
+        else {
+          next.out = Object.assign({}, q.out, { [header()]: Object.assign({ at: Date.now(), orders, first: (msgs[0] || {}).time || '', byNick: cur.nick, matched },
+            I.chatAnalyze(msgs, { taxId: q.taxId })) });
+          next.read++;
+        }
+      } else fail('会话未打开，页面显示「' + (header() || '空') + '」');
       if (next.items.length) {
         await chrome.storage.local.set({ chatQueue: next });
         await sleep(800 + Math.random() * 800);
@@ -161,10 +199,7 @@
         return true;
       }
       await chrome.storage.local.remove('chatQueue');
-      await chrome.storage.local.set({ chatScan: { at: Date.now(), convs: next.out } });
-      window.otLog('scan', 'end', '读取 ' + total + ' 个会话' + (next.failed && next.failed.length ? '，未能打开 ' + next.failed.join('、') : ''));
-      panel.set('已读取 ' + total + ' 个会话（会话列表中 ' + q.done + ' 个，按旺旺名打开 ' + (total - q.done) + ' 个），结果已送回分拣主页'
-        + (next.failed && next.failed.length ? '；未能打开：' + next.failed.join('、') : ''));
+      await finishScan(next.out || {}, next.failed, next.read);
       return true;
     }
 
@@ -178,17 +213,40 @@
     }
     async function resumeCompose(q, cur) {
       const n0 = q.done + 1, total = q.done + q.items.length;
-      const next = Object.assign({}, q, { items: q.items.slice(1), done: q.done + 1 });
+      const next = Object.assign({}, q, { items: q.items.slice(1), done: q.done + 1, waiting: null });
+      // 等用户处理的上限：自动发送（主页那一轮在等）3 分钟，超时按跳过；逐单「索要发票」「催卖家」是用户自己点的，等 30 分钟
+      const waitMax = q.waitMs || (q.auto ? 3 * 60000 : 30 * 60000);
+      // 队列还是不是这一轮的（主页超时停掉会删掉它；编号不对就是别的一轮）
+      const mine = async () => { const { chatQueue: still } = await chrome.storage.local.get('chatQueue'); return !!still && still.id === q.id; };
       const go = async () => {
         next.at = Date.now();
-        // 主页那边超时停掉了队列（chatQueue 被删）：不再接着开下一家
-        const { chatQueue: still } = await chrome.storage.local.get('chatQueue');
-        if (!still) { panel.buttons([]); panel.set('分拣主页已停止发送：发送 ' + next.sent.length + ' 家，其余未发送。'); return; }
+        // 主页那边超时停掉了队列（chatQueue 被删或换了一轮）：不再接着开下一家
+        if (!await mine()) { panel.buttons([]); panel.set('分拣主页已停止发送：发送 ' + next.sent.length + ' 家，其余未发送。'); return; }
         if (next.items.length) { await chrome.storage.local.set({ chatQueue: next }); await sleep(800); goChat(next.items[0].nick); return; }
         await chrome.storage.local.remove('chatQueue');
         panel.buttons([]); panel.detail([]);
         panel.set('已处理完毕：发送 ' + next.sent.length + ' 家' + (next.skipped.length ? '，跳过 ' + next.skipped.length + ' 家（' + next.skipped.join('、') + '）' : '') + '。卖家回复后，「自动处理发票」会读取并下载。');
       };
+      // 要用户处理时：告诉主页在等什么（主页进度里一句话），把旺旺页切到前台；最多等 waitMax，用户点「跳过此店」、发了、或会话切走就结束
+      // done()：等到的条件。返回 'skip' | 'done' | 'left' | 'timeout'
+      async function waitUser(why, done) {
+        if (await mine()) await chrome.storage.local.set({ chatQueue: Object.assign({}, q, { waiting: { shop: cur.shop, why, at: Date.now() } }) });
+        chrome.runtime.sendMessage({ type: 'focusMe' }).catch(() => {});
+        let skip = false;
+        panel.buttons([['skip', '跳过此店', '不给这家店发送，继续下一家']]);
+        onPanel = id => { if (id === 'skip') skip = true; };
+        const t0 = Date.now();
+        let r = 'timeout';
+        while (Date.now() - t0 < waitMax) {
+          await sleep(500);
+          if (skip) { r = 'skip'; break; }
+          if (done && done()) { r = 'done'; break; }
+          // 会话切走了（用户点了别的会话，或页面自己跳了）：输入框里的字会跟着带到别的会话，马上清掉、停下
+          if (done && !isTarget()) { r = 'left'; break; }
+        }
+        onPanel = null;
+        return r;
+      }
       panel.detail(cur.orders);
       // 会话名可能是旺旺名，也可能是店名；按地址打开的页面加载慢，等 30 秒（15 秒时有两家店没等到，2026-10-04）
       const isTarget = () => sameShop(cur.nick, header()) || sameShop(cur.shop, header());
@@ -204,17 +262,19 @@
       const matched = cur.nos.some(no => orders.includes(no)) || (isTarget() && !!tabShop && squash(tabShop) === squash(cur.shop));
       if (!matched || !isTarget()) {
         panel.set('第 ' + n0 + ' / ' + total + ' 家：' + cur.shop + '。当前会话为「' + header() + '」，右侧「我的订单」' + (orders.length ? '中没有这几单' : '无订单信息')
-          + '，无法确认是该店铺，未填写消息。请核对后手动发送，或点击「跳过此店」。');
-        let go2 = false;
-        panel.buttons([['skip', '跳过此店', '不给这家店发送，继续下一家']]);
-        onPanel = id => { if (id === 'skip') go2 = true; };
-        while (!go2) await sleep(1000);
-        onPanel = null;
+          + '，无法确认是该店铺，未填写消息。请核对后手动发送，或点击「跳过此店」；' + Math.round(waitMax / 60000) + ' 分钟内未处理按跳过。');
+        await waitUser('无法确认是该店铺的会话');
         next.skipped = next.skipped.concat(cur.shop + '（未能确认会话）'); await go(); return true;
       }
-      // 3 天内已经给这家发过带税号的消息（比如用户自己手动发的，主页还没重新扫描）：不再重复要，直接下一家
+      // 3 天内已经给这家发过带税号的消息（比如用户自己手动发的，主页还没重新扫描）：不再重复要，直接下一家。
+      // 这道保险靠读出来的消息：页面上有消息却一条都没读出来（旺旺页可能改版），就确认不了，不发
       const d3 = new Date(Date.now() - 3 * 864e5), pad = n => String(n).padStart(2, '0');
       const since3 = d3.getFullYear() + '-' + pad(d3.getMonth() + 1) + '-' + pad(d3.getDate());
+      if (!q.follow && document.querySelectorAll('.message-item').length && !readMsgs().length) {
+        panel.set('第 ' + n0 + ' / ' + total + ' 家：' + cur.shop + '。读不出聊天记录（旺旺页可能改版），无法确认近期是否已发送过，未发送。');
+        window.otLog('ask', 'fail', cur.shop + '：' + MAYBE_CHANGED);
+        next.skipped = next.skipped.concat(cur.shop + '（' + MAYBE_CHANGED + '）'); await sleep(1500); await go(); return true;
+      }
       // 「催卖家」是用户点了这一单要再催一次：不看 3 天内发过没有
       const recent = !q.follow && q.taxId && readMsgs().find(m => m.self && m.time >= since3 && squash(m.text).includes(squash(q.taxId)));
       if (recent) {
@@ -230,29 +290,30 @@
       const box = inputBox();
       box.focus();
       if (!squash(box.innerText)) document.execCommand('insertText', false, cur.msg);   // 输入框里已经有字（用户自己在写）就不动
-      let skip = false, left = false;
-      if (q.auto) {
-        // 用户在主页确认过清单：核对过会话后自动点「发送」（按钮也只认完整的一次点击）
-        panel.set('第 ' + n0 + ' / ' + total + ' 家：' + cur.shop + '（会话「' + header() + '」，订单已核对）。正在自动发送…');
-        await sleep(1200);
-        const sb = document.querySelector('button.send-btn');
-        if (sb && isTarget()) for (const k of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) sb.dispatchEvent(new MouseEvent(k, { bubbles: true, cancelable: true, view: window }));
-        await window.otWaitFor(() => sentCount(cur.msg) > before, 10000);
-        if (sentCount(cur.msg) <= before) panel.set('第 ' + n0 + ' / ' + total + ' 家：' + cur.shop + '。自动发送未成功，消息保留在输入框中，请核对后手动点击「发送」。');
-      } else if (q.follow) panel.set('已填好催促消息，请核对后点发送（' + cur.shop + '，会话「' + header() + '」，订单已核对）。');
-      else if (total === 1) panel.set(cur.shop + '（会话「' + header() + '」，订单已核对）：索要发票的消息已填入输入框，请核对后点发送。');
-      else panel.set('第 ' + n0 + ' / ' + total + ' 家：' + cur.shop + '（会话「' + header() + '」，订单已核对）。索要发票的消息已填入输入框，请核对后手动点击「发送」；发送后自动打开下一家。');
-      panel.buttons([['skip', '跳过此店', '不给这家店发送，继续下一家']]);
-      onPanel = id => { if (id === 'skip') skip = true; };
-      const t0 = Date.now();
-      while (!skip && Date.now() - t0 < 55 * 60000) {
-        await sleep(500);
-        if (sentCount(cur.msg) > before) break;
-        // 会话切走了（用户点了别的会话，或页面自己跳了）：输入框里的字会跟着带到别的会话，马上清掉、停下
-        if (!isTarget()) { clearMine(cur.msg); left = true; break; }
+      // 输入框里正好是这次要发的这条：自动发送只发确认过的消息，别把用户自己打的字一起发出去
+      const onlyMine = () => squash((inputBox() || {}).innerText) === squash(cur.msg);
+      let r;
+      if (q.auto && !onlyMine()) {
+        panel.set('第 ' + n0 + ' / ' + total + ' 家：' + cur.shop + '。输入框中有其他文字，未自动发送。请核对后手动发送，或点击「跳过此店」；' + Math.round(waitMax / 60000) + ' 分钟内未处理按跳过。');
+        r = await waitUser('输入框中有其他文字，未自动发送', () => sentCount(cur.msg) > before);
+      } else {
+        if (q.auto) {
+          // 用户在主页确认过清单：核对过会话后自动点「发送」（按钮也只认完整的一次点击）
+          panel.set('第 ' + n0 + ' / ' + total + ' 家：' + cur.shop + '（会话「' + header() + '」，订单已核对）。正在自动发送…');
+          await sleep(1200);
+          const sb = document.querySelector('button.send-btn');
+          if (sb && isTarget() && onlyMine()) for (const k of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) sb.dispatchEvent(new MouseEvent(k, { bubbles: true, cancelable: true, view: window }));
+          await window.otWaitFor(() => sentCount(cur.msg) > before, 10000);
+          if (sentCount(cur.msg) <= before) panel.set('第 ' + n0 + ' / ' + total + ' 家：' + cur.shop + '。自动发送未成功，消息保留在输入框中，请核对后手动点击「发送」，或点击「跳过此店」；'
+            + Math.round(waitMax / 60000) + ' 分钟内未处理按跳过。');
+        } else if (q.follow) panel.set('已填好催促消息，请核对后点发送（' + cur.shop + '，会话「' + header() + '」，订单已核对）。');
+        else if (total === 1) panel.set(cur.shop + '（会话「' + header() + '」，订单已核对）：索要发票的消息已填入输入框，请核对后点发送。');
+        else panel.set('第 ' + n0 + ' / ' + total + ' 家：' + cur.shop + '（会话「' + header() + '」，订单已核对）。索要发票的消息已填入输入框，请核对后手动点击「发送」；发送后自动打开下一家。');
+        r = sentCount(cur.msg) > before ? 'done' : await waitUser(q.auto ? '自动发送未成功' : '等待手动发送', () => sentCount(cur.msg) > before);
       }
-      onPanel = null;
+      const left = r === 'left', skip = r !== 'done';
       if (left) {
+        clearMine(cur.msg);
         await chrome.storage.local.remove('chatQueue');
         panel.buttons([]); panel.detail([]);
         panel.set('会话已从 ' + cur.shop + ' 切换到「' + header() + '」。为避免发错对象，已清除填入的消息并停止。如需继续，请在分拣主页重新操作。');
@@ -260,7 +321,7 @@
       }
       if (skip || sentCount(cur.msg) <= before) {
         clearMine(cur.msg);                       // 跳过的：填的字也清掉，别留着被带到下一个会话
-        next.skipped = next.skipped.concat(cur.shop); await go(); return true;
+        next.skipped = next.skipped.concat(cur.shop + (r === 'timeout' ? '（' + Math.round(waitMax / 60000) + ' 分钟内未处理）' : '')); await go(); return true;
       }
       const { askSent } = await chrome.storage.local.get('askSent');
       const all = Object.assign({}, askSent);
@@ -292,7 +353,9 @@
       await sleep(1500);
       const cards = () => [...document.querySelectorAll('.message-item')].filter(m => !m.classList.contains('self'))
         .map(m => ({ m, time: text(m.querySelector('.time')), c: cardOf(tplOf(m)) })).filter(x => x.c);
-      const find = () => cards().filter(x => x.time === run.card.time).pop() || cards().filter(x => I.titleScore(x.c.title, run.card.title) >= 0.8).pop();
+      // 按发来时间找；时间对不上时按标题找，只在标题相近的卡片只有一张时才用（同店几单的卡片标题相近，别点到别的单的卡片）
+      const find = () => cards().filter(x => x.time === run.card.time).pop()
+        || (ts => ts.length === 1 ? ts[0] : null)(cards().filter(x => I.titleScore(x.c.title, run.card.title) >= 0.8));
       if (!find() && !await loadBack(String(run.card.time || '').slice(0, 10))) return stop('页面出现安全验证');
       const hit = find(), go = hit && goBtn(tplOf(hit.m));
       if (!go) return stop('会话中未找到这张开票卡片');
@@ -315,9 +378,9 @@
     }
 
     async function resumeDownload(q, cur) {
-      panel.set('正在打开 ' + cur.nick + ' 的会话，下载卖家发送的文件…');
+      panel.set('正在打开 ' + cur.shop + ' 的会话，下载卖家发送的文件…');
       const ids = [];
-      if (await window.otWaitFor(() => sameShop(cur.nick, header()), 15000)) {
+      if (await window.otWaitFor(() => sameShop(cur.nick, header()) || sameShop(cur.shop, header()), 30000)) {
         await sleep(1200);
         for (const j of cur.jobs) {
           const find = () => [...document.querySelectorAll('.file-msg')].find(f => ((f.querySelector('.file-name') || {}).title || text(f.querySelector('.file-name'))) === j.file);
@@ -344,21 +407,27 @@
         const { invWant, chatScan } = await chrome.storage.local.get(['invWant', 'chatScan']);
         const want = (invWant && invWant.chat) || [];
         if (!want.length) { panel.set('没有需要读取卖家回复的订单（均已开票、已进入淘宝开票流程，或尚未导入订单表）'); return; }
-        if (!await window.otWaitFor(() => convItems().length, 15000)) { panel.set('会话列表尚未加载，请稍后在分拣主页重试'); return; }
+        if (!await window.otWaitFor(() => convItems().length, 15000)) { window.otFail('scan', '旺旺页 15 秒内未显示会话列表（可能未登录或页面已改版）'); return; }
         const since = (invWant.chatSince || '').slice(0, 10);
         const out = Object.assign({}, chatScan && chatScan.convs);
         const items = convItems().filter(it => want.some(o => isConvOf(o, convName(it))));
-        let k = 0;
+        // 没读成的会话（点不开、读不出、出错）记下来交给主页：不算进「已读取」，这几单不退回「需向卖家索要」
+        const failed = [];
+        let k = 0, read = 0;
+        const VERIFY = '旺旺页出现安全验证，请在该页面手动完成后，在分拣主页重新点「自动处理发票」';
         for (const it of items) {
-          if (window.otNeedsVerify()) { alert('页面出现安全验证，请手动完成后在分拣主页重新操作。'); break; }
-          panel.set('正在读取第 ' + (++k) + ' / ' + items.length + ' 个会话：' + convName(it));
+          if (window.otNeedsVerify()) { window.otFail('scan', VERIFY); return; }
+          const name = convName(it), nos = want.filter(o => isConvOf(o, name)).map(o => o.no);
+          panel.set('正在读取第 ' + (++k) + ' / ' + items.length + ' 个会话：' + name);
           try {
-            if (!await openConv(it)) continue;
-            if (!await loadBack(since)) { alert('页面出现安全验证，请手动完成后在分拣主页重新操作。'); break; }
+            if (!await openConv(it)) { failed.push({ name, nos, why: '会话未打开' }); continue; }
+            if (!await loadBack(since)) { window.otFail('scan', VERIFY); return; }
             const msgs = collected();
             const orders = [...document.querySelectorAll('.ww_tab .order-id')].map(text).filter(s => /^\d{15,20}$/.test(s));
+            if (unreliable(msgs, out[header()])) { failed.push({ name: header() || name, nos, why: MAYBE_CHANGED }); continue; }
             out[header()] = Object.assign({ at: Date.now(), orders, first: (msgs[0] || {}).time || '' }, I.chatAnalyze(msgs, { taxId: invWant.taxId }));
-          } catch (e) { window.otLog('scan', 'error', convName(it) + '：' + e.message); }      // 一个会话出错不影响别的会话
+            read++;
+          } catch (e) { failed.push({ name, nos, why: '出错：' + e.message }); window.otLog('scan', 'error', name + '：' + e.message); }      // 一个会话出错不影响别的会话
           await sleep(800 + Math.random() * 800);
         }
         // 左侧最近会话列表里没有的店（聊得太久以前）：用订单页上这一单自己的卖家旺旺名打开，和在订单页点旺旺图标打开的是同一个会话。
@@ -372,17 +441,14 @@
         }
         const noNick = [...new Set(want.filter(o => !o.nick && !convItems().some(it => isConvOf(o, convName(it)))).map(o => o.shop))];
         if (queue.length) {
-          await chrome.storage.local.set({ chatQueue: { at: Date.now(), kind: 'scan', since, taxId: invWant.taxId, out, items: queue, noNick, done: items.length } });
-          panel.set('已读取会话列表中的 ' + items.length + ' 个会话；另有 ' + queue.length + ' 家店铺不在列表中，正按卖家旺旺名逐个打开…');
+          await chrome.storage.local.set({ chatQueue: { at: Date.now(), kind: 'scan', since, taxId: invWant.taxId, out, items: queue, noNick, done: items.length, failed, read } });
+          panel.set('已读取会话列表中的 ' + read + ' 个会话；另有 ' + queue.length + ' 家店铺不在列表中，正按卖家旺旺名逐个打开…');
           return goChat(queue[0].nick);
         }
-        await chrome.storage.local.set({ chatScan: { at: Date.now(), convs: out } });
-        window.otLog('scan', 'end', '读取 ' + items.length + ' 个会话');
-        panel.set('已读取 ' + items.length + ' 个会话，结果已送回分拣主页'
-          + (noNick.length ? '；' + noNick.length + ' 家店铺不在会话列表中且旺旺名未知（请先在淘宝订单页补充一次图片）' : ''));
+        await finishScan(out, failed, read);
+        if (noNick.length) panel.set('已读取 ' + read + ' 个会话，结果已送回分拣主页；' + noNick.length + ' 家店铺不在会话列表中且旺旺名未知');
       } catch (e) {
-        panel.set('读取出错：' + e.message);
-        window.otLog('scan', 'error', e.message);
+        window.otFail('scan', '读取旺旺回复出错：' + e.message);
       }
     });
 
@@ -393,7 +459,7 @@
       await window.otWaitFor(() => convItems().length, 15000);
       const done = [], later = [];
       for (const j of jobs) {
-        if (window.otNeedsVerify()) { alert('页面出现安全验证，请手动完成后在分拣主页重新操作。'); break; }
+        if (window.otNeedsVerify()) { window.otFail('chatDownload', '旺旺页出现安全验证，请在该页面手动完成后，在分拣主页重新点「自动处理发票」'); break; }
         const it = convItems().find(x => sameShop(j.conv, convName(x)));
         if (!it) { later.push(j); continue; }
         if (!await openConv(it)) continue;
@@ -409,15 +475,16 @@
       }
       await window.otSend({ type: 'jobsDone', ids: done });   // 交给后台统一删，别和发票页互相盖
       window.otLog('chatDownload', 'end', '下载 ' + done.length + ' / ' + jobs.length + ' 个' + (later.length ? '，' + later.length + ' 个要按旺旺名打开会话' : ''));
-      if (later.length) {
-        const convs = [...new Set(later.map(j => j.conv))];
-        await chrome.storage.local.set({ chatQueue: { at: Date.now(), kind: 'dl', done: done.length, total: jobs.length,
-          items: convs.map(c => ({ nick: c, shop: c, jobs: later.filter(j => j.conv === c) })) } });
-        panel.set('已下载 ' + done.length + ' 个文件；另有 ' + convs.length + ' 个会话不在列表中，正逐个打开下载…');
-        return goChat(convs[0]);
+      // 不在左侧列表里的会话：按卖家旺旺名打开（会话名可能是店名，拿店名拼地址打不开）；不知道旺旺名的打不开，算未找到
+      const items = [...new Set(later.map(j => j.conv))].map(c => ({ nick: (later.find(j => j.conv === c && j.nick) || {}).nick || '', shop: c, jobs: later.filter(j => j.conv === c) }))
+        .filter(it => it.nick);
+      if (items.length) {
+        await chrome.storage.local.set({ chatQueue: { at: Date.now(), kind: 'dl', done: done.length, total: jobs.length, items } });
+        panel.set('已下载 ' + done.length + ' 个文件；另有 ' + items.length + ' 个会话不在列表中，正逐个打开下载…');
+        return goChat(items[0].nick);
       }
       panel.set('已下载 ' + done.length + ' 个文件' + (jobs.length > done.length ? '，' + (jobs.length - done.length) + ' 个未找到' : '') + '，结果已送回分拣主页。');
-    } catch (e) { panel.set('下载出错：' + e.message); window.otLog('chatDownload', 'error', e.message); } });
+    } catch (e) { window.otFail('chatDownload', '下载卖家发送的文件出错：' + e.message); } });
 
     // 不放按钮：扫描、下载都由分拣主页一键派活，这里只显示进度（用户 2026-10-03：做成全自动，别让人在这里点）
     let onPanel = null;

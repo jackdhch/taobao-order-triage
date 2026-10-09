@@ -83,6 +83,9 @@
     const before = pageNos().join(',');
     await setRange(job.from, job.to);
     await waitList(before);
+    // 筛选后一个订单都没认出来、页面上也没写「暂无」：多半是列表还没加载出来或页面改版了，按出错处理，
+    // 不把这些单记成「平台开不了」（以前会全部记进去，之后永远去找卖家）
+    if (!pageNos().length && !/暂无/.test(document.body.innerText)) throw new Error('筛选后的列表中未识别到任何订单（页面可能未加载完成或已改版），未做任何勾选');
     for (let page = 1; page <= 200; page++) {
       if (window.otNeedsVerify()) throw new Error('页面出现安全验证，请手动完成后在分拣主页重新操作');
       // 每勾一单页面可能重画整个列表，之前拿到的元素就不在页面上了：每次都按订单号重新找

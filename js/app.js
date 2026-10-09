@@ -259,15 +259,21 @@
   // 主页逐单：排 cardJobs（核对用的抬头、税号，带过期时间）和 cardRun（这次要点哪张卡片）→ 旺旺页（extension/chat.js）找到卡片点「去申请」
   // → 申请页（extension/apply-card.js）核对订单号、抬头后提交，结果写回 cardResult。一单失败不影响下一单
   const cardList = () => invOrders().filter(x => invStatus(x).key === 'card');
+  // 已经提交过（或正在确认提交）的单不再改回 queued：不然晚到的申请页会把它再提交一次
+  const SETTLED_JOB = ['done', 'confirming', 'unconfirmed'];
   async function addCardJobs(os, source) {
-    const { cardJobs } = await chrome.storage.local.get('cardJobs'), now = Date.now();
+    const { cardJobs, cardApplied } = await chrome.storage.local.get(['cardJobs', 'cardApplied']), now = Date.now();
     const keep = Object.fromEntries(Object.entries(cardJobs || {}).filter(([, j]) => j.exp > now));     // 过期的清掉
-    for (const o of os) keep[o.no] = { at: now, exp: now + 40 * 60000, state: 'queued', source, shop: o.shop, title: S.invoice.title, taxId: S.invoice.taxId };
+    for (const o of os) {
+      if ((keep[o.no] && SETTLED_JOB.includes(keep[o.no].state)) || (cardApplied || {})[o.no]) continue;
+      keep[o.no] = { at: now, exp: now + 40 * 60000, state: 'queued', source, shop: o.shop, title: S.invoice.title, taxId: S.invoice.taxId };
+    }
     await chrome.storage.local.set({ cardJobs: keep });
   }
   async function patchCardJob(no, p) {
     const { cardJobs } = await chrome.storage.local.get('cardJobs');
     if (!cardJobs || !cardJobs[no]) return;
+    if (p.state === 'queued' && SETTLED_JOB.includes(cardJobs[no].state)) return;
     await chrome.storage.local.set({ cardJobs: Object.assign({}, cardJobs, { [no]: Object.assign({}, cardJobs[no], p) }) });
   }
   const cardOfX = x => { const c = chatOf(x.o) || { cards: [] }; return c.cards[c.cards.length - 1]; };
@@ -282,7 +288,10 @@
       const x = sel[i], c = chatOf(x.o) || { cards: [] }, k = c.cards[c.cards.length - 1];
       if (w) w('第 ' + (i + 1) + ' / ' + sel.length + ' 单：' + x.o.shop);
       let r;
-      try { r = k ? await runCard(x.o, k, c) : { ok: false, why: '未找到开票卡片' }; }
+      // 这一轮里已经提交过的（比如申请页自己跳到了这单）：不再点卡片、不再提交第二次
+      const { cardApplied } = await chrome.storage.local.get('cardApplied');
+      if ((cardApplied || {})[x.o.no]) r = { ok: true };
+      else try { r = k ? await runCard(x.o, k, c) : { ok: false, why: '未找到开票卡片' }; }
       catch (e) { r = { ok: false, why: e.message }; }
       if (!r.ok) await patchCardJob(x.o.no, { state: 'cancelled' });          // 晚到的申请页不再提交
       out.push({ ok: r.ok, text: (r.ok ? '已提交　' : '未完成　') + x.o.shop + '（' + (x.o.time || '').slice(0, 10) + '，' + yuan(+x.o.pay) + '，' + x.o.no + '）' + (r.ok ? '' : '：' + r.why) });
@@ -305,6 +314,8 @@
       const r = (cardResult || {})[o.no];
       if (r && r.at >= t0) return r.ok ? { ok: true } : { ok: false, why: r.why };
       if (cardRun && cardRun.id === id && cardRun.error) return { ok: false, why: cardRun.error };
+      const why = await chatTrouble(t0);
+      if (why) return { ok: false, why };
       const job = (cardJobs || {})[o.no] || {};
       if (cardRun && cardRun.id === id && cardRun.clicked && !job.opened && Date.now() - cardRun.clicked > 30000)
         return { ok: false, why: '已点击「去申请」，但 30 秒内未打开申请页' };
@@ -558,6 +569,8 @@
     const o = S.orders.find(x => x.no === no);
     if (!o) return;
     if (!EXT) { window.open(o.nick ? chatUrl(o.nick) : detailUrl(o.no), '_blank', 'noopener'); return; }
+    // 旺旺页只有一个：「自动处理发票」正在用它时，打开别家会话会把正在干活的页面带走
+    if (J.busy) { toast('「自动处理发票」正在使用旺旺页，请等它结束后再打开聊天'); return; }
     if (!o.nick) await inspectOrders([o]);
     if (!o.nick) { toast('订单详情页未读取到卖家旺旺名，已打开订单详情页，请在该页点击旺旺图标'); openDetail(o.no); return; }
     chrome.runtime.sendMessage({ type: 'openJobTab', url: chatUrl(o.nick) });       // 后台只留一个旺旺页，开着就在它上面跳转
@@ -888,8 +901,14 @@
     const cs = !have && haveMatch().contested.get(o.no);
     if (cs && ['ask', 'apply', 'asked'].includes(st.key))
       return { key: 'check', base: st.key, label: '疑似已整理，请核对', detail: '已整理的发票中有同金额的：' + cs.map(x => x.file).join('、') + '（多单对应同一张或一单对应多张，插件不做推断）' };
-    if (st.key === 'apply' && (S.noPlatform || {})[o.no]) return askedOr(o, { key: 'ask', label: I.LABEL.ask, detail: '批量开票页中无此订单，无法在平台开票' });
-    return withCardFail(o, withVip(o, withCheck(o, askedOr(o, rejectedOnly(o, st)))));
+    if (st.key === 'apply' && noPlatformOf(o)) return chatFailOr(o, askedOr(o, { key: 'ask', label: I.LABEL.ask, detail: '批量开票页中无此订单，无法在平台开票' }));
+    return withCardFail(o, withVip(o, withCheck(o, chatFailOr(o, askedOr(o, rejectedOnly(o, st))))));
+  }
+  // 上次读旺旺时这家的会话没读成（点不开、读不出）、又从没读到过：标成「旺旺会话未能读取」，不当成「需向卖家索要」（免得把问过的店再问一遍）
+  function chatFailOr(o, st) {
+    if (st.key !== 'ask' || chatOf(o)) return st;
+    const f = ((X.chatScan && X.chatScan.failed) || []).find(x => (x.nos || []).includes(o.no));
+    return f ? { key: 'chatfail', label: '旺旺会话未能读取', detail: (f.name ? f.name + '：' : '') + f.why } : st;
   }
   // 按卖家开票入口申请没成功的：在说明里写上原因
   function withCardFail(o, st) {
@@ -943,15 +962,40 @@
   // 已确认的店铺：旺旺页（extension/chat.js）逐家打开会话、核对属于该店铺后自动发送，每家间隔数秒；等它发完（chatQueue 清掉），超时就停掉队列。
   // auto=false 是填好、由用户自己点发送的写法：发票表里逐单的「索要发票」「催卖家」（follow = 催促的那句）用它；
   // 离线测试也用它核对「切到别家会清掉输入框」等安全检查。返回 { n: 发出的家数, timeout }
-  async function doAsk(sel, auto, follow) {
+  // 自动发送这一轮带编号（id）：主页等待期间每两秒写一次 askBeat，旺旺页只在编号对得上、主页还在等时才接管、自动发送，
+  // 写回进度前也核对编号——主页关了、刷新了、超时了，留下的队列不会在用户之后打开这家会话时自己发出去。
+  // 旺旺页要用户处理时（会话确认不了、输入框里有别的字、自动发送没成功）写 chatQueue.waiting，主页进度里用一句话说明（w）
+  const CHAT_STAGES = ['chat', 'scan', 'chatDownload', 'ask'];
+  // 等旺旺页时顺便看：旺旺页被新开的旺旺页顶掉了（chatLost，background.js 写）、旺旺页报了失败（jobFail）——有就返回原因
+  async function chatTrouble(t0) {
+    const { chatLost, jobFail } = await chrome.storage.local.get(['chatLost', 'jobFail']);
+    if (chatLost && chatLost.at >= t0) return chatLost.why;
+    if (jobFail && jobFail.at >= t0 && CHAT_STAGES.includes(jobFail.stage)) return jobFail.why;
+    return '';
+  }
+  async function doAsk(sel, auto, follow, w) {
     if (!sel.length) return { n: 0 };
-    const t0 = Date.now();
-    await chrome.storage.local.set({ chatQueue: { at: t0, kind: 'compose', auto: auto !== false, follow: !!follow, items: sel, done: 0, sent: [], skipped: [], taxId: S.invoice.taxId } });
+    const t0 = Date.now(), id = 'a' + t0.toString(36) + Math.random().toString(36).slice(2, 6), isAuto = auto !== false;
+    if (isAuto) await chrome.storage.local.set({ askBeat: { id, t: t0 } });
+    await chrome.storage.local.set({ chatQueue: { id, at: t0, kind: 'compose', auto: isAuto, follow: !!follow, items: sel, done: 0, sent: [], skipped: [], taxId: S.invoice.taxId,
+      waitMs: tmo('askWait', isAuto ? 3 * 60000 : 30 * 60000) } });
     chrome.runtime.sendMessage({ type: 'openJobTab', url: chatUrl(sel[0].nick) });
-    if (auto === false) return { n: sel.length };
-    const ok = await until(async () => !(await chrome.storage.local.get('chatQueue')).chatQueue, tmo('ask', (sel.length * 60 + 120) * 1000), 2000);
-    if (!ok) await chrome.storage.local.remove('chatQueue');        // 超时：停掉剩下的，免得之后在别的步骤用旺旺页时它还在接着发
-    return { n: sel.filter(g => g.nos.some(no => ((X.askSent || {})[no] || 0) >= t0)).length, timeout: !ok };
+    if (!isAuto) return { n: sel.length };
+    let why = '';
+    const ok = await until(async () => {
+      const { chatQueue: q } = await chrome.storage.local.get('chatQueue');
+      if (!q || q.id !== id) return true;
+      await chrome.storage.local.set({ askBeat: { id, t: Date.now() } });
+      if ((why = await chatTrouble(t0))) return true;
+      if (w) w(q.waiting ? '旺旺页等待处理：' + q.waiting.shop + '（' + q.waiting.why + '），请切到旺旺页处理或点「跳过此店」'
+        : '旺旺页逐家核对会话后发送，每家间隔 8～15 秒（第 ' + Math.min(q.done + 1, sel.length) + ' / ' + sel.length + ' 家）');
+      return false;
+    }, tmo('ask', (sel.length * 240 + 120) * 1000), 2000);         // 每家最多等用户 3 分钟，加上打开、发送的时间
+    await chrome.storage.local.remove('askBeat');
+    // 超时、出错：停掉剩下的（删掉这一轮的队列），免得之后在别的步骤用旺旺页时它还在接着发
+    const { chatQueue: left } = await chrome.storage.local.get('chatQueue');
+    if (left && left.id === id) await chrome.storage.local.remove('chatQueue');
+    return { n: sel.filter(g => g.nos.some(no => ((X.askSent || {})[no] || 0) >= t0)).length, timeout: !ok, why };
   }
   // 发票状态的颜色（图例在发票栏顶上，见 index.html .inv-legend）：
   //   ok 绿 已取得 / info 紫 已开具待取得 / plat 蓝 已进入淘宝开票流程 / wait 黄 等待卖家回复 / urge 青 已由淘宝客服督促 / bad 红 需处理 / off 灰 无需开票
@@ -1556,8 +1600,13 @@
     chrome.runtime.sendMessage({ type: 'openWorkTab', url: BATCH_URL });         // 插件开的干活页：申请提交（或停下）后自己关掉
     return list.length;
   }
+  // 批量开票页上没有的单（S.noPlatform：订单号 → 记下的时间）：14 天后不再算数，再试一次平台开票
+  // （以前没有期限：页面加载慢、改版时一次误判就永远去找卖家）
+  const NO_PLATFORM_DAYS = 14;
+  const noPlatformOf = o => { const t = (S.noPlatform || {})[o.no]; return !!t && Date.now() - t < NO_PLATFORM_DAYS * 864e5; };
   function onApplyResult(r) {
     if (!r) return;
+    for (const [no, t] of Object.entries(S.noPlatform || {})) if (Date.now() - t >= NO_PLATFORM_DAYS * 864e5) delete S.noPlatform[no];
     if ((r.missing || []).length) {
       S.noPlatform = S.noPlatform || {};
       r.missing.forEach(no => { S.noPlatform[no] = r.at; });
@@ -1640,9 +1689,16 @@
     const shops = new Set(want.chat.map(x => x.shop)).size, t1 = Date.now(), lim = tmo('scan', 600000);
     invJob('scan', CHAT_URL);
     w('等待旺旺页面读取 ' + shops + ' 家店的回复');
-    if (await until(() => X.chatScan && X.chatScan.at >= t1, lim)) return { text: '完成，读取 ' + shops + ' 家店' };
-    const { chatQueue } = await chrome.storage.local.get('chatQueue');
-    if (chatQueue && chatQueue.kind === 'scan') await chrome.storage.local.remove('chatQueue');
+    let why = '';
+    const stopScan = async () => { const { chatQueue } = await chrome.storage.local.get('chatQueue'); if (chatQueue && chatQueue.kind === 'scan') await chrome.storage.local.remove('chatQueue'); };
+    if (await until(async () => (X.chatScan && X.chatScan.at >= t1) || !!(why = await chatTrouble(t1)), lim)) {
+      if (why && !(X.chatScan && X.chatScan.at >= t1)) { await stopScan(); return { bad: true, text: '未完成：' + why + '，沿用上次结果' }; }
+      const failed = X.chatScan.failed || [], read = X.chatScan.read;
+      // 没读成的会话：这几单标成「旺旺会话未能读取」（不退回「需向卖家索要」），这里写明是哪几家、为什么
+      return { text: '完成，读取 ' + (read != null ? read : shops) + ' 个会话' + (failed.length ? '；未能读取 ' + failed.length + ' 个：'
+        + failed.slice(0, 3).map(f => f.name + '（' + f.why + '）').join('、') + (failed.length > 3 ? ' 等' : '') : ''), bad: !!failed.length };
+    }
+    await stopScan();
     return { timeout: true, text: '超时：' + mmss(lim) + '内未读完旺旺回复，沿用上次结果' };
   }
   // 4 下载已开具的发票：等淘宝页下完（这一批的活都做完；2 分钟没有进展或超过 5 分钟就不等了），再等下载的 PDF 核对完
@@ -1751,8 +1807,8 @@
           const sel = pick.ask || [];
           if (!sel.length) return { skip: true, text: '无' };
           w('旺旺页逐家核对会话后发送，每家间隔 8～15 秒（共 ' + sel.length + ' 家）');
-          const r = await doAsk(sel, true);
-          return { text: '已发送 ' + r.n + ' / ' + sel.length + ' 家' + (r.timeout ? '（超时，未发的已停止）' : ''), timeout: r.timeout, bad: r.n < sel.length };
+          const r = await doAsk(sel, true, false, w);
+          return { text: '已发送 ' + r.n + ' / ' + sel.length + ' 家' + (r.why ? '（' + r.why + '，未发的已停止）' : r.timeout ? '（超时，未发的已停止）' : ''), timeout: r.timeout, bad: r.n < sel.length };
         });
         await stage('card', '按开票入口申请', async w => {
           const sel = pick.card || [];
@@ -1807,6 +1863,7 @@
     sync: () => invJob('sync', INV_URL), scan: () => invJob('scan', CHAT_URL), download: () => startDownloads(invOrders().map(x => x.o.no), true),
     lists: () => ({ ask: askList().items.length + askList().noNick.length, card: cardList().length, vip: vipList().length, apply: applyList().length }),
     ask: async auto => doAsk((await prepareAsk()).items, auto), card: () => runCards(cardList()), vip: () => doVip(vipList()), apply: () => doApply(applyList()),
+    cards: nos => runCards(cardList().filter(x => nos.includes(x.o.no))),
     row: (act, no) => rowAct(act, no),
     inspect: nos => inspectOrders(nos.map(no => S.orders.find(o => o.no === no)).filter(Boolean)),
     due: no => { const o = S.orders.find(x => x.no === no); return o ? dueOf(o) : null; },
@@ -2015,7 +2072,10 @@
   //   olderDone 「订单表之前的订单已提取完」的一次性信号  autoLast 每日自动处理上次运行的日期（恢复时记成今天，免得一恢复就自动开始）
   //   readJob / readProgress / readResult 「从淘宝读取订单」的任务、进度和一次性结果（taobao.js、background.js）
   //   autoLog 本机调试日志（见 alog）：只为排查，备份时也不带
-  const BACKUP_SKIP = ['applyJob', 'applyResult', 'cardJobs', 'cardRun', 'chatQueue', 'chatAfter', 'dlJobs', 'invJobs', 'jobTabs', 'nickWant', 'vipJob', 'olderDone', 'autoLast', 'readJob', 'readProgress', 'readResult', 'autoLog'];
+  //   askBeat 自动发送这一轮主页还在等的心跳（doAsk）    chatLost 旺旺页被新开的旺旺页顶掉的信号（background.js）
+  //   jobFail 干活页没办成的一次性结果（panel.js otFail）
+  const BACKUP_SKIP = ['applyJob', 'applyResult', 'cardJobs', 'cardRun', 'chatQueue', 'chatAfter', 'dlJobs', 'invJobs', 'jobTabs', 'nickWant', 'vipJob', 'olderDone', 'autoLast',
+    'readJob', 'readProgress', 'readResult', 'autoLog', 'askBeat', 'chatLost', 'jobFail'];
   const skipKey = k => BACKUP_SKIP.includes(k) || /^(invClaim_|otReload_)/.test(k);
   const OWN_LS = k => /^orderTriage\./.test(k);
   const stampOf = d => d.getFullYear() + pad2(d.getMonth() + 1) + pad2(d.getDate()) + '-' + pad2(d.getHours()) + pad2(d.getMinutes());

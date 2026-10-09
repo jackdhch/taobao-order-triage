@@ -65,7 +65,12 @@ X17 = {
     'C1': ('5190000000000000125', '2026-09-08', '交易成功', '某某虚构券店', '10.00', [('XT30 插头 公母', '一对', 1, '10.00')]),
     'P2': ('5190000000000000126', '2026-09-08', '交易成功', '某某虚构券店', '10.50', [('牙膏 家庭装', '3支', 1, '10.50')]),      # 个人
     'R1': ('5190000000000000127', '2026-09-09', '交易成功', '某某虚构价保店', '9.90', [('防静电镊子', 'ESD-15', 1, '9.90')]),   # 详情页：退了 5.00
+    # [17c] 读旺旺：按旺旺名打开、标题显示店名；会话打不开；旺旺页改版读不出消息
+    'W1': ('5190000000000000131', '2026-09-11', '交易成功', '某某虚构店名会话', '12.00', [('万用表 表笔', '一对', 1, '12.00')]),
+    'W2': ('5190000000000000132', '2026-09-11', '交易成功', '某某虚构打不开店', '13.00', [('鳄鱼夹 测试线', '10 根', 1, '13.00')]),
+    'W3': ('5190000000000000133', '2026-09-12', '交易成功', '某某虚构改版店', '14.00', [('排针 2.54mm', '40P', 1, '14.00')]),
 }
+NICK17 = {'W1': 'nick店名会话', 'W2': 'nick打不开', 'W3': 'nick改版'}
 N17 = {k: v[0] for k, v in X17.items()}
 INVOICE_HTML = '''<!doctype html><meta charset="utf-8"><body style="font-family:sans-serif;padding:40px">
 <h2>电子发票（普通发票）</h2><p>发票号码：{inv}</p><p>开票日期：{y}年{m}月{d}日</p>
@@ -639,6 +644,37 @@ def run(p, tmp):
     app.evaluate('chrome.storage.local.remove("chatQueue")')
     for pg in [pg for pg in ctx.pages if '/app/im/' in pg.url]: pg.close()
 
+    print('\n[8e] 自动发送时输入框里已有用户自己打的字：不自动发送（不把没确认的字发给卖家），旺旺页报告在等什么，到时按跳过')
+    probe = ctx.new_page(); probe.goto('https://market.m.taobao.com/app/im/chat/index.html?probe=1'); probe.wait_for_timeout(1200)
+    probe.evaluate("localStorage.setItem('mockDraft', JSON.stringify({ '某某虚构轴承': '我自己还没写完的话' }))"); probe.close()
+    app.evaluate('no => chrome.storage.local.get("askSent").then(r => { const a = Object.assign({}, r.askSent); delete a[no]; return chrome.storage.local.set({ askSent: a }); })', NO['H'])
+    app.bring_to_front(); app.reload(); app.wait_for_timeout(1500)
+    app.evaluate('() => { __otDev.tmo = { askWait: 6000 }; window.__askR = null; __otDev.ask(true).then(r => { window.__askR = r; }); }')
+    waiting = wait_until(app, lambda: (q := store('chatQueue')) and q.get('waiting'), 60)
+    check(bool(waiting) and '其他文字' in waiting.get('why', '') and waiting.get('shop') == '某某虚构轴承', '旺旺页把「在等用户处理什么」写回给主页（主页进度里显示）', waiting)
+    r = wait_until(app, lambda: app.evaluate('window.__askR'), 60)
+    fr = core_of('某某虚构轴承')
+    posted = [p for p in (fr.evaluate('window.__mock.posted || []') if fr else []) if '没写完' in p['text'] or NO['H'] in p['text']]
+    box = fr.evaluate('document.querySelector(".editBox pre.edit[contenteditable=true]").innerText') if fr else ''
+    check(bool(r) and r.get('n') == 0 and not posted and '我自己还没写完的话' in box, '没有自动发送：用户打的字原样留在输入框里，没发出去；等待超时后按跳过结束', {'结果': r, '输入框': box, '发出': posted})
+    check(not store('chatQueue') and not store('askBeat'), '这一轮结束后队列和主页心跳都清掉了')
+    if fr: fr.evaluate("localStorage.removeItem('mockDraft')")
+    app.evaluate('() => { __otDev.tmo = null; }')
+    for pg in [pg for pg in ctx.pages if '/app/im/' in pg.url]: pg.close()
+
+    print('\n[8f] 主页已经不在等的自动发送队列（主页关了、刷新了）：之后打开这家的会话，插件不接管、不自动发送')
+    item = {'nick': '某某虚构轴承', 'shop': '某某虚构轴承', 'nos': [NO['H']], 'orders': [{'no': NO['H'], 'date': '2026-09-01', 'amount': 15, 'lines': []}],
+            'msg': '残留队列里的消息 税号 ' + TAX}
+    app.evaluate('it => chrome.storage.local.set({ chatQueue: { id: "old-run", at: Date.now(), kind: "compose", auto: true, items: [it], done: 0, sent: [], skipped: [], taxId: "" } })', item)
+    cp = ctx.new_page(); cp.goto('https://market.m.taobao.com/app/im/chat/index.html?uid=' + quote('cntaobao某某虚构轴承'))
+    gone = wait_until(app, lambda: not store('chatQueue'), 20)
+    cp.wait_for_timeout(3000)
+    core = next((f for f in cp.frames if '/chat-core/' in f.url), None)
+    box = core.evaluate('document.querySelector(".editBox pre.edit[contenteditable=true]").innerText') if core else '?'
+    leaked = [p for p in (core.evaluate('window.__mock.posted || []') if core else []) if '残留队列' in p['text']]
+    check(bool(gone) and not box.strip() and not leaked, '残留的自动发送队列被丢弃：没填、没发', {'输入框': box, '发出': leaked})
+    cp.close()
+
     print('\n[9] 旺旺只留一个聊天页：新开的把旧的关掉；剩下的「连接断开」就自己刷新')
     for pg in [pg for pg in ctx.pages if '/app/im/' in pg.url]: pg.close()
     a = ctx.new_page(); a.goto('https://market.m.taobao.com/app/im/chat/index.html'); a.wait_for_timeout(2500)
@@ -888,6 +924,48 @@ def part17(ctx, app, tmp, pdfs, dl_dir):
     note = app.inner_text('#pack-note')
     check(note.startswith('找到发票 0 张') and app.is_disabled('#pack-go'), '再选同一个文件夹：这一批已整理，不再重复整理', note)
     app.click('#pack-cancel')
+
+    print('\n[17c] 读旺旺：按旺旺名打开的会话标题是店名也认；打不开的、读不出消息的记为「旺旺会话未能读取」，不退回「需向卖家索要」')
+    store = lambda k: app.evaluate('k => chrome.storage.local.get(k).then(r => r[k])', k)
+    app.evaluate('s => chrome.storage.local.get("scraped").then(r => chrome.storage.local.set({ scraped: Object.assign({}, r.scraped, s) }))',
+                  {N17[k]: {'no': N17[k], 'nick': n, 'lines': [{'title': X17[k][5][0][0]}]} for k, n in NICK17.items()})
+    app.wait_for_timeout(800)
+
+    def chat_ls(js):
+        pr = ctx.new_page(); pr.goto('https://market.m.taobao.com/app/im/chat/index.html?probe=1'); pr.wait_for_timeout(1200)
+        pr.evaluate(js); pr.close()
+
+    def scan_once():
+        for pg in [pg for pg in ctx.pages if '/app/im/' in pg.url]: pg.close()
+        s0 = (store('chatScan') or {}).get('at', 0)
+        app.bring_to_front()
+        app.evaluate('() => { __otDev.scan(); }')
+        return wait_until(app, lambda: (c := store('chatScan')) and c.get('at', 0) != s0 and c, 240) or {}
+
+    def row17(k):
+        app.bring_to_front(); app.click('.flow li[data-step="2"]'); app.wait_for_timeout(600)
+        return app.evaluate("no => { const tr = [...document.querySelectorAll('.inv-table tbody tr')].find(tr => tr.innerText.includes(no)); "
+                            "return tr ? { st: tr.querySelector('.st').textContent.trim(), cls: tr.querySelector('.st').className, "
+                            "btns: [...tr.querySelectorAll('.acts button')].map(b => b.textContent.trim()) } : {}; }", N17[k])
+    chat_ls("localStorage.removeItem('mockNoTime')")
+    cs = scan_once()
+    w1 = (cs.get('convs') or {}).get('某某虚构店名会话', {})
+    check(w1.get('byNick') == 'nick店名会话' and w1.get('asks'), '按旺旺名打开、标题显示店名的会话：照样认出并读到（以前只认标题 = 旺旺名，判成未打开）', w1)
+    f2 = [f for f in cs.get('failed', []) if N17['W2'] in f.get('nos', [])]
+    check(f2 and '未打开' in f2[0].get('why', ''), '打不开的会话写进 chatScan.failed，写明原因', cs.get('failed'))
+    r2 = row17('W2')
+    check(r2.get('st') == '旺旺会话未能读取' and 'tone-bad' in r2.get('cls', '') and r2.get('btns') == ['打开旺旺'],
+          '打不开会话的那单：红色「旺旺会话未能读取」，不退回「需向卖家索要」（不会被列进索要清单）', r2)
+    check(row17('W3').get('st') == '卖家已发送文件', '改版店第一次读得出：卖家已发送文件', row17('W3'))
+    before = (cs.get('convs') or {}).get('某某虚构改版店', {})
+    chat_ls("localStorage.setItem('mockNoTime', JSON.stringify(['某某虚构改版店']))")
+    cs2 = scan_once()
+    after = (cs2.get('convs') or {}).get('某某虚构改版店', {})
+    f3 = [f for f in cs2.get('failed', []) if N17['W3'] in f.get('nos', [])]
+    check(after.get('at') == before.get('at') and after.get('files') and f3 and '改版' in f3[0].get('why', ''),
+          '旺旺页改版、消息一条都读不出来：不覆盖这家上次的结果，记为读取失败（写明可能改版）', {'失败': cs2.get('failed'), '上次': before.get('at'), '这次': after.get('at')})
+    check(row17('W3').get('st') == '卖家已发送文件', '读不出来的那家仍按上次结果显示「卖家已发送文件」，没有退回「需向卖家索要」', row17('W3'))
+    chat_ls("localStorage.removeItem('mockNoTime')")
 
 
 def main():

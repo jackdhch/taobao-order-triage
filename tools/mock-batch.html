@@ -35,6 +35,8 @@ body{font:14px system-ui,"Microsoft YaHei";margin:20px}
 <div class="next-pagination" id="pager"></div>
 <script>
 const TITLE = localStorage.getItem('mockTitle') || '某大学', TAX = '121000009999999996';
+// localStorage.mockRenamed = '1'：分组头换了类名（模拟淘宝改版），插件认不出任何订单（测不把全部订单记成「平台开不了」）
+const HEAD_CLS = localStorage.getItem('mockRenamed') === '1' ? 'grp-hd-no--x1' : 'group-header-orderId--b5tpwNPs';
 // 虚构订单（批量开票页上「还能申请」的）。no 末三位和 e2e-apply.py 的订单对得上
 const ORDERS = [];
 const add = (no, d, shop, title, amt) => ORDERS.push({ no, d, shop, title, amt });
@@ -58,7 +60,7 @@ function render() {
   page = Math.min(page, n - 1);
   $('list').innerHTML = L.length ? L.slice(page * 9, page * 9 + 9).map(o =>
     '<div class="next-table group"><table><tbody><tr class="gh"><td><label class="next-checkbox-wrapper"><span class="next-checkbox"><input type="checkbox" class="next-checkbox-input" data-no="' + o.no + '"' + (sel.has(o.no) ? ' checked' : '') + '></span></label>'
-    + '<div class="group-header-orderId--b5tpwNPs"><span class="group-header-title-before--M3QU">订单号：</span><span class="group-header-title-number--KQYr">' + o.no + '</span></div>'
+    + '<div class="' + HEAD_CLS + '"><span class="group-header-title-before--M3QU">订单号：</span><span class="group-header-title-number--KQYr">' + o.no + '</span></div>'
     + ' ' + o.shop + ' 可开发票类型：电子普票 订单时间：' + o.d + ' 10:00:00</td></tr>'
     + '<tr><td>' + o.title + '</td><td>¥ ' + fmt(o.amt) + '</td><td>订单详情</td></tr></tbody></table></div>').join('')
     : '<div>暂无未申请订单</div>';

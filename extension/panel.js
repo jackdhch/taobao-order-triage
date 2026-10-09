@@ -54,7 +54,20 @@ window.otPanel = function (title, buttons, onClick, opts) {
       }
     }
   };
-  return { set(s) { st.textContent = s; }, buttons: setButtons, detail };                    // 状态里有从页面读来的店名，当纯文字放，别让它变成网页代码
+  const api = { set(s) { st.textContent = s; }, buttons: setButtons, detail };                    // 状态里有从页面读来的店名，当纯文字放，别让它变成网页代码
+  window.__otPanel = api;
+  return api;
+};
+
+// 干活页没办成（安全验证、页面没加载出来、找不到要点的东西、出错）：
+//   写一条结果 jobFail = { stage, why, at, host }（主页正在等这一段时，看到就立即结束这一段，红条写这句原因），记进本机调试日志，
+//   面板上写明原因，并把本页切到前台（安全验证等要用户在这一页上处理）。不用 alert：后台标签页里的弹窗用户看不到
+window.otFail = function (stage, why) {
+  const p = window.__otPanel || window.otPanel('出错', [], () => {}, { top: true });
+  p.set(why);
+  window.otLog(stage, 'fail', why);
+  chrome.storage.local.set({ jobFail: { stage, why: String(why).slice(0, 300), at: Date.now(), host: location.host } }).catch(() => {});
+  chrome.runtime.sendMessage({ type: 'focusMe' }).catch(() => {});
 };
 
 // 本机调试日志：写进 chrome.storage.local 的 autoLog（后台排队追加，见 background.js），界面上没有入口

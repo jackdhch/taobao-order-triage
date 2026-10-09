@@ -92,6 +92,17 @@ body{margin:0;font:13px system-ui,"Microsoft YaHei";display:flex;height:100vh;co
       Object.assign(he('2026-08-23 11:00:00'), { invCard: { title: '硅胶线 20AWG 黑色', price: '58', no: '5190000000000000208' } })] },
     { hidden: true, name: 'nick209', orders: ['5190000000000000209'], msgs: [
       Object.assign(he('2026-08-24 12:00:00'), { invCard: { title: '深沟球轴承 6900ZZ', price: '22', no: '5190000000000000209' } })] },
+    // nick210 的卡片点开的却是另一单（211，也排着申请）的申请页：不能把 211 提交掉（tools/e2e-apply.py [6b]）
+    { hidden: true, name: 'nick210', orders: ['5190000000000000210'], msgs: [
+      Object.assign(he('2026-08-25 12:00:00'), { invCard: { title: '虚构 夹具 快速夹钳', price: '35', no: '5190000000000000211' } })] },
+    { hidden: true, name: 'nick211', orders: ['5190000000000000211'], msgs: [
+      Object.assign(he('2026-08-26 12:00:00'), { invCard: { title: '虚构 测试探针 P75', price: '18', no: '5190000000000000211' } })] },
+    // tools/e2e-invoice.py [17c]：按旺旺名打开、标题却显示店名的会话；以后旺旺页改版、消息读不出来的会话（mockNoTime 里列出的会话不显示时间）
+    { hidden: true, name: '某某虚构店名会话', nick: 'nick店名会话', orders: ['5190000000000000131'], msgs: [
+      me('2026-09-12 09:00:00', '你好，订单 5190000000000000131 需要开发票，抬头 某大学，税号 121000009999999996')] },
+    { hidden: true, name: '某某虚构改版店', nick: 'nick改版', orders: ['5190000000000000133'], msgs: [
+      me('2026-09-13 09:00:00', '你好，订单 5190000000000000133 需要开发票，抬头 某大学，税号 121000009999999996'),
+      Object.assign(he('2026-09-14 10:00:00'), { file: { name: 'dzfp_26990000000000000133_某大学_20260914100000.pdf', size: '80 KB' } })] },
     // 个人卖家：会话名是卖家自己的旺旺名，和店名「某某虚构焊接耗材」对不上（真实页面上很常见）
     { name: '某某虚构焊工小王', orders: ['5190000000000000109'], msgs: [
       me('2026-09-11 08:00:00', '你好，订单需要开发票，抬头某大学，税号121000009999999996')] },
@@ -119,8 +130,9 @@ body{margin:0;font:13px system-ui,"Microsoft YaHei";display:flex;height:100vh;co
       + '<img src="' + BG + '" width="240" height="80" alt=""><div view-name="TextView">安全提醒：检测到外部链接</div>'
       + '<div view-name="TextView">请勿轻信陌生链接，谨防诈骗</div><a href="https://example.invalid/ext" target="_blank">继续访问</a></div></div></div>';
     else c = '<pre class="edit">' + esc(m.text) + '</pre>';
+    const noTime = JSON.parse(localStorage.getItem('mockNoTime') || '[]').includes(cur.name);
     return '<div class="message-item-line"><div class="message-item' + (m.self ? ' self' : '') + '">'
-      + '<div class="nick">' + (m.self ? '我' : esc(cur.name)) + '</div><div class="time">' + m.time + '</div>'
+      + '<div class="nick">' + (m.self ? '我' : esc(cur.name)) + '</div>' + (noTime ? '' : '<div class="time">' + m.time + '</div>')
       + '<div class="content">' + c + '</div></div></div>';
   }
   function renderMsgs(keep) {
@@ -138,6 +150,9 @@ body{margin:0;font:13px system-ui,"Microsoft YaHei";display:flex;height:100vh;co
     document.querySelector('.ww_header .name').textContent = c.name;
     document.querySelector('.ww_tab').innerHTML = '<div>我的订单</div>' + c.orders.map(no => '<div class="order-card">订单号 <span class="order-id">' + no + '</span></div>').join('');
     renderMsgs(false);
+    // 测试用：用户自己在输入框里打了字（localStorage mockDraft = { 会话名: 文字 }）
+    const draft = JSON.parse(localStorage.getItem('mockDraft') || '{}')[c.name];
+    if (draft) document.querySelector('.ww_input pre.edit').textContent = draft;
   }
 
   function boot() {
@@ -196,7 +211,7 @@ body{margin:0;font:13px system-ui,"Microsoft YaHei";display:flex;height:100vh;co
     const m = /[?&]uid=([^&#]+)/.exec(location.search);
     if (m) {
       const nick = decodeURIComponent(m[1]).replace(/^cntaobao/, '');
-      const c = CONVS.find(x => x.name === nick);
+      const c = CONVS.find(x => x.name === nick || x.nick === nick);
       if (c) {
         mock.byUrl = (mock.byUrl || []).concat(nick);
         if (c.hidden) {

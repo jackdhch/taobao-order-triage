@@ -177,6 +177,20 @@ def run(p, tmp):
         m2 = bp2.evaluate('window.__mock')
         check('下一步' not in m2.get('clicks', []) and not m2.get('confirm'), '没点「下一步」，更没点「确认提交」', m2.get('clicks'))
 
+    print('\n[4b] 批量开票页改版、一个订单都认不出来：按出错停下，不把要申请的单全部记成「平台开不了」')
+    for pg in list(ctx.pages):
+        if pg.url.startswith(BATCH_URL) or pg.url.startswith(INV_URL): pg.close()
+    probe = ctx.new_page(); probe.goto(BATCH_URL); probe.evaluate("localStorage.removeItem('mockTitle'); localStorage.setItem('mockRenamed', '1')"); probe.close()
+    app.bring_to_front()
+    app.evaluate('chrome.storage.local.set({ applyResult: null })')
+    want4 = app.evaluate('__otDev.lists()')['apply']
+    app.evaluate('() => { __otDev.apply(); }')
+    r4 = wait_until(lambda: (x := res()) and (x.get('stage') or x.get('error')) and x, 90, app) or res()
+    nop = app.evaluate("Object.keys(JSON.parse(localStorage.getItem('orderTriage.app.v1')).noPlatform || {})")
+    check(want4 >= 1 and r4 and '未识别到任何订单' in (r4.get('error') or ''), '认不出订单：停下并写明原因', r4)
+    check(sorted(nop) == [NO['T4']], '只有之前真的不在列表里的 T4 记为平台开不了，这次要申请的单没有被记进去', nop)
+    probe = ctx.new_page(); probe.goto(BATCH_URL); probe.evaluate("localStorage.removeItem('mockRenamed')"); probe.close()
+
     print('\n[5] 按卖家的开票入口申请：先读旺旺，卡片单独认出来（不算图片）')
     for pg in list(ctx.pages):
         if pg != app: pg.close()
@@ -225,6 +239,45 @@ def run(p, tmp):
     check(all(got[k].get('st') == '卖家发来开票申请入口' and '未完成' in got[k].get('detail', '') for k in ('C2', 'C3')), 'C2、C3 仍是「卖家发来开票申请入口」，说明里写着上次没完成的原因', {k: got[k] for k in ('C2', 'C3')})
     clicks = [r[1] for r in reports if r[0] == 'cardClick']           # 旺旺页每单都会重新加载，点击记录由模拟页报给测试
     check(sorted(clicks) == sorted(NO[k] for k in CARD), '每单的「去申请」各被完整点击了一次', clicks)
+
+    print('\n[6b] 同店（或卡片归错）时点 A 的卡片打开了 B 的申请页、B 也排着申请：不提交 B；轮到 B 时只提交一次')
+    W = {'C4': ('5190000000000000210', '2026-08-24', '某某虚构夹具店', '35.00', '虚构 夹具 快速夹钳'),
+         'C5': ('5190000000000000211', '2026-08-25', '某某虚构探针店', '18.00', '虚构 测试探针 P75')}
+    p2 = tmp / '虚构订单表2.csv'
+    with open(p2, 'w', newline='', encoding='utf-8') as f:
+        w = csv.writer(f)
+        w.writerow(['订单号', '订单提交时间', '订单状态', '店铺名称', '商品名称', '型号款式', '商品数量', '商品金额', '实付金额', '运费'])
+        for no, d, shop, pay, t in W.values():
+            w.writerow([no, d + ' 10:00:00', '交易成功', shop, t, '', 1, pay, pay, '0.00'])
+    app.bring_to_front()
+    app.set_input_files('#file', str(p2)); app.wait_for_timeout(800)
+    app.evaluate('s => chrome.storage.local.get("scraped").then(r => chrome.storage.local.set({ scraped: Object.assign({}, r.scraped, s) }))',
+                 {no: {'no': no, 'time': d, 'status': '交易成功', 'shop': shop, 'nick': 'nick' + no[-3:], 'lines': [{'title': t, 'img': 'https://img.alicdn.com/x.jpg'}]}
+                  for (no, d, shop, pay, t) in W.values()})
+    app.evaluate('''nos => { const S = JSON.parse(localStorage.getItem('orderTriage.app.v1'));
+        for (const o of S.orders) if (nos.includes(o.no)) for (const l of o.lines) S.decisions[l.key] = 'lab';
+        localStorage.setItem('orderTriage.app.v1', JSON.stringify(S)); }''', [v[0] for v in W.values()])
+    app.reload(); app.wait_for_selector('#main:not([hidden])'); app.wait_for_timeout(800)
+    for pg in list(ctx.pages):
+        if '/app/im/' in pg.url: pg.close()
+    s0 = app.evaluate('chrome.storage.local.get("chatScan").then(r => r.chatScan ? r.chatScan.at : 0)')
+    app.evaluate('() => { __otDev.scan(); }')
+    wait_until(lambda: app.evaluate('chrome.storage.local.get("chatScan").then(r => r.chatScan ? r.chatScan.at : 0)') != s0, 120, app)
+    app.bring_to_front(); app.click('.flow li[data-step="2"]'); app.wait_for_timeout(800)
+    c45 = [W['C4'][0], W['C5'][0]]
+    stc = lambda no: app.evaluate("no => { const tr = [...document.querySelectorAll('.inv-table tbody tr')].find(tr => tr.innerText.includes(no)); return tr ? tr.querySelector('.st').textContent.trim() : null; }", no)
+    check(all(stc(no) == '卖家发来开票申请入口' for no in c45), '两单都是「卖家发来开票申请入口」', [stc(no) for no in c45])
+    n_rep = len(reports)
+    out2 = app.evaluate('nos => __otDev.cards(nos)', c45) or []
+    res2 = app.evaluate('chrome.storage.local.get("cardResult").then(r => r.cardResult || {})')
+    applied2 = app.evaluate('chrome.storage.local.get("cardApplied").then(r => r.cardApplied || {})')
+    sub5 = [r for r in reports[n_rep:] if r[0] == 'submit' and r[1] == W['C5'][0]]
+    check(len(sub5) == 1, 'B（211）只提交了一次：A 的卡片打开 B 的申请页时没有提交，轮到 B 自己时才提交', [r[:2] for r in reports[n_rep:]])
+    check(not [r for r in reports[n_rep:] if r[0] == 'submit' and r[1] == W['C4'][0]] and res2.get(W['C4'][0], {}).get('ok') is False
+          and '不符' in (res2.get(W['C4'][0], {}).get('why') or ''), 'A（210）：申请页订单号不符，未提交，原因送回主页', res2.get(W['C4'][0]))
+    check(W['C5'][0] in applied2 and W['C4'][0] not in applied2, '只有 B 记成已提交', sorted(applied2))
+    check(any('已提交' in x['text'] and W['C5'][0] in x['text'] for x in out2) and any('未完成' in x['text'] and W['C4'][0] in x['text'] for x in out2),
+          '结果：A 未完成（订单号不符），B 已提交', [x['text'] for x in out2])
 
     print('\n[7] 标签页：插件开的干活页做完都关了，旺旺页只留一个；用户点状态标签开的页面不关')
     gone = wait_until(lambda: not [p for p in ctx.pages if APPLY_URL in p.url or p.url.startswith(BATCH_URL) or p.url.startswith(INV_URL)] and True, 25, app)

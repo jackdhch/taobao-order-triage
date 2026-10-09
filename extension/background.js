@@ -122,7 +122,10 @@ chrome.runtime.onMessage.addListener((m, sender, reply) => {
   chatChain = chatChain.then(async () => {
     const { chatTabs = [], chatReload = {} } = await chrome.storage.session.get(['chatTabs', 'chatReload']);
     if (m.type === 'chatHello') {
-      for (const old of chatTabs) if (old !== id) { try { await chrome.tabs.remove(old); } catch (e) { /* 已经关了 */ } }
+      let closed = 0;
+      for (const old of chatTabs) if (old !== id) { try { await chrome.tabs.remove(old); closed++; } catch (e) { /* 已经关了 */ } }
+      // 关掉的旧旺旺页可能正在干活（读回复、发消息、按卡片申请）：告诉主页，别让它干等到超时（chatLost）
+      if (closed) await chrome.storage.local.set({ chatLost: { at: Date.now(), why: '另开了一个旺旺页，原来正在处理的旺旺页已关闭（旺旺网页版同时只能开一个）' } });
       await chrome.storage.session.set({ chatTabs: [id] });
       return;
     }
