@@ -79,10 +79,39 @@ const workTabs = fn => (workChain = workChain.then(async () => {
 }));
 const trackTab = id => workTabs(ids => ids.includes(id) ? null : ids.concat(id));
 chrome.tabs.onRemoved.addListener(id => workTabs(ids => ids.includes(id) ? ids.filter(x => x !== id) : null));
+
+// ── 干活页被关掉（用户关的，不是插件自己关的）：主页可能正等着它干活。立即写 jobFail { stage: 'closed', page }，
+// 主页正等这种页面的那一段马上结束、写明原因、接着下一段（2026-10-09 用户关了旺旺页，主页还干等了 10 分钟）。
+// 插件自己关的（干完发 closeMe、只留一个旺旺页、同网址的旧干活页）先记进 selfClosing，不算
+const selfClosing = new Set();
+const closeTab = id => { selfClosing.add(id); return chrome.tabs.remove(id).catch(e => { selfClosing.delete(id); throw e; }); };
+const PAGES = [[/^https:\/\/market\.m\.taobao\.com\/app\/im\//, 'chat', '旺旺页面'], [/\/my_itaobao\/invoice/, 'inv', '「我的发票」页面'],
+  [/\/pricelist\/batchInvoice/, 'batch', '「批量开票」页面'], [/consumerservice\.taobao\.com|alimebot\.taobao\.com/, 'vip', '淘宝客服页面']];
+const pageOf = url => PAGES.find(([re]) => re.test(url || ''));
+// 插件开的干活页的网址（按 tab.id，session 存储）：标签页关掉以后就读不到它的网址了
+let pageChain = Promise.resolve();
+const notePage = (id, url) => (pageChain = pageChain.then(async () => {
+  const { tabPages = {} } = await chrome.storage.session.get('tabPages');
+  await chrome.storage.session.set({ tabPages: Object.assign({}, tabPages, { [id]: url }) });
+}).catch(() => {}));
+chrome.tabs.onRemoved.addListener(id => {
+  pageChain = pageChain.then(async () => {
+    const { tabPages = {}, chatTabs = [] } = await chrome.storage.session.get(['tabPages', 'chatTabs']);
+    const url = tabPages[id], isChat = chatTabs.includes(id);
+    if (url != null) { const left = Object.assign({}, tabPages); delete left[id]; await chrome.storage.session.set({ tabPages: left }); }
+    // chatTabs 不在这里改（chatHello 那边同时在写，会互相盖掉）：留着的已关页面，下次 openJobTab 跳转失败时自然另开
+    if (selfClosing.delete(id)) return;
+    const p = isChat ? PAGES[0] : pageOf(url);
+    if (!p) return;
+    const why = p[2] + '已被关闭';
+    await chrome.storage.local.set({ jobFail: { stage: 'closed', page: p[1], why, at: Date.now(), host: '' } });
+    bgLog('tab', 'closed', why);
+  }).catch(e => console.warn('[订单分拣] 记录页面关闭失败', e));
+});
 // 主页要开一个干活页（批量开票页、官方客服页、二维码发票页）：照常打开，并记成干活页
 chrome.runtime.onMessage.addListener((m, sender, reply) => {
   if (!(m && m.type === 'openWorkTab' && /^https:\/\/[\w.-]+\.(taobao\.com|tmall\.com|chinatax\.gov\.cn(:\d+)?)\//.test(m.url || ''))) return;
-  chrome.tabs.create({ url: m.url, active: m.active !== false }).then(t => trackTab(t.id).then(() => reply(t.id)), e => reply(String(e)));
+  chrome.tabs.create({ url: m.url, active: m.active !== false }).then(t => { notePage(t.id, m.url); return trackTab(t.id).then(() => reply(t.id)); }, e => reply(String(e)));
   return true;
 });
 
@@ -114,9 +143,10 @@ chrome.runtime.onMessage.addListener((m, sender, reply) => {
       const { workTabs: ids = [] } = await chrome.storage.session.get('workTabs');
       const t0 = await chrome.tabs.get(old).catch(() => null);
       const same = t0 && (!t0.url || t0.url.split(/[?#]/)[0] === m.url.split(/[?#]/)[0]);
-      if (t0 && ids.includes(old) && same) { try { await chrome.tabs.remove(old); } catch (e) { /* 用户已经关了 */ } }
+      if (t0 && ids.includes(old) && same) { try { await closeTab(old); } catch (e) { /* 用户已经关了 */ } }
     }
     const t = await chrome.tabs.create({ url: m.url });
+    notePage(t.id, m.url);
     // 旺旺页（还没开着时新开的）不算干活页：它始终只留一个、反复复用，不关
     if (!/^https:\/\/market\.m\.taobao\.com\/app\/im\//.test(m.url)) await trackTab(t.id);
     map[m.url] = t.id;
@@ -135,13 +165,13 @@ chrome.runtime.onMessage.addListener((m, sender, reply) => {
     const { chatTabs = [], chatReload = {} } = await chrome.storage.session.get(['chatTabs', 'chatReload']);
     if (m.type === 'chatHello') {
       let closed = 0;
-      for (const old of chatTabs) if (old !== id) { try { await chrome.tabs.remove(old); closed++; } catch (e) { /* 已经关了 */ } }
+      for (const old of chatTabs) if (old !== id) { try { await closeTab(old); closed++; } catch (e) { /* 已经关了 */ } }
       // 关掉的旧旺旺页可能正在干活（读回复、发消息、按卡片申请）：告诉主页，别让它干等到超时（chatLost）
       if (closed) await chrome.storage.local.set({ chatLost: { at: Date.now(), why: '另开了一个旺旺页，原来正在处理的旺旺页已关闭（旺旺网页版同时只能开一个）' } });
       await chrome.storage.session.set({ chatTabs: [id] });
       return;
     }
-    if (chatTabs.length && chatTabs[chatTabs.length - 1] !== id) { try { await chrome.tabs.remove(id); } catch (e) { /* 同上 */ } return; }
+    if (chatTabs.length && chatTabs[chatTabs.length - 1] !== id) { try { await closeTab(id); } catch (e) { /* 同上 */ } return; }
     if (Date.now() - (chatReload[id] || 0) < 60000) return;
     await chrome.storage.session.set({ chatReload: Object.assign({}, chatReload, { [id]: Date.now() }) });
     await chrome.tabs.reload(id);
@@ -157,7 +187,7 @@ chrome.runtime.onMessage.addListener((m, sender, reply) => {
   workTabs(() => null).then(ids => {
     const ok = ids.includes(sender.tab.id) || /^https:\/\/[\w.-]+\.chinatax\.gov\.cn(:\d+)?\//.test(url)
       || /^https:\/\/invoice-ua\.taobao\.com\/e-invoice\//.test(url);
-    return ok ? chrome.tabs.remove(sender.tab.id).then(() => reply(true)) : reply(false);
+    return ok ? closeTab(sender.tab.id).then(() => reply(true)) : reply(false);
   }).catch(e => reply(String(e)));
   return true;
 });
@@ -183,8 +213,10 @@ chrome.alarms.onAlarm.addListener(async a => {
   const now = new Date(), today = now.toDateString();
   if (now.getHours() < (autoDaily.hour != null ? autoDaily.hour : 10) || autoLast === today) return;
   // 主页正在「自动处理发票」（homeBusy，主页处理期间每 15 秒写一次）：这次跳过，不记今天已运行，下个钟点再看
-  const { homeBusy } = await chrome.storage.session.get('homeBusy');
+  const { homeBusy, homeActive } = await chrome.storage.session.get(['homeBusy', 'homeActive']);
   if (homeBusy && Date.now() - homeBusy.t < 60000) { bgLog('daily', 'skip', '主页正在处理发票，这次跳过'); return; }
+  // 主页 30 分钟内有人在用（点按钮、按键，主页记 homeActive）：不打扰，推迟到下一次检查（手动跑完「自动处理发票」会记今天已运行）
+  if (homeActive && Date.now() - homeActive.t < 30 * 60000) { bgLog('daily', 'skip', '主页 30 分钟内有操作，推迟到下一次检查'); return; }
   await chrome.storage.local.set({ autoLast: today });
   // 主页开着：不刷新页面（会丢掉正在弹出的清单、读到的数据），让它自己开始；没开着才在后台新开一个带 #auto 的主页
   const ok = await chrome.runtime.sendMessage({ type: 'autoRun' }).catch(() => false);
@@ -267,7 +299,7 @@ chrome.runtime.onMessage.addListener((m, sender, reply) => {
     if (m.why !== 'stopped' && m.why !== 'verify' && (m.nos || []).length) {
       await focusHome().catch(e => console.warn('[订单分拣] 切回主页失败', e));
       const ids = await workTabs(() => null);
-      if (ids.includes(sender.tab.id)) await chrome.tabs.remove(sender.tab.id).catch(() => {});
+      if (ids.includes(sender.tab.id)) await closeTab(sender.tab.id).catch(() => {});
     }
     return true;
   }).then(reply, e => reply(String(e)));
@@ -305,7 +337,7 @@ chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
       const id = await chrome.downloads.download({ url, filename: '订单分拣-发票/' + name, conflictAction: 'uniquify' });
       byUs[id] = Object.assign({}, j, { name });
       pending[id] = byUs[id]; keep();
-      chrome.tabs.remove(tabId);
+      closeTab(tabId).catch(() => {});
     } catch (e) { console.warn('[订单分拣] 保存 PDF 失败', e); }
   });
 });

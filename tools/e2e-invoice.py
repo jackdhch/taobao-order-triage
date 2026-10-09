@@ -842,6 +842,14 @@ def run(p, tmp):
     skipped = wait_until(app, lambda: daily('skip'), 70)
     check(bool(skipped) and store('autoLast') == '' and app.evaluate('window.__mark') == 1, '主页正忙：这次跳过，不记今天已运行，也不刷新主页', store('autoLast'))
     app.evaluate("chrome.storage.session.remove('homeBusy')")
+    # 主页 30 分钟内有人操作过（点按钮、按键）：推迟到下一次检查，不打扰正在用的人
+    app.evaluate("chrome.storage.session.set({ homeActive: { t: Date.now() } })")
+    t_b = app.evaluate('Date.now()')
+    app.evaluate("chrome.alarms.create('daily', { when: Date.now() + 300, periodInMinutes: 60 })")
+    busy2 = wait_until(app, lambda: [e for e in (store('autoLog') or []) if e.get('src') == 'background' and e.get('stage') == 'daily' and e.get('ev') == 'skip'
+                                     and e.get('t', 0) >= t_b and '30 分钟内有操作' in e.get('msg', '')], 70)
+    check(bool(busy2) and store('autoLast') == '' and app.evaluate('window.__mark') == 1, '主页 30 分钟内有操作：推迟到下一次检查，不记今天已运行', busy2)
+    app.evaluate("chrome.storage.session.remove('homeActive')")
     n0 = len(ctx.pages)
     app.evaluate("chrome.alarms.create('daily', { when: Date.now() + 300, periodInMinutes: 60 })")
     t = wait_until(app, lambda: '每天自动刷新发票情况' in app.inner_text('#toast') and app.inner_text('#toast'), 70)
@@ -1026,6 +1034,44 @@ def part17(ctx, app, tmp, pdfs, dl_dir):
           '旺旺页改版、消息一条都读不出来：不覆盖这家上次的结果，记为读取失败（写明可能改版）', {'失败': cs2.get('failed'), '上次': before.get('at'), '这次': after.get('at')})
     check(row17('W3').get('st') == '卖家已发送文件', '读不出来的那家仍按上次结果显示「卖家已发送文件」，没有退回「需向卖家索要」', row17('W3'))
     chat_ls("localStorage.removeItem('mockNoTime')")
+
+    print('\n[17d] 要读 5 家、左侧会话列表里一家都没有（2026-10-09 实测：2 秒就结束、读到 0 个、也没写原因）：知道旺旺名的按网址打开读到，不知道的每家写明原因')
+    # 三家上次按旺旺名读过（会话名就是旺旺名，上次的结果里有这三个会话），这次不在左侧列表里；两家不知道卖家旺旺名。
+    # 以前：拿上次结果里的会话名当「已读」跳过前三家，后两家悄悄丢掉 → 读到 0 个、failed 为空
+    fake = [{'no': '5190000000000000207', 'shop': '某某虚构杜邦线店', 'nick': 'nick207', 'st': 'asked'}, {'no': '5190000000000000208', 'shop': '某某虚构硅胶线店', 'nick': 'nick208', 'st': 'asked'},
+            {'no': '5190000000000000209', 'shop': '某某虚构轴承店', 'nick': 'nick209', 'st': 'asked'},
+            {'no': '5199000000000000001', 'shop': '某某虚构无名店一', 'nick': '', 'st': 'asked'}, {'no': '5199000000000000002', 'shop': '某某虚构无名店二', 'nick': '', 'st': 'asked'}]
+    chat_ls("localStorage.setItem('mockHideList', '1')")
+    app.evaluate('''() => chrome.storage.local.get('chatScan').then(r => { const c = r.chatScan || { convs: {} };
+        for (const n of ['nick207', 'nick208', 'nick209']) c.convs[n] = { at: 1, orders: [], first: '', asks: [], files: [], images: [], email: [], cards: [] };
+        return chrome.storage.local.set({ chatScan: Object.assign({}, c, { at: 1 }) }); })''')
+    app.wait_for_timeout(1500)                                   # 主页看到 chatScan 变了会重写 invWant：等它写完再放这 5 家
+    app.evaluate('f => chrome.storage.local.get("invWant").then(r => chrome.storage.local.set({ invWant: Object.assign({}, r.invWant, { chat: f, chatSince: "2026-08-01" }) }))', fake)
+    app.evaluate("chrome.storage.local.set({ autoLog: [] })")
+    t_s = time.time()
+    cs = scan_once()
+    print(f'  扫描用时 {time.time() - t_s:.0f} 秒')
+    convs = cs.get('convs') or {}
+    check(cs.get('read') == 3 and all((convs.get(n) or {}).get('at', 0) > 1 for n in ('nick207', 'nick208', 'nick209')),
+          '上次读过、这次不在左侧列表里的三家：按旺旺名打开网址读到了（不依赖左侧列表）', {'read': cs.get('read'), 'at': {n: (convs.get(n) or {}).get('at') for n in ('nick207', 'nick208', 'nick209')}})
+    fl = {f.get('name'): f.get('why', '') for f in cs.get('failed', [])}
+    check(set(fl) == {'某某虚构无名店一', '某某虚构无名店二'} and all('未读到卖家旺旺名' in w for w in fl.values()),
+          '不知道旺旺名、又不在左侧列表里的两家：每家写进 chatScan.failed，附原因', cs.get('failed'))
+    lg = [e for e in (store('autoLog') or []) if e.get('stage') == 'scan' and e.get('ev') == 'skip']
+    check(sorted(e['msg'].split(' ')[0] for e in lg) == ['某某虚构无名店一', '某某虚构无名店二'], '调试日志里每家没读成的店一条 scan skip <店名> <原因>', [e.get('msg') for e in lg])
+    # 主页这一段（用主页自己的清单）：列表里一家都没有时照样按旺旺名读；没读成的写明「未能读取 N 家：原因」，发票表标红
+    want = app.evaluate('__otDev.want()') or {}
+    no_nick = [o for o in want.get('chat', []) if not o.get('nick')]
+    text = app.evaluate('__otDev.chatStage().then(r => r.text)')
+    cs2 = store('chatScan') or {}
+    covered = {no for f in cs2.get('failed', []) for no in f.get('nos', [])}
+    none = {no for f in cs2.get('none', []) for no in f.get('nos', [])}
+    check(re.search(r'未能读取 \d+ 家：', text or '') and all(o['no'] in (none if o.get('st') == 'ask' else covered) for o in no_nick),
+          '主页这一段（旺旺页沿用上一段留下的页面）写「未能读取 N 家：原因」；不知道旺旺名、联系过的单在未能读取的清单里，还没联系过的记为「尚未联系过、没有会话」（不算失败）',
+          {'结果': text, '没有旺旺名的单': [(o['no'], o.get('st')) for o in no_nick], 'none': sorted(none)})
+    shown = [row17(k).get('st') for k in ('W2',)]
+    check(shown == ['旺旺会话未能读取'], '没读成的单在发票表里是红色「旺旺会话未能读取」', shown)
+    chat_ls("localStorage.removeItem('mockHideList')")
 
 
 def main():

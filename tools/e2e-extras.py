@@ -226,6 +226,7 @@ def run(p, tmp):
     red = app.evaluate("[...document.querySelectorAll('.inv-table .st.tone-bad')].map(s => s.closest('tr').innerText.match(/\\d{19}/)[0])")
     check(red == ['5195000000000000001'], '准备好的数据：发票表里只有一单标红（抬头不符）', red)
     app.evaluate('() => { __otDev.tmo = { sync: 4000 }; }')
+    app.evaluate("chrome.storage.local.set({ autoLast: '' })")
     app.click('#summary [data-flow="inv-run"]')
     prog = wait_until(app, lambda: (t := app.inner_text('#summary')) and '第 2 / 9 段：刷新淘宝开票记录' in t and re.search(r'已等 \d+ 秒', t) and t, 15) or ''
     check(bool(prog), '处理中显示「第 2 / 9 段：刷新淘宝开票记录 · 等什么 · 已等几秒」', app.inner_text('#summary')[:200])
@@ -249,7 +250,10 @@ def run(p, tmp):
           'autoLog 记下了这一段超时，以及之后各段和结束', evs)
     tabs = app.evaluate('chrome.tabs.getCurrent().then(t => t.active)')
     check(tabs, '处理结束后主页切回前台')
+    check(app.evaluate("chrome.storage.local.get('autoLast').then(r => r.autoLast)") == app.evaluate('new Date().toDateString()'),
+          '手动「自动处理发票」正常做完：记成今天已刷新，当天的每天自动刷新不再启动')
     blocked[:] = [u for u in blocked if 'taobao.com' not in u]      # 上面「自动处理发票」去开的淘宝页面（离线，全被拦下）
+    part5d(ctx, app, blocked)
 
     print('\n[5c] 界面：出错提示不自动消失；发票表为空时写明原因；示例数据不去淘宝页面上处理')
     bad_csv = tmp / '缺商品名.csv'
@@ -300,6 +304,82 @@ def run(p, tmp):
     check(not errors, '页面没有报错', errors)
     check(not [u for u in blocked if 'favicon' not in u] and not sent, '除了假图片，没有别的网络请求', blocked[:5])
     ctx.close()
+
+
+def part5d(ctx, app, blocked):
+    print('\n[5d] 每天自动刷新不挡用户：用户一操作就停掉它；手动处理进行中才拦，提示写明在等什么、可「停止」；干活页被关掉这一段立即结束')
+    O1 = '5195000000000000001'
+    log = lambda: [(e.get('stage'), e.get('ev'), e.get('msg')) for e in app.evaluate('chrome.storage.local.get("autoLog").then(r => r.autoLog || [])')]
+    run = lambda: app.evaluate('__otDev.run()')
+    toast = lambda: app.evaluate("(() => { const t = document.getElementById('toast'); return t.hidden ? '' : t.innerText; })()")
+    last = lambda: app.evaluate("chrome.storage.local.get('autoLast').then(r => r.autoLast)")
+    at_sync = lambda: wait_until(app, lambda: (x := run()) and x.get('cur') == '刷新淘宝开票记录' and x, 30)
+    app.evaluate('() => { __otDev.tmo = { sync: 120000 }; }')         # 「我的发票」页离线打不开：这一段会一直等，正好用来测
+    app.evaluate("chrome.storage.local.set({ autoLast: 'Mon Jan 01 2001', autoLog: [] })")
+
+    # 1 每天自动刷新正在等「我的发票」页，用户点了一单的「换开发票」
+    app.evaluate('() => { __otDev.daily(); }')
+    r = at_sync()
+    bar = app.inner_text('.read-bar[data-bar="inv"]') if r else ''
+    check(bool(r) and r['quiet'] and '每天自动刷新发票情况' in bar and '停止' in bar, '每天自动刷新进行中：进度写明是「每天自动刷新发票情况」，后面有「停止」', bar)
+    n0 = len(ctx.pages)
+    app.click(f'.inv-table tbody tr:has-text("{O1}") button[data-act]')
+    done = wait_until(app, lambda: not run()['busy'] and len(ctx.pages) > n0, 15)
+    ev = log()
+    check(bool(done) and ('daily', 'stop', '用户操作，停止每日刷新') in ev and any(s == 'row-inv' for s, e, m in ev),
+          '用户点逐单操作：停掉每天自动刷新（日志 daily stop 用户操作，停止每日刷新），接着打开这一单要的页面', ev[-6:])
+    check('请等它结束' not in toast() and '正在自动处理' not in toast(), '没有「请等它结束后再操作」的拦截提示', toast())
+    check(last() == '' and app.locator('.read-bar[data-bar="inv"]').count() == 0,
+          '被停掉的每天自动刷新：清掉「今天已运行」（用户空闲后下一次检查再跑），不留提示条', last())
+
+    # 2 每天自动刷新进行中，用户点「自动处理发票」：停掉每天自动刷新，开始用户这一轮
+    app.evaluate('() => { __otDev.daily(); }')
+    at_sync()
+    app.click('#summary [data-flow="inv-run"]')
+    r = wait_until(app, lambda: (x := run()) and x['busy'] and not x['quiet'] and x.get('cur') == '刷新淘宝开票记录' and x, 30)
+    check(bool(r), '每天自动刷新进行中点「自动处理发票」（按钮可点）：停掉每天自动刷新，开始用户的这一轮', run())
+
+    # 3 手动处理进行中点逐单操作：拦下，写明在等哪一段，一行内给「停止」
+    n0 = len(ctx.pages)
+    app.click(f'.inv-table tbody tr:has-text("{O1}") button[data-act]')
+    app.wait_for_timeout(600)
+    t = toast()
+    check('正在自动处理发票（第 2 / 9 段：刷新淘宝开票记录）。等它结束，或' in t and app.locator('#toast #toast-act').count() == 1
+          and app.inner_text('#toast-act') == '停止' and len(ctx.pages) == n0, '手动「自动处理发票」进行中点逐单操作：提示写明在等哪一段，一行内给「停止」，不打开页面', t)
+    app.click('#toast-act')
+    st = wait_until(app, lambda: not run()['busy'], 10)
+    fin = app.inner_text('#summary')
+    check(bool(st) and '发票处理已停止' in fin and '刷新淘宝开票记录：已停止' in fin and ('run', 'stop', '用户点「停止」') in log(),
+          '点提示里的「停止」：这一轮停下（不再等、后面几段不做），总结写「已停止」', fin[:300])
+    check(last() != app.evaluate('new Date().toDateString()'), '手动这一轮是停下的、不是做完的：不记今天已刷新', last())
+
+    # 4 步骤条下方进度里的「停止」
+    app.click('#summary [data-flow="inv-run"]')
+    at_sync()
+    app.click('#summary [data-flow="inv-stop"]')
+    st = wait_until(app, lambda: not run()['busy'], 10)
+    check(bool(st) and '发票处理已停止' in app.inner_text('#summary'), '进度后面的「停止」：停下这一轮')
+
+    # 5 主页在等「我的发票」页时这一页被关掉：这一段立即结束、写明原因，接着下一段
+    app.click('#summary [data-flow="inv-run"]')
+    at_sync()
+    app.wait_for_timeout(1500)
+    tid = app.evaluate("chrome.storage.session.get('jobTabs').then(r => (r.jobTabs || {})['https://i.taobao.com/my_itaobao/invoice'])")
+    t_c = time.time()
+    if tid is not None:
+        app.evaluate('id => chrome.tabs.remove(id)', tid)            # 相当于用户关掉了这一页
+    gone = wait_until(app, lambda: next((m for s, e, m in log() if s == 'sync' and e == 'fail' and '「我的发票」页面已被关闭' in (m or '')), None), 15)
+    check(tid is not None and bool(gone) and time.time() - t_c < 10, '「我的发票」页被关掉：这一段几秒内结束，写明「「我的发票」页面已被关闭」（不再等到超时）',
+          {'tab': tid, '结果': gone, '用时': round(time.time() - t_c)})
+    nxt = wait_until(app, lambda: (x := run()) and x.get('cur') not in (None, '刷新淘宝开票记录') and x, 15) or app.locator('#dlg-list[open]').count()
+    check(bool(nxt), '接着做下一段', run())
+    if app.locator('#dlg-list[open]').count():
+        app.click('#list-ok')
+    wait_until(app, lambda: not run()['busy'], 30)
+    app.evaluate('() => { __otDev.tmo = null; }')
+    for pg in [pg for pg in ctx.pages if pg is not app and 'chrome-extension://' not in pg.url]:
+        pg.close()
+    blocked[:] = [u for u in blocked if 'taobao.com' not in u]
 
 
 def main():

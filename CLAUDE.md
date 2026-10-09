@@ -23,7 +23,7 @@ WSL 里有 python3 3.12、node 18、git；在 WSL 里用 `python3`，不要用 `
 - **能区分退款**：导出表里的「交易成功」不代表没退款（部分退款看不出来），退款要靠抓取的逐件文字或手动标记
 - **界面设计准则**（用户 2026-10-07 定，改界面前先对照）：① 一条主线，同一件事只有一个入口、一步里不给几条路选，可选功能才进「更多」；
   ② 傻瓜使用，新人只看插件就能做完；③ 能自动化的都自动化；④ 不写大段说明（每步一行 ≤ 30 字，细节放 title）；
-  ⑤ 用颜色和标签区分状态；⑥ 只切换视图、滚动页面的按钮一律不要。
+  ⑤ 用颜色和标签区分状态；⑥ 只切换视图、滚动页面的按钮一律不要（例外：第 2 步列表上方的分类筛选，用户 2026-10-09 要的）。
   主线四步：读取订单 → 核对商品 → 处理发票 → 整理报销文件，每步一个主按钮；「更多」只有：导入已整理的发票文件夹、导入订单表、备份数据、从备份恢复
 - **对外操作要用户确认**：提交开票申请、给卖家发消息这类会改变淘宝上状态的动作，先列清单、用户点确认才执行
   （「自动处理发票」把要平台申请 / 按入口申请 / 向卖家索要 / 请客服督促的合成一张分组清单，只确认一次）；
@@ -42,12 +42,13 @@ WSL 里有 python3 3.12、node 18、git；在 WSL 里用 `python3`，不要用 `
 ```
 manifest.json              Chrome 扩展说明（MV3）。项目根目录本身就是扩展：「加载已解压的扩展程序」选根目录
 extension/background.js    点扩展图标切到已开着的主页（focusHome，没有才新开）；下载改名记 dlDone（带 attach 的附件下载记 attDone）；派活开的标签页编号记在 session 存储（jobTabs、workTabs）；
-                           旺旺页只留一个（顶掉正在干活的旧页时写 chatLost）；每天自动处理：主页开着发 autoRun（不刷新主页），主页正忙（homeBusy）就跳过
+                           旺旺页只留一个（顶掉正在干活的旧页时写 chatLost）；每天自动处理：主页开着发 autoRun（不刷新主页），主页正忙（homeBusy）或 30 分钟内有操作（homeActive）就跳过；
+                           干活页（tabPages / chatTabs）被用户关掉写 jobFail { stage: 'closed', page }（插件自己关的经 closeTab 记进 selfClosing，不算）
 extension/taobao.js        淘宝订单页的内容脚本：只在有有效的 readJob 且向后台领到活时自动全部读取（进度 readProgress、结束 readDone），
                            结果写回 chrome.storage.local 的 scraped；用户自己打开订单页时什么都不做（不出面板）
 extension/invoice-list.js  「全部发票」页（i.taobao.com/my_itaobao/invoice）：同步三个标签的开票记录 → invSync；按 dlJobs 点「下载到本地」
 extension/chat.js          旺旺网页版（market.m.taobao.com/app/im，内容在 iframe chat-core）：扫描卖家回复 → chatScan（开票卡片单独记 cards，不算图片；
-                           没读成的会话记 failed，读不出消息时不覆盖上次结果）；自动发送只在主页心跳 askBeat 编号对得上时做，等用户最多 3 分钟；
+                           没读成的会话记 failed，读不出消息时不覆盖上次结果；知道旺旺名的不在左侧列表也按网址打开，收尾核对每家要么读到要么进 failed，日志 scan skip）；自动发送只在主页心跳 askBeat 编号对得上时做，等用户最多 3 分钟；
                            按 dlJobs 点「下载文件」；按 cardRun 点开票卡片的「去申请」
 extension/chat-main.js     旺旺页自身环境（world MAIN）：包一层 window.open，记下页面要新开的开票申请页地址（被弹窗拦截时由后台打开）
 extension/apply-card.js    淘宝「开具发票」/「发票详情」页（invoice-ua.taobao.com/e-invoice/…）：按 cardJobs 核对订单号、抬头后提交，结果写 cardResult / cardApplied；
@@ -59,7 +60,7 @@ extension/vip.js           淘宝官方客服（ai.alimebot.taobao.com）：按 
 extension/qr.js            税务局电子发票页（*.chinatax.gov.cn，卖家发的二维码）：核对购买方、税号、价税合计（应报金额，少 1 元以内放行）后下载 PDF；没通过写 qrFail
 extension/detail.js        订单详情页（trade.taobao.com/trade/detail、天猫重定向后的 trade.tmall.com/detail）：读卖家旺旺名、逐件退款、支付宝交易号和付款时间；
                            按主页发的 otShot 逐段滚动（第二段起藏起固定栏），截图由主页 captureVisibleTab 截、拼接（manifest 的 <all_urls> 只为这个）
-extension/panel.js         各淘宝页脚本共用：右下角面板（otPanel）、领主页排的活（otTakeJob：invJobs + invClaim_*）、otLog 写本机调试日志、
+extension/panel.js         各淘宝页脚本共用：右下角面板（otPanel）、领主页排的活（otTakeJob：invJobs + invClaim_*，做完记 done；旺旺页 takeover 接手被跳转掉的旧页面没做完的活）、otLog 写本机调试日志、
                            otFail 干活没办成时写 jobFail（主页正等这一段就立即结束、红条写原因）并把本页切到前台（不用 alert）
 extension/home.js          插件运行的每个淘宝页面上的小按钮「← 订单分拣」（一般在右上角，旺旺页在左下角）：发 goHome，后台切回 / 新开主页
 js/invoice.js              发票纯逻辑：税号校验、发票文件名、聊天分析（docs = 卖家发来的表格 / Word）、每单状态、下载文件名、
@@ -74,10 +75,10 @@ js/xlsx-lite.js            零依赖 xlsx/csv 读取（DecompressionStream 解 z
 js/normalize.js            列名别名 → 统一订单结构；一单多件续行合并；抓取数据按订单号合并；退款判断
 js/classify.js             关键词打分 + 同店铺/同商品记忆；classifyAll 两遍扫描（补邮费链接跟随店铺）；suggest 根据手动判断推荐增删词
 js/app.js                  界面、状态（localStorage）、读取订单、导入订单表、键盘操作。界面是一条线的 4 步（flowSteps：每步 title / hint / acts，
-                           选中的步骤决定下方显示商品列表还是发票表）；核对商品一张列表（visibleRows 待定排最前），「确认核对完成」= confirmSort；
+                           选中的步骤决定下方显示商品列表还是发票表）；核对商品一张列表（visibleRows 待定排最前），上方分类筛选 view.cat（待定 / 实验室 / 个人 / 全部），主按钮「这 N 件都是…，确认」= confirmCat，「全部」时「确认核对完成」= confirmSort；
                            处理发票一个按钮 runInvoice：九段依次做（stage：读订单详情 → 刷新开票记录 → 读旺旺回复 → 下载并核对 PDF → confirmGroups 一次确认
                            （插件做不了的「需处理」单也列出）→ doAsk / runCards / doVip / doApply），每段有超时、超时或出错写明原因接着下一段，
-                           进度（第几段、等什么、已等多久）和结束时的逐段总结在步骤条下方（statusBar）；每段写进 autoLog（alog，后台排队追加，最多 300 条，不进备份）；
+                           进度（第几段、等什么、已等多久，带「停止」= stopRun）和结束时的逐段总结在步骤条下方（statusBar）；每天自动刷新（J.quiet）遇到用户操作就停（freeForUser），手动的一轮做完记 autoLast；每段写进 autoLog（alog，后台排队追加，最多 300 条，不进备份）；
                            发票表「操作」列按状态一个主要操作（rowAction / rowAct：下载、催卖家、找客服督促、索要发票、申请开票、按入口申请、换开发票、联系卖家）；
                            window.__otDev 只给离线测试单独触发其中一段、逐单操作或改短时限（tmo）；读取进度也在步骤条下方，
                            没有订单时显示「开始使用」卡片（renderGuide），顶上进度条（renderDash，只显示不能点），
@@ -93,13 +94,13 @@ scraper/taobao-scraper.js  在淘宝「已买到的宝贝」页控制台运行�
 tools/eval.mjs             node 评估分类效果：node tools/eval.mjs [订单表] [labels.json]
 tools/selftest.mjs         自检（虚构数据）：合并只补图片/退款/链接、不新增订单；关键词建议
 tools/mock-taobao.html     模拟订单页（数据虚构）：无参数 = 旧版结构（测回退解析）；?v=new = 2026-09 真实新版结构
-tools/e2e-mock.py          离线端到端测试：主页「从淘宝读取订单」（真实网址的请求回应模拟页）→ 自动翻页、关页、结果；界面准则检查（四步、
+tools/e2e-mock.py          离线端到端测试：主页「从淘宝读取订单」（真实网址的请求回应模拟页）→ 自动翻页、关页、结果；核对商品的分类筛选；界面准则检查（四步、
                            每步至多一个主按钮、没有只滚动的按钮、「更多」四项）；导入订单表合并；新旧版模拟页逐单核对（不联网）；
                            认不出「下一页」、没读出商品的订单不算删进回收站；「开始使用」卡片的读取进度颜色
 tools/e2e-invoice.py       离线：刷新开票记录、旺旺扫描（含「安全提醒」系统卡片）、下载改名（含本机假阿里云 https）、自动处理发票分段进度和只确认一次、
                            autoLog、操作列（催卖家只填不发、单单找客服督促）、图例不裁字、回主页按钮；自动发送不带用户自己打的字、残留队列不接管；
-                           每天自动处理不打断；[17] 下载的票核对（合开、挪单、不是发票、少 1 元以上、券前价、部分退款）和整理后记为已整理、读旺旺失败不退回索要
-tools/e2e-extras.py        离线：选文件夹读发票 PDF、二维码、备份恢复（autoLog 不进备份；清除本机数据前自动备份）、自动处理发票某段超时 + 只有一单需处理；
+                           每天自动处理不打断（主页正忙、30 分钟内有操作都推迟）；[17d] 要读的店都不在左侧列表；[17] 下载的票核对（合开、挪单、不是发票、少 1 元以上、券前价、部分退款）和整理后记为已整理、读旺旺失败不退回索要
+tools/e2e-extras.py        离线：选文件夹读发票 PDF、二维码、备份恢复（autoLog 不进备份；清除本机数据前自动备份）、自动处理发票某段超时 + 只有一单需处理；[5d] 每天自动刷新给用户操作让路、「停止」、干活页被关掉；
                            出错提示不自动消失、发票表为空写明原因、两个主页不互相覆盖、示例数据不处理发票
 tools/e2e-reimburse.py     离线：报销规范——低值品标签与切换、没填姓名先开设置、超过 1000 元自动截订单页面（模拟详情页分段拼接）、3D 打印订单的消息末尾追加一句、
                            缺材料标签与「手动添加发票 / 附件」、整理结构（README.txt、报销清单.xlsx、用途说明 docx 用 openpyxl / python-docx 读回）、

@@ -105,8 +105,14 @@ window.otSend = function (m, ms) {
 // 主页排的活：invJobs = { 活的种类: 排活时间 }。页面打开时（或已开着时）领走 2 分钟内、属于本页的活。
 //   - 只有正显示在前台的页面才领：这类页面在后台标签里常常渲染成一片空白（2026-09 实测），读出来是空的
 //   - 可能同时开着两个同样的页面：先写「我领了」，等一下再读回来，确认是自己领到的才干，免得两个页面重复翻账号
-window.otTakeJob = function (kinds, run) {
-  const me = Math.random().toString(36).slice(2);
+//   - opts.takeover（旺旺页：同一时间只有一个）：领了活却没做完的是本页加载之前的旧页面（被跳转、刷新掉了），旧页面已经没了，本页接着做。
+//     以前旧页面在跳走前的一瞬间领走了新活，新页面看到「已有页面领了」就不做，主页干等到超时（2026-10-09 离线复现）
+//   - 做完（或交出去）后在领取记录上记 done，之后再打开的页面不会把做完的活再做一遍
+window.otTakeJob = function (kinds, run, opts) {
+  const me = Math.random().toString(36).slice(2), born = Date.now();
+  // 要离开的页面不再领活（跳转、刷新开始时就停）
+  addEventListener('beforeunload', () => { window.__otClosing = true; });
+  addEventListener('pagehide', () => { window.__otClosing = true; });
   const take = async jobs => {
     if (document.visibilityState !== 'visible' || window.__otClosing) return;      // 马上要关的页面不再领活
     for (const kind of kinds) {
@@ -114,11 +120,15 @@ window.otTakeJob = function (kinds, run) {
       if (!at || Date.now() - at > 120000) continue;
       const key = 'invClaim_' + kind;
       const c = (await chrome.storage.local.get(key))[key];
-      if (c && c.at === at) continue;                     // 这份活已经有页面领了
-      await chrome.storage.local.set({ [key]: { at, by: me } });
+      // 这份活已经有页面领了（旺旺页：领活的旧页面已经不在、活又没做完的除外）
+      if (c && c.at === at && !(opts && opts.takeover && !c.done && c.by !== me && (c.t || 0) < born)) continue;
+      await chrome.storage.local.set({ [key]: { at, by: me, t: Date.now() } });
       await new Promise(r => setTimeout(r, 400));
-      if (((await chrome.storage.local.get(key))[key] || {}).by !== me) continue;
-      run(kind, true);
+      if (((await chrome.storage.local.get(key))[key] || {}).by !== me || window.__otClosing) continue;
+      Promise.resolve(run(kind, true)).catch(() => {}).then(async () => {
+        const x = (await chrome.storage.local.get(key))[key];
+        if (x && x.by === me && x.at === at) await chrome.storage.local.set({ [key]: Object.assign({}, x, { done: true }) });
+      }).catch(() => {});
     }
   };
   const check = () => chrome.storage.local.get('invJobs').then(r => take(r.invJobs));

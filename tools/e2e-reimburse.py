@@ -142,21 +142,24 @@ def run(p, tmp):
 
     print('\n[2] 第 2 步「核对商品」：低值品标签（单价超过 200 元）；判断不出的黄色「是否低值品？」排最前，点标签切换并记住')
     app.click('.flow li[data-step="1"]'); app.wait_for_timeout(300)
+    app.click('#cat-seg [data-cat="all"]'); app.wait_for_timeout(200)       # 分类筛选选「全部」：实验室、个人一起看
     pills = app.evaluate('''() => Object.fromEntries([...document.querySelectorAll('.line')].map(l => [l.querySelector('.title').textContent.trim(),
-        (l.querySelector('[data-low]') || {}).textContent || '']))''')
+        l.querySelector('.low-ask') ? '是否低值品？' : (l.querySelector('[data-low]') || {}).textContent || '']))''')
     check(pills.get('数字万用表') == '低值品' and pills.get('电子秤') == '低值品', '数字万用表 452、电子秤 432.20：深色「低值品」', pills)
-    check(pills.get('碳纤维板 CNC 加工 3mm') == '耗材' and pills.get('杜邦线 公对母 40P') == '', '碳纤维板 1200（耗材词）：「耗材」；200 元以下的没有标签', pills)
+    check(pills.get('碳纤维板 CNC 加工 3mm') == '非低值品' and pills.get('杜邦线 公对母 40P') == '', '碳纤维板 1200（耗材词）：「非低值品」；200 元以下的没有标签', pills)
     check(pills.get('某某说不清的器件') == '是否低值品？' and pills.get('某某说不清的部件') == '是否低值品？', '关键词判断不出的：黄色「是否低值品？」', pills)
     first2 = app.evaluate("[...document.querySelectorAll('.line')].slice(0, 2).map(l => l.className + ' ' + l.querySelector('.title').textContent.trim())")
     check(all('is-uns' in x and '说不清' in x for x in first2), '待确认的排在最前、整行标黄（和待定一样）', first2)
     check(app.is_disabled('#summary [data-flow="sort-done"]') and '是否低值品' in app.inner_text('#summary .fd-hint'),
           '还有待确认的时「确认核对完成」不能点，提示一行点黄色标签', app.inner_text('#summary .fd-hint'))
-    app.click('.line:has-text("某某说不清的器件") [data-low]'); app.wait_for_timeout(300)
+    asks = app.evaluate('''() => [...document.querySelector('.line .low-ask').querySelectorAll('button')].map(b => b.textContent + '|' + (b.title ? 'tip' : ''))''')
+    check(asks == ['是|tip', '否|tip'], '待确认时直接给「是 / 否」两个选项，都有悬停说明', asks)
+    app.click('.line:has-text("某某说不清的器件") [data-low][data-lowv="low"]'); app.wait_for_timeout(300)
     t1 = app.inner_text('.line:has-text("某某说不清的器件") [data-low]')
     app.click('.line:has-text("某某说不清的器件") [data-low]'); app.wait_for_timeout(300)
     t2 = app.inner_text('.line:has-text("某某说不清的器件") [data-low]')
     lv = S().get('lowval') or {}
-    check(t1 == '低值品' and t2 == '耗材' and list(lv.values()) == ['no'], '点一下变「低值品」，再点变「耗材」；按商品标题记住（S.lowval）', (t1, t2, lv))
+    check(t1 == '低值品' and t2 == '非低值品' and list(lv.values()) == ['no'], '点「是」变「低值品」，再点标签变「非低值品」；按商品标题记住（S.lowval）', (t1, t2, lv))
 
     print('\n[3] 没填姓名时点「整理报销文件」：先打开设置，顶上一行提示，不选文件夹；填好姓名学号')
     app.click('.flow li[data-step="3"]'); app.wait_for_timeout(300)
@@ -219,7 +222,8 @@ def run(p, tmp):
     check(any(t.startswith('低值品|') and 't-low' in t for t in r4.get('tags', [])) and '需先开低值票' in r4.get('detail', ''), 'O4 数字万用表：深色「低值品」，下面一行「需先开低值票」', r4)
     check(any(t.startswith('需补支付记录|') and 't-mat' in t for t in r3.get('tags', [])) and not any('需订单截图' in t for t in r3.get('tags', []))
           and r3.get('add') == '手动添加发票 / 附件', 'O3（超过 1000 元，已截图）：橙色「需补支付记录」；次要链接变成「手动添加发票 / 附件」', r3)
-    check(any(t.startswith('是否低值品？') for t in row('O11').get('tags', [])), '待确认的 O11：发票表里也是黄色「是否低值品？」', row('O11'))
+    o11 = app.evaluate('''no => { const tr = [...document.querySelectorAll('.inv-table tbody tr')].find(tr => tr.textContent.includes(no)); const a = tr && tr.querySelector('.low-ask'); return a ? a.textContent : ''; }''', NO['O11'])
+    check(o11 == '是否低值品？是否', '待确认的 O11：发票表里也是黄色「是否低值品？」加「是 / 否」', o11)
     app.set_input_files(f'input[data-inv="attach"][data-no="{NO["O3"]}"]', str(TOOLS / 'fixtures' / 'photo-mock.png'))
     got = wait_until(app, lambda: (a := app.evaluate('no => __otDev.att(no)', NO['O3'])) and any(x['kind'] == '支付记录' for x in a) and a, 10)
     check(bool(got), '选一张截图：自动认作这单缺的「支付记录」附件', got)

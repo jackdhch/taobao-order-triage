@@ -247,6 +247,76 @@ def read_section(ctx, base, eid, mock, watch, tmp):
     a0.close()
 
 
+def sort_filter_section(app, STORE):
+    """第 2 步「核对商品」的分类筛选（用户 2026-10-09）：待定 / 实验室 / 个人 / 全部，主按钮随筛选一次确认这一类"""
+    print('\n[1b] 核对商品的分类筛选：计数、切换后只剩这一类、一次确认这一类里未确认的、撤销整批、确认完自动切到下一类')
+    S = lambda: app.evaluate(f"JSON.parse(localStorage.getItem('{STORE}'))")
+    dec0 = S()['decisions']
+    app.click('.flow li[data-step="1"]'); app.wait_for_timeout(200)      # 停在第 2 步（全部确认后不自动跳到第 3 步）
+    seg = lambda: app.evaluate("[...document.querySelectorAll('#cat-seg [data-cat]')].map(b => [b.dataset.cat, +b.querySelector('b').textContent, b.classList.contains('is-on'), getComputedStyle(b).backgroundColor])")
+    # 每件：[分类标签文字, 是否虚线框（自动判断未确认）, 是否退款]
+    lines = lambda: app.evaluate("""[...document.querySelectorAll('#list .line')].map(l => { const p = l.querySelector('.meta .pill:not(button)');
+        return [p ? p.textContent : '', !!(p && p.classList.contains('auto')), l.classList.contains('is-ref')]; })""")
+    btn = lambda: app.evaluate("(() => { const b = document.querySelector('#summary .flow-acts .btn.primary'); return b ? [b.textContent, b.disabled, b.title, b.dataset.flow] : null; })()")
+    sg = seg()
+    check(app.is_visible('#cat-seg') and [x[0] for x in sg] == ['unsure', 'lab', 'personal', 'all'] and sg[0][2],
+          '第 2 步列表上方一排「待定 / 实验室 / 个人 / 全部」，有待定时默认选「待定」', sg)
+    check(len({x[3] for x in sg}) == 4, '四个筛选颜色各不相同（待定黄、实验室蓝、个人粉）', [x[3] for x in sg])
+    n = {x[0]: x[1] for x in sg}
+    ls = lines()
+    check(len(ls) == n['unsure'] and all(t == '待定' for t, _, _ in ls), f'选「待定」：列表只剩 {n["unsure"]} 件待定', ls[:5])
+    b = btn()
+    check(b and b[1] and '1 / 2' in b[0], '选「待定」时主按钮不可点，写「按 1 / 2 判断」', b)
+    app.click('#cat-seg [data-cat="lab"]'); app.wait_for_timeout(200)
+    ls = lines()
+    check(len(ls) == n['lab'] and all(t == '实验室' and not r for t, _, r in ls), f'选「实验室」：列表只剩 {n["lab"]} 件实验室（不含退款）', ls[:5])
+    auto_n = sum(1 for _, a, _ in ls if a)
+    b = btn()
+    check(b and not b[1] and b[0] == f'这 {auto_n} 件都是实验室，确认' and b[3] == 'sort-cat' and f'以下 {auto_n} 件' in b[2],
+          '主按钮变成「这 N 件都是实验室，确认」，N = 自动判断、未确认的件数，悬停说明列出是哪几件', b)
+    # 先手动把第一件判成个人：它离开「实验室」列表，按钮的件数跟着变
+    app.locator('#list .line .price').first.click(); app.keyboard.press('2'); app.wait_for_timeout(300)
+    moved = S()['decisions']
+    ls2 = lines()
+    check(len(ls2) == n['lab'] - 1, '在「实验室」里按 2 改判个人：这件离开当前列表', (len(ls2), n['lab']))
+    lab_keys = app.evaluate("[...document.querySelectorAll('#list .line')].map(l => l.dataset.key)")
+    n_conf = sum(1 for _, a, _ in ls2 if a)
+    app.click('#summary [data-flow="sort-cat"]'); app.wait_for_timeout(300)
+    d1 = S()['decisions']
+    newly = [k for k in d1 if d1[k] != moved.get(k)]
+    check(len(newly) == n_conf and all(d1[k] == 'lab' for k in newly) and set(newly) <= set(lab_keys),
+          f'点确认：只把当前筛选里 {n_conf} 件未确认的写成「实验室」，个人、待定的不动', (len(newly), n_conf))
+    cur = [x[0] for x in seg() if x[2]]
+    check(cur == ['unsure'], '确认完自动切到下一个还有未确认的分类（还有待定，切到「待定」）', cur)
+    app.keyboard.press('Control+z'); app.wait_for_timeout(300)
+    d2 = S()['decisions']
+    check(d2 == moved and [x[0] for x in seg() if x[2]] == ['lab'], 'Ctrl+Z 一次撤销整批确认，回到「实验室」', [k for k in set(d2) | set(moved) if d2.get(k) != moved.get(k)][:5])
+    # 全部确认：实验室 → 个人 → 待定逐件判完，最后切到「全部」，第 2 步完成
+    app.click('#summary [data-flow="sort-cat"]'); app.wait_for_timeout(300)
+    app.click('#cat-seg [data-cat="personal"]'); app.wait_for_timeout(200)
+    b = btn()
+    check(b and b[0].startswith('这 ') and b[0].endswith('件都是个人，确认'), '选「个人」：主按钮「这 N 件都是个人，确认」', b)
+    app.click('#summary [data-flow="sort-cat"]'); app.wait_for_timeout(300)
+    app.click('#cat-seg [data-cat="personal"]'); app.wait_for_timeout(200)
+    b = btn()
+    check(b and b[0] == '已全部确认' and b[1], '这一类全部确认后再选它：按钮「已全部确认」不可点', b)
+    app.click('#cat-seg [data-cat="unsure"]'); app.wait_for_timeout(200)
+    for _ in range(n['unsure']):
+        app.keyboard.press('1'); app.wait_for_timeout(150)
+    cur = [x[0] for x in seg() if x[2]]
+    st = app.evaluate("[...document.querySelectorAll('.flow li')][1].className")
+    check(cur == ['all'] and 'is-done' in st, '待定都判完、各类都已确认：自动切到「全部」，第 2 步完成', (cur, st))
+    app.click('.flow li[data-step="0"]'); app.wait_for_timeout(200)
+    check(not app.is_visible('#cat-seg'), '切到其他步骤时不显示分类筛选')
+    big = app.evaluate("(() => { const i = document.querySelector('#list .thumb'); return i ? i.getBoundingClientRect().width : 0; })()")
+    app.click('.flow li[data-step="1"]'); app.wait_for_timeout(200)
+    big2 = app.evaluate("(() => { const i = document.querySelector('#list .thumb'); return i ? i.getBoundingClientRect().width : 0; })()")
+    check(big2 >= 96 and big2 > big, '核对商品时商品图放大（96px），方便从上往下扫一眼', (big, big2))
+    # 恢复判断，后面的测试照旧
+    app.evaluate(f"d => {{ const s = JSON.parse(localStorage.getItem('{STORE}')); s.decisions = d; localStorage.setItem('{STORE}', JSON.stringify(s)); }}", dec0)
+    app.reload(); app.wait_for_selector('#main:not([hidden])')
+
+
 def run(p, base, tmp):
     ctx = p.chromium.launch_persistent_context(str(tmp / 'profile'), channel='chromium', headless=True, args=[
         '--disable-extensions-except=' + str(ROOT), '--load-extension=' + str(ROOT),
@@ -310,6 +380,7 @@ def run(p, base, tmp):
     check(app.get_attribute('.flow li.is-cur', 'data-step') == '1' and '核对商品' in app.inner_text('.flow li.is-cur'), '导入后当前步骤是「核对商品」')
     first = app.evaluate("(() => { const l = document.querySelector('#list .line'); return l ? [l.className, l.innerText] : null; })()")
     check(first and 'is-uns' in first[0] and '待定' in first[1], '商品列表里待定的排在最前，整行标黄、带「待定」标签', first)
+    sort_filter_section(app, STORE)
 
     print('\n[2] 新版模拟页：主页排读取任务，订单页自动翻页读取（订单、图片、退款）')
     # 相当于在读取窗口里填「上次报销到 2026-06-30」：只读 07-01 及以后（模拟页全部订单）
@@ -353,6 +424,7 @@ def run(p, base, tmp):
     foot = wait_until(app, lambda: (t := step0()) and f'有图 {img_n} / {all_lines2} 件' in t and t, 5) or step0()
     check(f'有图 {img_n} / {all_lines2} 件' in foot, f'主页显示「有图 {img_n} / {all_lines2} 件」（图全坏的那件不算有图）', foot)
     app.click('.flow li[data-step="1"]'); app.wait_for_timeout(300)
+    app.click('#cat-seg [data-cat="all"]'); app.wait_for_timeout(200)      # 退款的只在「全部」里
     err = app.evaluate("t => { const e = [...document.querySelectorAll('.line')].find(x => x.textContent.includes(t)); const p = e && e.querySelector('.thumb'); return p ? [p.className, p.textContent, getComputedStyle(p).color] : null; }", dead[0])
     check(err and 'err' in err[0] and 'ERROR' in err[1] and err[2] == 'rgb(208, 2, 27)', '图全坏的那件：主页上是红色粗体 ERROR，不是灰色图', err)
     grey = app.evaluate("() => [...document.querySelectorAll('img.thumb')].filter(i => i.complete && i.naturalWidth === 1).map(i => i.src)")

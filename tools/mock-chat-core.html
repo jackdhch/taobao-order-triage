@@ -155,9 +155,11 @@ body{margin:0;font:13px system-ui,"Microsoft YaHei";display:flex;height:100vh;co
     if (draft) document.querySelector('.ww_input pre.edit').textContent = draft;
   }
 
+  // 测试用：localStorage mockHideList = 1 时左侧列表只剩一个不相干的会话（零食铺），要读的店都不在最近会话里（tools/e2e-invoice.py [17d]）
+  const hideAll = !!localStorage.getItem('mockHideList');
   function boot() {
     document.getElementById('app').outerHTML = '<div class="ww_conversation_list">'
-      + CONVS.map((c, i) => c.hidden ? '' : '<div class="conversation-item" data-i="' + i + '"><div class="name">' + esc(c.list || c.name) + '</div></div>').join('') + '</div>'
+      + CONVS.map((c, i) => c.hidden || (hideAll && i > 0) ? '' : '<div class="conversation-item" data-i="' + i + '"><div class="name">' + esc(c.list || c.name) + '</div></div>').join('') + '</div>'
       + '<div class="ww_conversation"><div class="ww_header"><span class="name"></span></div>'
       + '<div class="ww_message"><div class="rc-scrollbars-view"></div></div>'
       // 输入区和真实页面一样（2026-10-03 实测）：.editBox 里一个提示文字 + 可编辑的 pre.edit；发送按钮 button.send-btn
@@ -214,7 +216,7 @@ body{margin:0;font:13px system-ui,"Microsoft YaHei";display:flex;height:100vh;co
       const c = CONVS.find(x => x.name === nick || x.nick === nick);
       if (c) {
         mock.byUrl = (mock.byUrl || []).concat(nick);
-        if (c.hidden) {
+        if (c.hidden || (hideAll && CONVS.indexOf(c) > 0)) {
           c.hidden = false;
           const el = document.createElement('div'); el.className = 'conversation-item'; el.dataset.i = CONVS.indexOf(c);
           el.innerHTML = '<div class="name">' + esc(c.name) + '</div>';

@@ -480,7 +480,7 @@ def gif_overview(page, home):
 
 
 def gif_sorting(page, home):
-    """核对商品：按 1 / 2 判断两件待定 → 「确认核对完成」 → 进度和步骤条更新"""
+    """核对商品：按 1 / 2 判断两件待定 → 自动切到「实验室」→「这 N 件都是实验室，确认」→「个人」同样确认 → 进度和步骤条更新"""
     page.set_viewport_size({'width': GW, 'height': GH})
     reset(page, home)
     load_sample(page, home)
@@ -492,8 +492,9 @@ def gif_sorting(page, home):
     r.key('2', '判为个人', hold=1600)
     r.note('')
     r.scroll_to(0, 280)
-    r.click('#summary [data-flow="sort-done"]', hold=1800)
-    r.glide(GW - 8, 330, 400)                      # 指针停到页边，不挡按钮
+    r.click('#summary [data-flow="sort-cat"]', hold=1800)          # 实验室这一类一次确认，自动切到「个人」
+    r.click('#summary [data-flow="sort-cat"]', hold=1800)
+    r.glide(GW - 8, 330, 400)                    # 指针停到页边，不挡按钮
     r.snap(3000)
     r.save('demo-sorting')
 

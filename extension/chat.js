@@ -47,7 +47,10 @@
       full = squash(full); shown = squash(shown);
       if (!full || !shown) return false;
       if (/[…]$|\.\.\.$/.test(shown)) return full.startsWith(shown.replace(/[…]$|\.\.\.$/, ''));
-      return full === shown;
+      if (full === shown) return true;
+      // 子账号的会话名是「主账号:客服名」：冒号前的主账号名对得上也算
+      const main = shown.split(/[:：]/)[0];
+      return main !== shown && main === full;
     };
     const view = () => document.querySelector('.ww_message .rc-scrollbars-view');
     const header = () => text(document.querySelector('.ww_header .name'));
@@ -144,13 +147,39 @@
     const unreliable = (msgs, prev) => !header() || (!msgs.length && (document.querySelectorAll('.message-item').length > 0
       || !!(prev && (prev.first || (prev.asks || []).length || (prev.files || []).length))));
     const MAYBE_CHANGED = '消息未能读取（旺旺页可能改版）';
-    // 扫描结束：写 chatScan（convs 读到的会话；failed 没读成的 [{ name, nick, nos, why }]，主页把这几单标成「旺旺会话未能读取」，
-    // 不退回「需向卖家索要」；read 这一轮读成的个数）。一个都没读成就报错
-    async function finishScan(out, failed, read) {
-      await chrome.storage.local.set({ chatScan: { at: Date.now(), convs: out, failed, read } });
-      const fl = failed.length ? '；未能读取 ' + failed.length + ' 个：' + failed.map(f => f.name + '（' + f.why + '）').join('、') : '';
-      if (!read && failed.length) window.otFail('scan', '旺旺页一个会话都没能读取' + fl);
-      else window.otLog('scan', 'end', '读取 ' + read + ' 个会话' + fl);
+    // 主页给的清单按店分组：{ shop, nick, nos, fresh }（同一家店的几单只读一次会话；fresh：这几单都还没联系过卖家，主页状态 st 是 ask）
+    const shopsOf = want => {
+      const m = new Map();
+      for (const o of want) {
+        const k = squash(o.shop) || squash(o.nick);
+        const g = m.get(k) || { shop: o.shop || o.nick, nick: '', nos: [], fresh: true };
+        if (!g.nick && o.nick) g.nick = o.nick;
+        if (o.st !== 'ask') g.fresh = false;
+        g.nos.push(o.no); m.set(k, g);
+      }
+      return [...m.values()];
+    };
+    // 这家没读成：记进 failed（主页把这几单标成红色「旺旺会话未能读取」），调试日志里每家一条 scan skip <店名> <原因>。
+    // 还没联系过的店（fresh）找不到会话是正常的：不算失败（不然这几单就退不回「需向卖家索要」），记进 none，主页写明几家尚无会话
+    const skip = (failed, g, why, none) => {
+      if (g.fresh && none) { none.push({ name: g.shop, nos: g.nos }); window.otLog('scan', 'skip', g.shop + ' 尚未联系过，' + why + '（不算失败）'); return; }
+      failed.push({ name: g.shop, nick: g.nick || '', nos: g.nos, why }); window.otLog('scan', 'skip', g.shop + ' ' + why);
+    };
+    // 扫描结束：写 chatScan（convs 读到的会话，上次的结果打底；failed 没读成的 [{ name, nick, nos, why }]，这几单不退回「需向卖家索要」；
+    // read 这一轮读成的个数）。收尾核对：主页要读的每一家，要么这一轮读到了（got），要么写进 failed 并附原因
+    // （2026-10-09 实测：要读 5 家，2 秒就结束、读到 0 个、failed 也是空的，主页只写「完成，读取 0 个会话」）
+    async function finishScan(out, failed, read, got, none) {
+      const { invWant } = await chrome.storage.local.get('invWant');
+      none = none || [];
+      for (const g of shopsOf((invWant && invWant.chat) || [])) {
+        if ((got || []).some(h => isConvOf(g, h.name) || (!!g.nick && !!h.nick && squash(g.nick) === squash(h.nick)))) continue;
+        if (failed.concat(none).some(f => (f.nos || []).some(no => g.nos.includes(no)))) continue;
+        skip(failed, g, '未找到这家店的会话', none);
+      }
+      await chrome.storage.local.set({ chatScan: { at: Date.now(), convs: out, failed, read, none } });
+      const fl = failed.length ? '；未能读取 ' + failed.length + ' 家：' + failed.map(f => f.name + '（' + f.why + '）').join('、') : '';
+      // 一个都没读成也只记日志、不把旺旺页切到前台：原因已写进 failed，主页这一段写明
+      window.otLog('scan', !read && failed.length ? 'fail' : 'end', (!read && failed.length ? '一个会话都没能读取' : '读取 ' + read + ' 个会话') + fl);
       panel.set('已读取 ' + read + ' 个会话，结果已送回分拣主页' + fl);
     }
     // 页面因为 goChat 重新加载后：看当前这个会话，记结果，跳下一家；最后一家看完写 chatScan
@@ -176,8 +205,8 @@
       // 会话标题可能是旺旺名，也可能是店名；按地址打开的页面加载慢，和发消息一样等 30 秒
       const isTarget = () => sameShop(cur.nick, header()) || sameShop(cur.shop, header());
       const opened = await window.otWaitFor(isTarget, 30000);
-      const next = Object.assign({}, q, { items: q.items.slice(1), done: q.done + 1, at: Date.now(), failed: (q.failed || []).slice(), read: q.read || 0 });
-      const fail = why => next.failed.push({ name: cur.shop, nick: cur.nick, nos: cur.nos, why });
+      const next = Object.assign({}, q, { items: q.items.slice(1), done: q.done + 1, at: Date.now(), failed: (q.failed || []).slice(), read: q.read || 0, got: (q.got || []).slice(), none: (q.none || []).slice() });
+      const fail = why => skip(next.failed, cur, why);
       if (opened) {
         await sleep(1200);
         if (!await loadBack(q.since)) return verify();
@@ -190,8 +219,12 @@
           next.out = Object.assign({}, q.out, { [header()]: Object.assign({ at: Date.now(), orders, first: (msgs[0] || {}).time || '', byNick: cur.nick, matched },
             I.chatAnalyze(msgs, { taxId: q.taxId })) });
           next.read++;
+          next.got.push({ name: header(), nick: cur.nick });
         }
-      } else fail('会话未打开，页面显示「' + (header() || '空') + '」');
+      } else fail('按旺旺名打开会话未成功，页面显示「' + (header() || '空') + '」（会话未打开）');
+      // 主页停掉了这一轮（超时、用户点「停止」或用户操作停掉每天自动刷新，chatQueue 被删或换成了别的活）：不再接着开下一家，也别盖掉新的活
+      const { chatQueue: still } = await chrome.storage.local.get('chatQueue');
+      if (!still || still.kind !== 'scan' || still.at !== q.at) { panel.set('分拣主页已停止读取卖家回复。'); window.otLog('scan', 'stop', '主页已停止，未继续读取'); return true; }
       if (next.items.length) {
         await chrome.storage.local.set({ chatQueue: next });
         await sleep(800 + Math.random() * 800);
@@ -199,7 +232,7 @@
         return true;
       }
       await chrome.storage.local.remove('chatQueue');
-      await finishScan(next.out || {}, next.failed, next.read);
+      await finishScan(next.out || {}, next.failed, next.read, next.got, next.none);
       return true;
     }
 
@@ -406,47 +439,46 @@
       try {
         const { invWant, chatScan } = await chrome.storage.local.get(['invWant', 'chatScan']);
         const want = (invWant && invWant.chat) || [];
-        if (!want.length) { panel.set('没有需要读取卖家回复的订单（均已开票、已进入淘宝开票流程，或尚未导入订单表）'); return; }
+        // 主页排活前会写好清单；读不到清单也要回话，不能让主页干等到超时
+        if (!want.length) { window.otFail('scan', '旺旺页未收到要读取的店铺清单，请在分拣主页重新点「自动处理发票」'); return; }
         if (!await window.otWaitFor(() => convItems().length, 15000)) { window.otFail('scan', '旺旺页 15 秒内未显示会话列表（可能未登录或页面已改版）'); return; }
+        // 左侧列表是陆续渲染出来的：等条目数 1.5 秒不再变化（最多再等 6 秒）再找，免得只看到最先出来的几条
+        for (let i = 0, n = -1, same = 0; i < 20 && same < 5; i++) { const c = convItems().length; same = c === n ? same + 1 : 0; n = c; await sleep(300); }
         const since = (invWant.chatSince || '').slice(0, 10);
+        // 上次的结果打底（这一轮没读成的店沿用上次的，不覆盖）。「这家这一轮读过没有」只看 got：
+        // 以前拿上次结果里的会话名去比，上次按旺旺名读过、这次又不在左侧列表里的店被当成「已读」直接跳过，一家都不读（2026-10-09）
         const out = Object.assign({}, chatScan && chatScan.convs);
-        const items = convItems().filter(it => want.some(o => isConvOf(o, convName(it))));
-        // 没读成的会话（点不开、读不出、出错）记下来交给主页：不算进「已读取」，这几单不退回「需向卖家索要」
-        const failed = [];
+        const groups = shopsOf(want), failed = [], got = [], queue = [], none = [];
         let k = 0, read = 0;
         const VERIFY = '旺旺页出现安全验证，请在该页面手动完成后，在分拣主页重新点「自动处理发票」';
-        for (const it of items) {
+        for (const g of groups) {
           if (window.otNeedsVerify()) { window.otFail('scan', VERIFY); return; }
-          const name = convName(it), nos = want.filter(o => isConvOf(o, name)).map(o => o.no);
-          panel.set('正在读取第 ' + (++k) + ' / ' + items.length + ' 个会话：' + name);
+          if (got.some(h => isConvOf(g, h.name))) continue;                 // 和前面某家是同一个会话，已读过
+          const it = convItems().find(x => isConvOf(g, convName(x)));
+          // 左侧最近会话列表里没有（聊得太久以前、列表没加载全、会话名和店名对不上）：知道卖家旺旺名的按网址打开，不依赖列表
+          if (!it) { if (g.nick) queue.push(g); else skip(failed, g, '左侧会话列表中没有这家店，且未读到卖家旺旺名，无法打开会话', none); continue; }
+          const name = convName(it);
+          panel.set('正在读取第 ' + (++k) + ' / ' + groups.length + ' 家：' + name);
           try {
-            if (!await openConv(it)) { failed.push({ name, nos, why: '会话未打开' }); continue; }
+            if (!await openConv(it)) { if (g.nick) queue.push(g); else skip(failed, g, '点击左侧会话未打开'); continue; }
             if (!await loadBack(since)) { window.otFail('scan', VERIFY); return; }
             const msgs = collected();
             const orders = [...document.querySelectorAll('.ww_tab .order-id')].map(text).filter(s => /^\d{15,20}$/.test(s));
-            if (unreliable(msgs, out[header()])) { failed.push({ name: header() || name, nos, why: MAYBE_CHANGED }); continue; }
+            if (unreliable(msgs, out[header()])) { skip(failed, Object.assign({}, g, { shop: header() || g.shop }), MAYBE_CHANGED); continue; }
             out[header()] = Object.assign({ at: Date.now(), orders, first: (msgs[0] || {}).time || '' }, I.chatAnalyze(msgs, { taxId: invWant.taxId }));
-            read++;
-          } catch (e) { failed.push({ name, nos, why: '出错：' + e.message }); window.otLog('scan', 'error', name + '：' + e.message); }      // 一个会话出错不影响别的会话
+            got.push({ name: header(), nick: g.nick }); read++;
+          } catch (e) { skip(failed, g, '出错：' + e.message); }      // 一个会话出错不影响别的会话
           await sleep(800 + Math.random() * 800);
         }
-        // 左侧最近会话列表里没有的店（聊得太久以前）：用订单页上这一单自己的卖家旺旺名打开，和在订单页点旺旺图标打开的是同一个会话。
-        // 一家看完跳下一家（页面会重新加载），进度存在 chatQueue 里；全部看完才写 chatScan，主页的一键处理靠它往下走
-        const seenNicks = new Set(Object.keys(out).map(squash));
-        const queue = [], seenQ = new Set();
-        for (const o of want) {
-          if (!o.nick || convItems().some(it => isConvOf(o, convName(it))) || seenNicks.has(squash(o.nick)) || seenQ.has(o.nick)) continue;
-          seenQ.add(o.nick);
-          queue.push({ nick: o.nick, shop: o.shop, nos: want.filter(x => x.nick === o.nick).map(x => x.no) });
-        }
-        const noNick = [...new Set(want.filter(o => !o.nick && !convItems().some(it => isConvOf(o, convName(it)))).map(o => o.shop))];
+        // 按旺旺名逐家打开（和在订单页点旺旺图标打开的是同一个会话）：一家看完跳下一家（页面会重新加载），进度存在 chatQueue 里；
+        // 全部看完才写 chatScan，主页的一键处理靠它往下走
         if (queue.length) {
-          await chrome.storage.local.set({ chatQueue: { at: Date.now(), kind: 'scan', since, taxId: invWant.taxId, out, items: queue, noNick, done: items.length, failed, read } });
-          panel.set('已读取会话列表中的 ' + read + ' 个会话；另有 ' + queue.length + ' 家店铺不在列表中，正按卖家旺旺名逐个打开…');
+          await chrome.storage.local.set({ chatQueue: { at: Date.now(), kind: 'scan', since, taxId: invWant.taxId, out,
+            items: queue.map(g => ({ nick: g.nick, shop: g.shop, nos: g.nos, fresh: g.fresh })), done: k, failed, read, got, none } });
+          panel.set('已读取会话列表中的 ' + read + ' 个会话；另有 ' + queue.length + ' 家店铺按卖家旺旺名逐个打开…');
           return goChat(queue[0].nick);
         }
-        await finishScan(out, failed, read);
-        if (noNick.length) panel.set('已读取 ' + read + ' 个会话，结果已送回分拣主页；' + noNick.length + ' 家店铺不在会话列表中且旺旺名未知');
+        await finishScan(out, failed, read, got, none);
       } catch (e) {
         window.otFail('scan', '读取旺旺回复出错：' + e.message);
       }
@@ -492,6 +524,7 @@
     panel.set('等待分拣主页分配任务：读取卖家发票回复、下载卖家发送的文件、按开票入口申请');
     chrome.storage.local.get('cardRun').then(r => resumeCard(r.cardRun)).catch(e => { panel.set('按开票入口申请出错：' + e.message); return true; })
       .then(busy => busy || resumeQueue())
-      .then(busy => { if (!busy) window.otTakeJob(['scan', 'chatDownload'], (kind) => kind === 'scan' ? scan() : download()); });
+      // 旺旺页只有一个：旧页面领了活还没做完就被跳转掉的，本页接着做（takeover）
+      .then(busy => { if (!busy) window.otTakeJob(['scan', 'chatDownload'], (kind) => kind === 'scan' ? scan() : download(), { takeover: true }); });
   }
 })();
