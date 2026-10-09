@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/%E7%89%88%E6%9C%AC-0.17.0-1C6E8C?style=flat-square" alt="版本 0.17.0">
+  <img src="https://img.shields.io/badge/%E7%89%88%E6%9C%AC-0.18.0-1C6E8C?style=flat-square" alt="版本 0.18.0">
   <img src="https://img.shields.io/badge/Chrome%20%E6%89%A9%E5%B1%95-Manifest%20V3-4285F4?style=flat-square&logo=googlechrome&logoColor=white" alt="Chrome 扩展 Manifest V3">
   <img src="https://img.shields.io/badge/%E6%95%B0%E6%8D%AE-%E4%BB%85%E5%9C%A8%E6%9C%AC%E6%9C%BA-2F7D4F?style=flat-square" alt="数据仅在本机">
   <img src="https://img.shields.io/badge/%E5%88%A4%E6%96%AD-%E5%9B%BA%E5%AE%9A%E8%A7%84%E5%88%99%20%C2%B7%20%E6%97%A0%20AI-5F6C72?style=flat-square" alt="固定规则，无 AI">
@@ -106,7 +106,7 @@
 </p>
 
 > [!NOTE]
-> 想先看看界面：点「载入示例数据」（8 单虚构订单，开始读取真实订单时自动清除）。
+> 想先看看界面：点「载入示例数据」（8 单虚构订单，只看界面、不处理发票；开始读取真实订单时自动清除）。
 
 <details>
 <summary>更新到新版本</summary>
@@ -208,7 +208,7 @@ flowchart LR
 | <img src="docs/assets/status/plat.svg" width="12" height="12" alt=""> 蓝 | 已申请淘宝开票 |
 | <img src="docs/assets/status/wait.svg" width="12" height="12" alt=""> 黄 | 等待卖家回复 |
 | <img src="docs/assets/status/urge.svg" width="12" height="12" alt=""> 青 | 已由淘宝客服督促 |
-| <img src="docs/assets/status/bad.svg" width="12" height="12" alt=""> 红 | 需处理（下次「自动处理发票」会列进清单） |
+| <img src="docs/assets/status/bad.svg" width="12" height="12" alt=""> 红 | 需处理（含下载的发票核对不通过、旺旺会话未能读取；下次「自动处理发票」会列进清单） |
 
 带「›」的状态可点击，打开该单对应的淘宝页面。发票表每行的「操作」按状态只有一个：
 
@@ -217,7 +217,7 @@ flowchart LR
 | 已开具，待下载 / 卖家已发送文件 | 下载 |
 | 等待卖家回复 | 催卖家（在旺旺输入框填好一句催促，由用户点发送） |
 | 已申请淘宝开票 / 已由淘宝客服督促 / 超过设定天数 | 找客服督促 |
-| 需处理 | 索要发票、申请开票、按入口申请、换开发票或联系卖家 |
+| 需处理 | 索要发票、申请开票、按入口申请、换开发票、联系卖家或打开旺旺 |
 
 > [!IMPORTANT]
 > 提交申请、给卖家或客服发消息都先在清单中确认；平台批量开票的「确认提交」由用户在淘宝页面点击。
@@ -228,7 +228,7 @@ flowchart LR
 - 发送前核对打开的会话属于该店铺；按开票入口提交前核对订单号和抬头。任何一项不符即不发送、不提交。
 - 自动发送时每家间隔 8～15 秒；出现滑块或验证码时停下，由用户处理。
 - 只打开仍需卖家回复的旺旺会话（打开会让卖家看到「已读」）；旺旺页只保留一个。
-- 下载后读取 PDF 的金额和开票日期核对，归错的订单自动更正。
+- 下载后读取 PDF 的金额和开票日期，按实付减退款核对：归错的订单自动更正，同店合开的几单都算取得；不是发票的退回「需向卖家索要」，票面少 1 元以上的标红。
 - 卖家发来的图片在本机识别二维码；是税务局电子发票的，核对后下载 PDF。
 - 卖家发到邮箱的发票：在该单点「手动添加发票」。
 - 「设置 → 每天自动刷新发票情况」：每天定时刷新、下载，不提交、不发送。
@@ -242,7 +242,8 @@ flowchart LR
   <img src="docs/screenshots/pack.png" alt="「整理报销文件」对话框：起始序号、批次名称，以及每张发票的新文件名和尚无发票的订单（虚构数据）" width="760">
 </p>
 
-- 文件名：`序号_开票日期_金额-商品摘要-数量件.pdf`，序号接续已整理发票。
+- 文件名：`序号_开票日期_金额-商品摘要-数量件.pdf`，序号接续已整理发票；合开的一张票一行（序号写成 `261+262`）。
+- 整理后这一批记为已整理，下一批不再放入。
 - 存入 `订单分拣-报销/批次名称_日期_合计/`，附 `汇总.csv` 和同名 `.zip`；单张超过 200 元的放入「低值品」子文件夹。原文件不变。
 
 ## 设置与数据

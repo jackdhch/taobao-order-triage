@@ -41,16 +41,25 @@ WSL 里有 python3 3.12、node 18、git；在 WSL 里用 `python3`，不要用 `
 
 ```
 manifest.json              Chrome 扩展说明（MV3）。项目根目录本身就是扩展：「加载已解压的扩展程序」选根目录
-extension/background.js    点扩展图标打开主页（chrome-extension://…/index.html）
+extension/background.js    点扩展图标切到已开着的主页（focusHome，没有才新开）；下载改名记 dlDone；派活开的标签页编号记在 session 存储（jobTabs、workTabs）；
+                           旺旺页只留一个（顶掉正在干活的旧页时写 chatLost）；每天自动处理：主页开着发 autoRun（不刷新主页），主页正忙（homeBusy）就跳过
 extension/taobao.js        淘宝订单页的内容脚本：只在有有效的 readJob 且向后台领到活时自动全部读取（进度 readProgress、结束 readDone），
                            结果写回 chrome.storage.local 的 scraped；用户自己打开订单页时什么都不做（不出面板）
 extension/invoice-list.js  「全部发票」页（i.taobao.com/my_itaobao/invoice）：同步三个标签的开票记录 → invSync；按 dlJobs 点「下载到本地」
-extension/chat.js          旺旺网页版（market.m.taobao.com/app/im，内容在 iframe chat-core）：扫描卖家回复 → chatScan（开票卡片单独记 cards，不算图片）；
+extension/chat.js          旺旺网页版（market.m.taobao.com/app/im，内容在 iframe chat-core）：扫描卖家回复 → chatScan（开票卡片单独记 cards，不算图片；
+                           没读成的会话记 failed，读不出消息时不覆盖上次结果）；自动发送只在主页心跳 askBeat 编号对得上时做，等用户最多 3 分钟；
                            按 dlJobs 点「下载文件」；按 cardRun 点开票卡片的「去申请」
 extension/chat-main.js     旺旺页自身环境（world MAIN）：包一层 window.open，记下页面要新开的开票申请页地址（被弹窗拦截时由后台打开）
-extension/apply-card.js    淘宝「开具发票」/「发票详情」页（invoice-ua.taobao.com/e-invoice/…）：按 cardJobs 核对订单号、抬头后提交，结果写 cardResult / cardApplied
+extension/apply-card.js    淘宝「开具发票」/「发票详情」页（invoice-ua.taobao.com/e-invoice/…）：按 cardJobs 核对订单号、抬头后提交，结果写 cardResult / cardApplied；
+                           60 秒内点的是别的单的卡片（cardRun.no 不同）时不提交
+extension/batch.js         「批量开票」页（i.taobao.com/my_itaobao/pricelist/batchInvoice）：按 applyJob 筛日期、勾单、核对抬头税号，停在「批量开票确认」，
+                           由用户点「确认提交」；结果写 applyResult（一单都认不出时按出错处理）
+extension/batch-main.js    批量开票页自身环境（world MAIN）：替 batch.js 发日期框要的回车
+extension/vip.js           淘宝官方客服（ai.alimebot.taobao.com）：按 vipJob 转人工后逐单督促，之后回「OK」、点「提交投诉」
+extension/qr.js            税务局电子发票页（*.chinatax.gov.cn，卖家发的二维码）：核对购买方、税号、价税合计（应报金额，少 1 元以内放行）后下载 PDF；没通过写 qrFail
 extension/detail.js        订单详情页（trade.taobao.com/trade/detail、天猫重定向后的 trade.tmall.com/detail）：读卖家旺旺名、逐件退款
-extension/panel.js         上面两个脚本共用的面板和「领主页排的活」（invJobs + invClaim_*）；otLog 写本机调试日志
+extension/panel.js         各淘宝页脚本共用：右下角面板（otPanel）、领主页排的活（otTakeJob：invJobs + invClaim_*）、otLog 写本机调试日志、
+                           otFail 干活没办成时写 jobFail（主页正等这一段就立即结束、红条写原因）并把本页切到前台（不用 alert）
 extension/home.js          插件运行的每个淘宝页面上的小按钮「← 订单分拣」（一般在右上角，旺旺页在左下角）：发 goHome，后台切回 / 新开主页
 js/invoice.js              发票纯逻辑：税号校验、发票文件名、聊天分析、每单状态、下载文件名、从 PDF 文字认发票（parseInvoiceText）
 extension/invoice-main.js  跑在「全部发票」页自身环境（world MAIN）：扩展下载期间截下「下载到本地」造的阿里云发票链接
@@ -67,18 +76,26 @@ js/app.js                  界面、状态（localStorage）、读取订单、�
                            发票表「操作」列按状态一个主要操作（rowAction / rowAct：下载、催卖家、找客服督促、索要发票、申请开票、按入口申请、换开发票、联系卖家）；
                            window.__otDev 只给离线测试单独触发其中一段、逐单操作或改短时限（tmo）；读取进度也在步骤条下方，
                            没有订单时显示「开始使用」卡片（renderGuide），顶上进度条（renderDash，只显示不能点），
+                           应报金额只有一个来源 dueOf（实付 − 退款，和 derive 共用 lineDue）；下载的票核对不通过是红色 badinv（不算已取得），
+                           旺旺会话没读成是 chatfail（不退回「需向卖家索要」）；整理报销后订单记进 S.packed（以后算「已整理」），
                            不常用的收在顶栏「更多」；不提供导出（「备份数据」除外）、不提供改词表（用户 2026-10-05 要求去掉多余的自由度）
-js/sample.js               虚构示例数据（给没有数据的人试用）
+js/sample.js               虚构示例数据（给没有数据的人试用；「示例-」开头的订单只看界面，第 3、4 步主按钮置灰，不去淘宝页处理）
+js/zip.js                  零依赖 zip 打包（整理报销文件的压缩包；中文文件名带 UTF-8 标记）
 scraper/taobao-scraper.js  在淘宝「已买到的宝贝」页控制台运行：按文字特征定位订单块，抓图片/逐件退款，可自动翻页，存本地 JSON
 tools/eval.mjs             node 评估分类效果：node tools/eval.mjs [订单表] [labels.json]
 tools/selftest.mjs         自检（虚构数据）：合并只补图片/退款/链接、不新增订单；关键词建议
 tools/mock-taobao.html     模拟订单页（数据虚构）：无参数 = 旧版结构（测回退解析）；?v=new = 2026-09 真实新版结构
 tools/e2e-mock.py          离线端到端测试：主页「从淘宝读取订单」（真实网址的请求回应模拟页）→ 自动翻页、关页、结果；界面准则检查（四步、
-                           每步至多一个主按钮、没有只滚动的按钮、「更多」四项）；导入订单表合并；新旧版模拟页逐单核对（不联网）
+                           每步至多一个主按钮、没有只滚动的按钮、「更多」四项）；导入订单表合并；新旧版模拟页逐单核对（不联网）；
+                           认不出「下一页」、没读出商品的订单不算删进回收站；「开始使用」卡片的读取进度颜色
 tools/e2e-invoice.py       离线：刷新开票记录、旺旺扫描（含「安全提醒」系统卡片）、下载改名（含本机假阿里云 https）、自动处理发票分段进度和只确认一次、
-                           autoLog、操作列（催卖家只填不发、单单找客服督促）、图例不裁字、回主页按钮
-tools/e2e-extras.py        离线：选文件夹读发票 PDF、二维码、备份恢复（autoLog 不进备份）、自动处理发票某段超时 + 只有一单需处理
-tools/e2e-apply.py         离线：平台批量申请、按卖家的开票入口申请（mock-invoice-apply.html）、干活页用完关掉
+                           autoLog、操作列（催卖家只填不发、单单找客服督促）、图例不裁字、回主页按钮；自动发送不带用户自己打的字、残留队列不接管；
+                           每天自动处理不打断；[17] 下载的票核对（合开、挪单、不是发票、少 1 元以上、券前价、部分退款）和整理后记为已整理、读旺旺失败不退回索要
+tools/e2e-extras.py        离线：选文件夹读发票 PDF、二维码、备份恢复（autoLog 不进备份；清除本机数据前自动备份）、自动处理发票某段超时 + 只有一单需处理；
+                           出错提示不自动消失、发票表为空写明原因、两个主页不互相覆盖、示例数据不处理发票
+tools/e2e-apply.py         离线：平台批量申请（批量开票页改版认不出订单时不记「平台开不了」）、按卖家的开票入口申请（mock-invoice-apply.html；
+                           点 A 的卡片打开 B 的申请页时不提交）、干活页用完关掉
+tools/make-release.sh      打发布包 dist/order-triage-v<版本>.zip（见「发布」）
 tools/index-invoices.py    （可选）用 pdftotext/pypdf 给发票文件夹做索引；插件里已能直接选文件夹读，这个留给命令行用
 tools/fixtures/            测试用的虚构二维码图、商品图
 tools/screenshots.py       生成 README 图片：横幅（tools/readme-banner.html 渲染）→ docs/assets/，截图和演示动图 → docs/screenshots/；
@@ -94,12 +111,13 @@ docs/assets/               README 横幅、功能图标、状态色块（图标�
   `http://localhost:8765/index.html?load=local-data/订单数据.xlsx` 直接载入本地数据（只允许同源相对路径）
 - 抓取脚本：打开 `tools/mock-taobao.html`，在页面里 `fetch('/scraper/taobao-scraper.js')` 后 `eval`，再调 `orderTriage.grab()` / `.auto()`
 - 分类：`node tools/eval.mjs`；自检：`node tools/selftest.mjs`
-- 改抓取脚本 / 扩展后必跑：`env -u TMPDIR python3 tools/e2e-mock.py`、`tools/e2e-invoice.py`、`tools/e2e-extras.py`（各约 1 分钟；TMPDIR 太长 Chromium 会报 Socket path too long）。
+- 改抓取脚本 / 扩展后必跑：`node tools/selftest.mjs`，`env -u TMPDIR python3 tools/e2e-mock.py`、`tools/e2e-invoice.py`、`tools/e2e-extras.py`、`tools/e2e-apply.py`
+  （e2e-invoice 约 10 分钟，其余各几分钟；TMPDIR 太长 Chromium 会报 Socket path too long）。改开票申请（batch.js、apply-card.js、卡片）时 e2e-apply 一定要跑。
   注意 WSL 里默认 python3 是系统的、没装 playwright，用装了 playwright 的那个 python3（比如 conda 里的）
 - Playwright 连着真实测试浏览器时会截走下载（存到 /tmp/playwright-artifacts-*，断开就没了）：测下载前先 Browser.setDownloadBehavior default，下载期间别连
 - 真实页面结构写在 `scraper/taobao-scraper.js` 的 parseBox 注释里；淘宝改版时先在真实页面核对，再同步改 mock 的 ?v=new
 - 读取链路有两条：扩展版（主页写 readJob，淘宝页内容脚本领活、抓完写 scraped，主页监听后合并）；
-  网页版（「补图片 → 复制抓取脚本」生成 `(orderTriageScraper 源码)({nos, from})`，index.html 用 `<script data-no-run>` 只取函数不运行）
+  网页版（「补充图片 → 复制抓取脚本」生成 `(orderTriageScraper 源码)({nos, from})`，index.html 用 `<script data-no-run>` 只取函数不运行）
 - 扩展测试：Playwright 的 Chromium 用 `launch_persistent_context(channel='chromium', args=['--load-extension=项目根目录'])`；
   manifest 里匹配了 `127.0.0.1/tools/mock-taobao.html`；有 readJob 时模拟页会自动开始读取
 - README 图片：界面改动较大时 `env -u TMPDIR python3 tools/screenshots.py` 重新生成（要 Pillow；可只生成一类：`banner` / `shots` / `gifs`），
