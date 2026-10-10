@@ -1100,9 +1100,9 @@ def part18(ctx, app, tmp):
                                   "const d = tr.querySelector('.detail.due'); const b = tr.querySelector('button[data-act]'); "
                                   "return { due: d ? d.textContent : '', late: !!d && d.classList.contains('late'), tip: d ? d.title : '', act: b ? b.textContent : '' }; }", no)
     rc, rh = row(NO['C']) or {}, row(NO['H']) or {}
-    check(rc.get('due', '').startswith('已超过应开票截止 09-12（淘宝：通知后 10 日）') and rc.get('late') and '官方客服才可介入' in rc.get('tip', '') and rc.get('act') == '找客服督促',
-          'C（淘宝平台 09-02 申请）：说明行「已超过应开票截止 09-12（淘宝：通知后 10 日）」标红，操作「找客服督促」', rc)
-    check(re.match(r'^应开票截止 \d\d-\d\d（向卖家索要：确认收货、索要较晚者后 10 日）$', rh.get('due', '')) and not rh.get('late') and rh.get('act') == '催卖家',
+    check(rc.get('due', '').startswith('已超过应开票截止 09-12（淘宝：向商家发出开票要求后 10 日）') and rc.get('late') and '官方客服才可介入' in rc.get('tip', '') and rc.get('act') == '找客服督促',
+          'C（淘宝平台 09-02 申请）：说明行「已超过应开票截止 09-12（淘宝：向商家发出开票要求后 10 日）」标红，操作「找客服督促」', rc)
+    check(re.match(r'^应开票截止 \d\d-\d\d（(淘宝：向商家发出开票要求|天猫：确认收货)后 10 日）$', rh.get('due', '')) and not rh.get('late') and rh.get('act') == '催卖家',
           'H（刚向卖家索要过）：「应开票截止 MM-DD（向卖家索要…后 10 日）」，没超过截止就只有「催卖家」，不出「找客服督促」', rh)
     dues = app.evaluate('__otDev.dues()')
     check(not dues.get(NO['H'], {}).get('late') and dues.get(NO['C'], {}).get('late'), '截止日计算：C 已超过、H 未超过', {k: dues.get(NO[k]) for k in ('C', 'H')})

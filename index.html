@@ -514,7 +514,7 @@ footer p{margin:0 0 4px; max-width:90ch}
       <label>税号（统一社会信用代码）<input id="inv-tax" type="text" autocomplete="off" spellcheck="false" title="18 位统一社会信用代码，保存时校验"><span class="err" id="inv-tax-err"></span></label>
       <label>接收发票的邮箱（可留空）<input id="inv-email" type="email" autocomplete="off" spellcheck="false" title="卖家要求邮箱时使用；填写后，索要发票的消息中附带此邮箱"></label>
       <!-- 督促时限固定 10 日（用户 2026-10-09，按淘宝 / 天猫的开票规定），不再可调 -->
-      <p class="wide due-note" id="due-note" title="应开票截止日：天猫平台申请从交易成功或申请（较晚者）起算，淘宝平台申请从淘宝通知（申请）起算，向卖家索要从确认收货或首次索要（较晚者）起算，各 10 日">超过 10 日未开票才请淘宝客服督促：淘宝规定卖家须在 10 日内开票，超过 10 日官方客服才可介入</p>
+      <p class="wide due-note" id="due-note" title="应开票截止日：天猫从确认收货起 10 日（确认收货后才申请或索要的，从申请 / 索要起）；淘宝从向商家发出开票要求（平台申请或旺旺索要）起 10 日">超过 10 日未开票才请淘宝客服督促：淘宝规定卖家须在 10 日内开票，超过 10 日官方客服才可介入</p>
       <label class="wide">索要发票的消息模板<textarea id="inv-tpl" spellcheck="false" title="向卖家索要发票时发送的消息。可用 {订单号} {日期} {金额} {抬头} {税号} {邮箱}；同一店铺多单时自动合并为一条"></textarea></label>
     </div>
     <h4>每天自动刷新发票情况</h4>

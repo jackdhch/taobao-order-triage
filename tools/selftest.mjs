@@ -507,21 +507,22 @@ const RB = req('../js/reimburse.js'), OF = req('../js/office.js');
 // 应开票截止日（用户 2026-10-09 给的淘宝 / 天猫开票规定）：固定 10 日，按规定算起点；超过截止日才督促
 {
   const D = (ctx, today) => I.invoiceDue(Object.assign({ today }, ctx));
-  // 天猫、交易成功前申请：从交易成功算
+  // 规则从简（用户 2026-10-10）：天猫从确认收货起 10 日（之后才申请 / 索要的从申请 / 索要起）；淘宝从发出开票要求起 10 日
+  // 天猫、确认收货前申请：从确认收货算
   let d = D({ kind: 'platform', tmall: true, applyAt: '2026-10-01 10:11:12', doneAt: '2026-10-05 08:00:00' }, '2026-10-15');
-  assert.deepEqual([d.start, d.due, d.late, d.rule], ['2026-10-05', '2026-10-15', false, '天猫：交易成功后 10 日']);
+  assert.deepEqual([d.start, d.due, d.late, d.rule], ['2026-10-05', '2026-10-15', false, '天猫：确认收货后 10 日']);
   assert.equal(D({ kind: 'platform', tmall: true, applyAt: '2026-10-01', doneAt: '2026-10-05' }, '2026-10-16').late, true);
-  // 天猫、交易成功后申请：从申请算
+  // 天猫、确认收货后才申请：从申请算
   d = D({ kind: 'platform', tmall: true, applyAt: '2026-10-08', doneAt: '2026-10-05' }, '2026-10-18');
-  assert.deepEqual([d.start, d.due, d.late, d.rule], ['2026-10-08', '2026-10-18', false, '天猫：申请后 10 日']);
+  assert.deepEqual([d.start, d.due, d.late, d.rule], ['2026-10-08', '2026-10-18', false, '天猫：确认收货后才申请，从申请起 10 日']);
+  // 天猫、向卖家索要：同一条规则（确认收货后 10 日）
+  assert.equal(D({ kind: 'seller', tmall: true, askAt: '2026-09-20', doneAt: '2026-09-25' }, '2026-10-05').start, '2026-09-25');
   // 天猫、读不到交易成功日期：按申请日算（宁可早督促，不漏）
   assert.equal(D({ kind: 'platform', tmall: true, applyAt: '2026-10-01' }, '2026-10-12').start, '2026-10-01');
-  // 淘宝（非天猫）平台申请：从淘宝通知（申请）日算，交易成功日期不管
+  // 淘宝（非天猫）：从发出开票要求（平台申请或旺旺索要）起算，确认收货日期不管
   d = D({ kind: 'platform', tmall: false, applyAt: '2026-10-01', doneAt: '2026-10-07' }, '2026-10-12');
-  assert.deepEqual([d.start, d.due, d.late, d.over, d.rule], ['2026-10-01', '2026-10-11', true, 1, '淘宝：通知后 10 日']);
-  // 向卖家索要（线下）：确认收货、首次索要两者较晚者起算
-  assert.equal(D({ kind: 'seller', askAt: '2026-09-20 09:00', doneAt: '2026-09-25' }, '2026-10-05').due, '2026-10-05');
-  assert.equal(D({ kind: 'seller', askAt: '2026-09-20 09:00', doneAt: '2026-09-25' }, '2026-10-05').late, false);
+  assert.deepEqual([d.start, d.due, d.late, d.over, d.rule], ['2026-10-01', '2026-10-11', true, 1, '淘宝：向商家发出开票要求后 10 日']);
+  assert.equal(D({ kind: 'seller', askAt: '2026-09-20 09:00', doneAt: '2026-09-25' }, '2026-10-05').due, '2026-09-30');
   assert.equal(D({ kind: 'seller', askAt: '2026-09-28', doneAt: '2026-09-25' }, '2026-10-09').start, '2026-09-28');
   assert.equal(D({ kind: 'seller', askAt: new Date(2026, 8, 28, 23, 30).getTime() }, '2026-10-09').start, '2026-09-28');   // 时间戳按本机日期
   assert.equal(D({ kind: 'seller' }, '2026-10-09'), null);

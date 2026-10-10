@@ -262,7 +262,7 @@
       d = I.invoiceDue({ kind: 'platform', tmall: !!o.tmall, applyAt: req, doneAt: doneDayOf(o) });
     } else if (k === 'asked') {
       req = firstAskOf(o, detail);
-      d = I.invoiceDue({ kind: 'seller', askAt: req, doneAt: doneDayOf(o) });
+      d = I.invoiceDue({ kind: 'seller', tmall: !!o.tmall, askAt: req, doneAt: doneDayOf(o) });
     }
     return d ? Object.assign(d, { req }) : null;
   }
@@ -1298,7 +1298,7 @@
     if (s.tip) return one(s.detail, s.tip);
     return s.detail ? '<div class="detail">' + esc(s.detail) + '</div>' : '';
   }
-  // 等待中的单的应开票截止日：一行（「应开票截止 10-18（天猫：交易成功后 10 日）」），超过的标红
+  // 等待中的单的应开票截止日：一行（「应开票截止 10-18（天猫：确认收货后 10 日）」），超过的标红
   function dueLine(d) {
     if (!d) return '';
     const md = d.due.slice(5), tip = '淘宝规定卖家须在 ' + LATE_DAYS + ' 日内开票，超过 ' + LATE_DAYS + ' 日官方客服才可介入。本单从 ' + d.start + ' 起算，' + d.due + ' 为截止日';

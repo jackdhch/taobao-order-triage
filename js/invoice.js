@@ -412,20 +412,18 @@
    *   applyAt：平台申请日期；askAt：首次向卖家索要的时间；doneAt：交易成功（确认收货）日期，读不到时由主页给「第一次看到交易成功」的日期，没有就空
    * 返回 { start, due, rule, late, over }（over：超过截止日几天，未超过为 0）；起点算不出来时返回 null（不提醒、不督促——没有任何日期的单本来也不会进等待中）
    */
+  // 规则（用户 2026-10-10 定，和淘宝 / 天猫开票规定一致，从简）：官方客服什么时候按规定能介入，就从什么时候开始督促
+  //   天猫：确认收货后 10 日（确认收货之后才申请或索要的，从申请 / 索要那天起 10 日）
+  //   淘宝：向商家发出开票要求（平台申请或旺旺索要）后 10 日
+  // 发票清单里只有交易成功的订单；天猫单读不到确认收货日期时，按申请 / 索要日期算（只会偏早，督促宁可早不漏）
   function invoiceDue(ctx) {
     const done = localDay(ctx.doneAt), today = localDay(ctx.today || Date.now());
+    const notice = localDay(ctx.kind === 'seller' ? ctx.askAt : ctx.applyAt) || localDay(ctx.askAt) || localDay(ctx.applyAt);
     let start = '', rule = '';
-    if (ctx.kind === 'seller') {
-      const ask = localDay(ctx.askAt);
-      start = [ask, done].filter(Boolean).sort().pop() || '';
-      rule = '向卖家索要：确认收货、索要较晚者后 ' + DUE_DAYS + ' 日';
-    } else {
-      const apply = localDay(ctx.applyAt);
-      if (ctx.tmall) {
-        if (apply && done && apply < done) { start = done; rule = '天猫：交易成功后 ' + DUE_DAYS + ' 日'; }
-        else { start = apply; rule = '天猫：申请后 ' + DUE_DAYS + ' 日'; }
-      } else { start = apply; rule = '淘宝：通知后 ' + DUE_DAYS + ' 日'; }
-    }
+    if (ctx.tmall) {
+      if (done && (!notice || notice <= done)) { start = done; rule = '天猫：确认收货后 ' + DUE_DAYS + ' 日'; }
+      else { start = notice; rule = done ? '天猫：确认收货后才申请，从申请起 ' + DUE_DAYS + ' 日' : '天猫：确认收货后 ' + DUE_DAYS + ' 日（确认收货日期未读到，按申请日算）'; }
+    } else { start = notice; rule = '淘宝：向商家发出开票要求后 ' + DUE_DAYS + ' 日'; }
     if (!start) return null;
     const due = addDays(start, DUE_DAYS), over = Math.max(0, dayDiff(due, today));
     return { start, due, rule, late: today > due, over };
