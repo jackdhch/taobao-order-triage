@@ -49,7 +49,7 @@
       if (derived && !o.lines.some(l => { const x = derived.byKey.get(l.key); return x && effCat(x) !== 'personal'; })) return false;   // 个人用品不回看
       return !/交易关闭/.test(st) && (!/交易成功/.test(st) || (o.time || '').slice(0, 10) >= recent || o.lines.some(l => N.refundState(l, o) === 'refunding')); });
     // 要找卖家、却还不知道卖家旺旺名的单（之前补图时还没记旺旺名）：让淘宝页回去看一眼，补上旺旺名
-    const noNick = derived ? invOrders().filter(x => !x.o.nick && needsChat(invStatus(x))).map(x => x.o) : [];
+    const noNick = derived ? invOrders().filter(x => !x.o.nick && needsChat(invStatus(x), x.o)).map(x => x.o) : [];
     live.push(...noNick.filter(o => !live.includes(o)));
     if (live.length) {
       w.refresh = live.map(o => o.no);
@@ -67,8 +67,16 @@
   // 给发票页、旺旺页的范围：要报销的实验室订单（没退款），和本机设置的抬头税号
   // chat：只给旺旺页「还需要卖家回复」的单（需找卖家 / 已要过 / 卖家回了还没下）——打开会话会让对方看到已读，
   // 已经开好票、平台申请中、已下载的店就别去打开了
-  // 还要卖家回复的单（旺旺要看的范围）：需向卖家索要 / 已索要 / 卖家已回 / 卖家发来开票卡片 / 已索要后又找客服督促过的
-  const needsChat = st => ['ask', 'asked', 'replied', 'card', 'chatfail'].includes(st.key) || (st.key === 'urged' && st.base === 'asked');
+  // 还要卖家回复的单（旺旺要看的范围）：需向卖家索要 / 已索要 / 卖家已回 / 卖家发来开票卡片 / 已索要后又找客服督促过的 / 下载的票核对不通过；
+  // 另外凡是还没取得发票、和这家店的会话里要过票或卖家发过文件的单，每轮都重读这家的会话
+  // （2026-10-10 实测：核对不通过的单不在扫描范围里，卖家之后补发的正确发票没读到）
+  const CHAT_KEYS = ['ask', 'asked', 'replied', 'card', 'chatfail', 'badinv'];
+  function needsChat(st, o) {
+    if (CHAT_KEYS.includes(st.key) || (st.key === 'urged' && st.base === 'asked')) return true;
+    if (['done', 'ready'].includes(INV_GROUP[st.key]) || st.key === 'none' || st.key === 'gone') return false;
+    const c = o && chatOf(o);
+    return !!c && !!((c.asks || []).length || (c.files || []).length);
+  }
   // 试用的示例订单（「示例-」开头，全部虚构）：只看界面，不去淘宝页面上处理（以前点「自动处理发票」会为虚构订单打开真实的淘宝页）
   const isSample = no => /^示例-/.test(no);
   const hasSample = () => S.orders.some(o => isSample(o.no));
@@ -78,7 +86,7 @@
     const list = invOrders().filter(x => !isSample(x.o.no));
     const pick = xs => xs.map(x => ({ no: x.o.no, shop: x.o.shop, nick: x.o.nick || '', time: x.o.time, amount: x.o.pay }));
     const first = xs => xs.map(x => (x.o.time || '').slice(0, 10)).filter(Boolean).sort()[0] || '';
-    const chat = list.filter(x => needsChat(invStatus(x)));
+    const chat = list.filter(x => needsChat(invStatus(x), x.o));
     // st：这单现在的状态。还没联系过卖家的（ask）找不到会话是正常的，旺旺页不把它算成「未能读取」
     return { orders: pick(list), since: first(list), chat: pick(chat).map((o, i) => Object.assign(o, { st: invStatus(chat[i]).key })), chatSince: first(chat),
              title: S.invoice.title, taxId: S.invoice.taxId };
@@ -1429,7 +1437,8 @@
   // 能确定的改过来：归错单的挪到对的那单名下；比下单还早的、已报销过的、不是发票的从这单拿掉（这单又会出现在「还没开发票」里）；
   // 同店几单合开一张的，同一条下载记录也挂到其余几单下面（整理报销文件时按发票号合成一行）
   async function applyFileCheck(res) {
-    const fix = res.filter(r => ['move', 'old', 'dup', 'notinv', 'merged'].includes(r.kind));
+    // copy：同一张票卖家又发了一次（已挂在 r.to 那单），后下的这份从这单拿掉
+    const fix = res.filter(r => ['move', 'old', 'dup', 'notinv', 'merged', 'copy'].includes(r.kind));
     if (!fix.length) return 0;
     const baseName = p => String(p || '').split(/[\\/]/).pop();
     const dl = EXT ? Object.assign({}, (await chrome.storage.local.get('dlDone')).dlDone) : {};
@@ -1566,7 +1575,7 @@
     if (/\.pdf$/i.test(file.name)) {
       let r = null;
       try { r = await readInvoicePdf(file); } catch (e) { /* 读不了的按发票处理 */ }
-      if (!r || r.isInvoice || (!r.noInv && !matOf(x).miss.length)) return attachFile(no, file);
+      if (!r || r.isInvoice || (!r.noInv && !matOf(x).miss.length)) return attachFile(no, file, r);
     }
     const kind = kindFor(x, file.name);
     const rec = { id: no + '|' + kind + '|' + Date.now(), no, kind, name: file.name, type: file.type || '', blob: file, at: Date.now() };
@@ -1605,7 +1614,10 @@
     for (const x of invOrders()) {
       const st = invStatus(x);
       if (st.key === 'have') continue;                         // 已经整理过（报销过）的不再放
-      const got = (X.dlDone[x.o.no] || []).concat(S.invFiles[x.o.no] || []);
+      // 核对相符的那张优先（同一单下还挂着配不上的文件时，别把那张放进报销）
+      const rank = g => { const c = fcOf(g); return c && GOOD_CHECK.includes(c.kind) ? 0 : c && BAD_CHECK.includes(c.kind) ? 2 : 1; };
+      const got = (X.dlDone[x.o.no] || []).concat(S.invFiles[x.o.no] || []).sort((a, b) => rank(a) - rank(b));
+      // 按实际存下的文件名找（重名时 Chrome 存成「… (1).pdf」，记录里的 path 就是它）
       const g = got.find(g => /\.(pdf|ofd|xml)$/i.test(g.file || g.path || '') && (byName.has(baseOf(g.path)) || byName.has(g.file)));
       if (!g) { miss.push({ x, st }); continue; }
       const f = byName.get(baseOf(g.path)) || byName.get(g.file);
@@ -1945,11 +1957,14 @@
           jobs.push(Object.assign({ id: 'x' + no + '_' + i, kind: 'chat', attach: '3D打印明细', conv: c.name, nick: o.nick || c.nick || '', file: f.name, time: f.time },
             base, { saveAs: base.saveAs.replace(/\.pdf$/, '_3D打印明细' + (i ? '_' + (i + 1) : '') + '.pdf') }));
         });
-      if (s.key !== 'replied' || !c) continue;
-      // 分不清是哪单的（同店几单共用一个会话）也下：下完主页读 PDF 上的金额、开票日期，归错的自动挪到对的那单（用户 2026-10-04）
+      // 下载的票核对不通过的单（badinv）：卖家后来补发的、以前漏掉的文件也下（2026-10-10 实测）
+      if (!['replied', 'badinv'].includes(s.key) || !c) continue;
+      // 分不清是哪单的（同店几单共用一个会话）也下：下完主页读 PDF 上的金额、开票日期，归错的自动挪到对的那单（用户 2026-10-04）。
+      // 已经下载过的（挂在哪一单都算）、同一张票卖家重发的（文件名里发票号一样，如「…(1).pdf」）不再下
       c.files.forEach((f, i) => {
-        const k = c.name + '|' + f.name + '|' + f.time;
-        if (seen.has(k) || rejectedFor(f.name, no)) return; seen.add(k);
+        const k = c.name + '|' + f.name + '|' + f.time, inv = invOfName(f.name);
+        if (seen.has(k) || rejectedFor(f.name, no) || fileOwner(f.name) || (inv && seen.has('i' + inv))) return;
+        seen.add(k); if (inv) seen.add('i' + inv);
         // nick：会话不在旺旺左侧列表里时，按卖家旺旺名打开（会话名可能是店名，不能拿来拼地址）
         jobs.push(Object.assign({ id: 'c' + no + '_' + i, kind: 'chat', conv: c.name, nick: o.nick || c.nick || '', file: f.name, time: f.time },
           base, { saveAs: c.files.length > 1 ? base.saveAs.replace(/\.pdf$/, '_' + (i + 1) + '.pdf') : base.saveAs }));
@@ -1958,7 +1973,7 @@
       for (const im of c.images || []) {
         const url = await qrUrl(im.src);
         const m = url && /^https:\/\/dppt\.[a-z]+\.chinatax\.gov\.cn(?::\d+)?\/.*?2_(\d{20})_/.exec(url);
-        if (!m || seen.has('q' + m[1])) continue;
+        if (!m || seen.has('q' + m[1]) || owners().src.has(m[1]) || owners().inv.has(m[1])) continue;     // 这张二维码发票已经下过
         seen.add('q' + m[1]);
         const alts = invOrders().filter(y => y.o.shop === o.shop && y.o.no !== no && !settled(y.o))
           .map(y => ({ no: y.o.no, amount: dueOf(y.o), saveAs: I.saveName({ time: y.o.time, amount: y.o.pay, shop: y.o.shop, no: y.o.no }) }));
@@ -1969,7 +1984,7 @@
     // 旧活只留「半小时内排的、这单也还要下」的（淘宝页正在下）：连点两次不再派第二个页面重复下；
     // 没找到的、已挂上 PDF / 已整理的旧活清掉，免得以后下别的单时被顺带再下一遍（2026-09 离线复现）
     const still = j => { const x = byNo.get(j.no), k = x && invStatus(x).key;
-      return j.attach ? !!x && matOf(x).miss.includes(j.attach) : j.kind === 'platform' ? k === 'ready' : k === 'replied'; };   // chat、qr 都是「卖家已回」
+      return j.attach ? !!x && matOf(x).miss.includes(j.attach) : j.kind === 'platform' ? k === 'ready' : k === 'replied' || k === 'badinv'; };   // chat、qr 都是「卖家已回」
     const keep = (dlJobs || []).filter(j => now - (j.at || 0) < 1800e3 && still(j));
     const busy = new Set(keep.map(j => j.id));
     const add = jobs.filter(j => !busy.has(j.id)).map(j => Object.assign(j, { at: now }));
@@ -1996,16 +2011,37 @@
     verifying = true; verifyAgain = false;
     try {
       const done = S.fileChecks || (S.fileChecks = {});
-      const todo = [];
-      for (const [no, list] of Object.entries(X.dlDone || {})) for (const g of list) if (g.url && !fcOf(g)) todo.push({ g, no });
-      if (!todo.length) return;
-      // 候选订单：要报销的实验室订单（应报金额 = 实付 − 退款），加上文件现在挂着的那一单。个人的、已报销的、关闭的单不参加，
-      // 不然按用券前价格开的票会被挪给同店正好同价的个人订单
-      const pick = new Map(invOrders().map(x => [x.o.no, x.o]));
-      for (const t of todo) { const o = S.orders.find(y => y.no === t.no); if (o) pick.set(o.no, o); }
-      const orders = [...pick.values()].map(o => ({ no: o.no, shop: o.shop, time: o.time, amount: dueOf(o) }));
+      // todo：新下载、还没核对的；again：以前核对不通过（金额对不上、分不清）的，用记下的票面金额、日期按现在的订单重新配一次（不用再取 PDF）——
+      // 同店另一单后来才出现在候选里（比如还没交易成功的那单），挂错的票就能挪过去（2026-10-10 实测：300 元的票挂在 450 元那单上标红）
+      const todo = [], again = [];
+      for (const [no, list] of Object.entries(X.dlDone || {})) for (const g of list) {
+        const c = fcOf(g);
+        if (g.url && !c) todo.push({ g, no }); else if (c && RECHECK.includes(c.kind) && c.amount != null) again.push({ g, no, c });
+      }
+      for (const [no, list] of Object.entries(S.invFiles || {})) for (const g of list) { const c = fcOf(g); if (c && RECHECK.includes(c.kind) && c.amount != null) again.push({ g, no, c }); }
+      if (!todo.length && !again.length) return;
+      const cur = new Set(todo.concat(again).map(t => t.g));
+      const orders = checkOrders(todo.concat(again).map(t => t.no), cur);
+      const byNo = new Map(orders.map(o => [o.no, o]));
       const have = new Map((S.haveIdx || []).map(x => [x.invNo, x]));
+      // 已经挂在某一单、核对相符的票（发票号 → 订单号）：同一张票卖家又发了一次（「…(1).pdf」），后下的那份不再算
+      const goodInv = new Map();
+      for (const s of [X.dlDone || {}, S.invFiles || {}]) for (const [no, l] of Object.entries(s)) for (const g of l) {
+        const c = !cur.has(g) && fcOf(g); if (c && c.invNo && GOOD_CHECK.includes(c.kind)) goodInv.set(c.invNo, no);
+      }
       const res = [];
+      const judge = (r, g, no) => {
+        if (r.invNo && goodInv.has(r.invNo)) return { file: g.file, path: g.path, no, kind: 'copy', to: goodInv.get(r.invNo), amount: r.amount, date: r.date, invNo: r.invNo };
+        // 按文件现在挂着的那一单核对（挪过来的文件名字里还是原来那单的订单号）
+        const [c0] = I.checkFiles([Object.assign({}, r, { file: no + '_' + g.file })], orders);
+        // 发票号和已整理（已报销）的一样：是那一单的票，不是这单的（2026-10-04 实测：一张票被「多一点」规则算到同店另一单，其实是以前已报销过的票）
+        const c = Object.assign({}, c0, { file: g.file, path: g.path, no: c0.no || no }, have.has(r.invNo) ? { kind: 'dup' } : {});
+        const owner = c.kind === 'move' ? c.to : GOOD_CHECK.includes(c.kind) ? c.no : '';
+        if (owner) { if (byNo.has(owner)) byNo.get(owner).taken = true; if (r.invNo) goodInv.set(r.invNo, owner); }
+        return c;
+      };
+      const record = (key, c, r) => { done[key] = { kind: c.kind, amount: c.amount, date: c.date, invNo: c.invNo, to: c.to || '', nos: c.nos || [], short: c.short || 0,
+        dup: have.has(c.invNo) ? have.get(c.invNo).file : '', items: r.items || '', seller: r.seller || '' }; };
       for (const { g, no } of todo) {
         const key = fcKey(g);
         try {
@@ -2013,40 +2049,96 @@
           // 读得出字、却没有「发票」字样的（说明书、报价单）：不是发票，从这单拿掉，这单退回「需向卖家索要」
           if (r.noInv) { done[key] = { kind: 'notinv' }; res.push({ file: g.file, path: g.path, no, kind: 'notinv' }); continue; }
           if (!r.isInvoice || r.amount == null) { done[key] = { kind: 'unread' }; continue; }
-          const [c0] = I.checkFiles([Object.assign(r, { file: g.file })], orders);
-          // 发票号和已整理（已报销）的一样：是那一单的票，不是这单的（2026-10-04 实测：一张票被「多一点」规则算到同店另一单，其实是以前已报销过的票）
-          const c = Object.assign({}, c0, { path: g.path, no: c0.no || no }, have.has(r.invNo) ? { kind: 'dup' } : {});
-          done[key] = { kind: c.kind, amount: c.amount, date: c.date, invNo: c.invNo, to: c.to || '', nos: c.nos || [], short: c.short || 0, dup: have.has(r.invNo) ? have.get(r.invNo).file : '',
-                        items: r.items || '', seller: r.seller || '' };
-          res.push(c);
+          const c = judge(r, g, no);
+          record(key, c, r); res.push(c);
         } catch (e) { done[key] = { kind: 'error', err: String(e.message || e) }; }    // 下载链接过期等：标红，请用户打开文件核对
       }
+      let fixed = 0;
+      for (const { g, no, c: old } of again) {
+        const c = judge({ invNo: old.invNo, date: old.date, amount: old.amount }, g, no);
+        if (c.kind === old.kind && (c.to || '') === (old.to || '')) continue;          // 还是配不上：不动、不提示
+        record(fcKey(g), c, old); res.push(c); fixed++;
+      }
+      if (!res.length && !todo.length) return;
       persist();
       await applyFileCheck(res);
+      // 核对结果改了状态（比如变成核对不通过）：旺旺要读的范围跟着变
+      chrome.storage.local.set({ invWant: invWant() });
       const n = k => res.filter(c => k.includes(c.kind)).length;
-      const good = n(['ok', 'more', 'merged', 'less']), moved = n(['move']), gone = n(['old', 'dup', 'notinv']), bad = todo.length - good - moved - gone;
-      toast('已核对 ' + todo.length + ' 张新下载的发票（按金额和开票日期）：相符 ' + good + ' 张'
-        + (moved ? '，' + moved + ' 张归属有误、已移至正确订单' : '') + (gone ? '，' + gone + ' 张不属于本单（以往、已报销的发票或不是发票），已移除' : '')
+      const pend = res.filter(c => c.kind === 'move' && (byNo.get(c.to) || {}).pending).length;
+      const good = n(['ok', 'more', 'merged', 'less']), moved = n(['move']), gone = n(['old', 'dup', 'notinv', 'copy']), bad = todo.length + fixed - good - moved - gone;
+      toast((todo.length ? '已核对 ' + todo.length + ' 张新下载的发票' : '') + (fixed ? (todo.length ? '，' : '') + '重新核对 ' + fixed + ' 张以前未通过的发票' : '') + '（按金额和开票日期）：相符 ' + good + ' 张'
+        + (moved ? '，' + moved + ' 张归属有误、已移至正确订单' + (pend ? '（其中 ' + pend + ' 张属于尚未交易成功的订单，交易成功后自动列出）' : '') : '')
+        + (gone ? '，' + gone + ' 张不属于本单（以往、已报销、重复发送的发票或不是发票），已移除' : '')
         + (bad > 0 ? '，' + bad + ' 张需核对（发票栏中已标红）' : ''), true);
       render();
     } finally { verifying = false; if (verifyAgain) verifyDownloads(); }
   }
+  // 核对不通过、但记下了票面金额的：订单变了可以重新配
+  const RECHECK = ['short', 'amount', 'many'];
+  // 核对相符（挪过来的也算：挪去的那单金额正好对得上）
+  const GOOD_CHECK = ['ok', 'more', 'merged', 'less', 'move'];
+  /*
+   * 核对下载的发票用的候选订单（同一家店的几张票逐个和这家店所有还没取得发票的订单配，用户 2026-10-10）：
+   *   - 发票清单里还没取得发票的单（应报金额 = 实付 − 退款）
+   *   - 文件现在挂着的那几单（nos）；已经有一张相符的票的标 taken（同店另一单金额正好对得上又没票时，第二张票归那单）
+   *   - 同店还没交易成功的实验室订单（pending）：不在发票清单里，票是它的就先挂到它名下，交易成功后自动列出（不挂在错误的订单上）
+   * 个人的、已报销的、关闭的、已退款的单不参加，不然按用券前价格开的票会被挪给同店正好同价的个人订单。
+   * cur：这次正在核对的下载记录（不算作那单已有的票）
+   */
+  function checkOrders(nos, cur) {
+    const good = o => !!haveOf(o) || (X.dlDone[o.no] || []).concat(S.invFiles[o.no] || []).some(g => {
+      if (cur.has(g)) return false;
+      const c = fcOf(g);
+      return c ? GOOD_CHECK.includes(c.kind) : !g.url;              // 没核对过、也没法核对的（手动添加、旧版本下载的）当作有票
+    });
+    const pick = new Map();
+    const put = (o, extra) => { if (o && !pick.has(o.no)) pick.set(o.no, Object.assign({ no: o.no, shop: o.shop, time: o.time, amount: dueOf(o), taken: good(o) }, extra)); };
+    for (const no of nos) put(S.orders.find(y => y.no === no));
+    for (const x of invOrders()) if (!good(x.o)) put(x.o);
+    const shops = new Set([...pick.values()].map(o => o.shop)), gone = new Set(X.goneNos || []);
+    for (const x of derived.rows)
+      if (effCat(x) === 'lab' && !x.ref && !x.past && !doneDeal(x.o) && !gone.has(x.o.no) && shops.has(x.o.shop)) put(x.o, { pending: true });
+    return [...pick.values()];
+  }
   const CHECK_NOTE = { ok: '✓ PDF 金额、日期相符', more: '✓ 票面略高于实付（按用券前价格开具）', merged: '✓ 同店多单合开', less: '✓ 票面低于实付不足 1 元',
     short: '⚠ 票面低于应报金额 1 元以上，请联系卖家核对',
     move: '已移至正确订单', old: '⚠ 开票日期早于下单日期：属于以往其他订单', dup: '⚠ 与已整理（已报销）的发票为同一张，不属于本单', amount: '⚠ PDF 金额不符', many: '⚠ 同店多单均可匹配，请核对',
-    title: '⚠ 抬头不符', unread: '⚠ 无法读取 PDF 金额，请打开文件核对', error: '⚠ 未能取回 PDF 核对，请打开文件核对' };
+    title: '⚠ 抬头不符', unread: '⚠ 无法读取 PDF 金额，请打开文件核对', error: '⚠ 未能取回 PDF 核对，请打开文件核对', copy: '与已下载的发票为同一张（卖家重复发送）' };
   // 核对结果按下载的实际位置记（同一个建议文件名可能先后下过两次：挪走后原订单又下了一次），旧版本按文件名记的照样认
   const fcKey = g => g.path ? 'p:' + g.path : g.file;
   const fcOf = g => { const fc = S.fileChecks || {}; return fc[fcKey(g)] || fc[g.file] || null; };
   // 卖家发来的文件经核对不是这单的（挪到同店另一单、以往的票、已报销的票、不是发票）：记在 S.rejectedSrc（按卖家发来时的文件名），
   // 以后不再当成这单的票去下载；挪走的只对挪去的那单（to，合开时几单用「,」隔开）照常算
-  const rejectedFor = (name, no) => { const r = (S.rejectedSrc || {})[name]; return !!r && !(r.kind === 'move' && String(r.to || '').split(',').includes(no)); };
-  const REJ_WHY = { dup: '已报销的发票', notinv: '不是发票', move: '已归入同店另一单' };
+  // 已经下载过、挂在别的单上的（按卖家发来时的文件名 src、文件名里的发票号认）也不再算这单的：同店几单共用一个会话，
+  // 一个文件只归一单（2026-10-10 实测：挪走的文件、卖家重发的同一张票「…(1).pdf」不能再挂回原订单）
+  const rejectedFor = (name, no) => { const r = (S.rejectedSrc || {})[name]; if (r) return !(r.kind === 'move' && String(r.to || '').split(',').includes(no));
+    const w = fileOwner(name); return !!w && !w.split(',').includes(no); };
+  const REJ_WHY = { dup: '已报销的发票', notinv: '不是发票', move: '已归入同店另一单', copy: '与已下载的发票为同一张', own: '已归入另一单' };
+  const rejWhy = (name, no) => { const r = (S.rejectedSrc || {})[name]; return REJ_WHY[r ? r.kind : fileOwner(name) === '已整理' ? 'dup' : 'own'] || '以往的发票'; };
+  const invOfName = name => ((I.parseInvoiceName(name) || {}).invNo || '');
+  // 卖家发来的文件现在归哪一单（订单号，几单合开时用「,」隔开；没下载过是空）：下载记录的 src 一样，或文件名里的发票号和已核对过的票一样。
+  // 已整理（已报销）的票按发票号算作 '已整理'。下载记录、核对结果变了才重算
+  let ownCache = { key: '', src: new Map(), inv: new Map() };
+  function owners() {
+    const stores = [X.dlDone || {}, S.invFiles || {}];
+    const key = stores.map(s => Object.entries(s).map(([no, l]) => no + ':' + l.length).join(',')).join('|') + '|' + Object.keys(S.fileChecks || {}).length + '|' + (S.haveIdx || []).length;
+    if (ownCache.key === key) return ownCache;
+    const src = new Map(), inv = new Map(), add = (m, k, no) => { if (k) m.set(k, m.has(k) && !m.get(k).split(',').includes(no) ? m.get(k) + ',' + no : m.get(k) || no); };
+    for (const s of stores) for (const [no, l] of Object.entries(s)) for (const g of l) {
+      add(src, g.src, no);
+      const c = fcOf(g);
+      add(inv, (c && !BAD_CHECK.includes(c.kind) && c.invNo) || invOfName(g.src || ''), no);
+    }
+    for (const x of S.haveIdx || []) if (x.invNo && !inv.has(x.invNo)) inv.set(x.invNo, '已整理');
+    return (ownCache = { key, src, inv });
+  }
+  const fileOwner = name => { const w = owners(), n = invOfName(name); return w.src.get(name) || (n && w.inv.get(n)) || ''; };
   function rejectedOnly(o, st) {
     if (st.key !== 'replied') return st;
-    const c = chatOf(o), rej = S.rejectedSrc || {};
+    const c = chatOf(o);
     if (!c || !c.files.length || (c.images || []).length || (c.email || []).length || !c.files.every(f => rejectedFor(f.name, o.no))) return st;
-    return { key: 'ask', label: I.LABEL.ask, detail: '卖家发送的 ' + c.files.length + ' 个文件经核对均不属于本单（' + c.files.map(f => REJ_WHY[rej[f.name].kind] || '以往的发票').join('、') + '）' };
+    return { key: 'ask', label: I.LABEL.ask, detail: '卖家发送的 ' + c.files.length + ' 个文件经核对均不属于本单（' + [...new Set(c.files.map(f => rejWhy(f.name, o.no)))].join('、') + '）' };
   }
   // 找淘宝客服督促过（vipSent）、还在等的单（已进入淘宝开票流程 / 已向卖家索要）：单独一个状态「已由淘宝客服督促」（用户 2026-10-05）。
   // base 记着原来在等谁，提醒和「请淘宝客服督促」按原来的等待时间算；别的还没到手的状态只在说明里注明督促过
@@ -2071,7 +2163,8 @@
     const cs = got.map(fcOf).filter(Boolean);
     const notes = cs.map(c => (CHECK_NOTE[c.kind] || '') + (c.kind === 'short' ? '（少 ' + yuan(+c.short) + '）' : '') + (c.amount != null && c.kind !== 'error' ? '（' + yuan(+c.amount) + '，' + (c.date || '日期未读取') + '）' : '') + (c.dup ? '；与已整理的 ' + c.dup + ' 为同一张' : ''));
     const s2 = notes.length ? Object.assign({}, st, { detail: st.detail + ' · ' + notes.join('；'), checks: notes.join('；') }) : st;
-    return cs.some(c => BAD_CHECK.includes(c.kind)) ? Object.assign({}, s2, { key: 'badinv', label: '下载的发票核对不通过' }) : s2;
+    // 已有一张核对相符的票：别的文件配不上（说明里照样标 ⚠）不再把整单标红——这单的票已经到手了
+    return cs.some(c => BAD_CHECK.includes(c.kind)) && !cs.some(c => GOOD_CHECK.includes(c.kind)) ? Object.assign({}, s2, { key: 'badinv', label: '下载的发票核对不通过' }) : s2;
   }
 
   // 打开每一单的订单详情页（extension/detail.js）：读旺旺图标上的卖家旺旺名，并看商品是不是已经退款成功了。
@@ -2335,7 +2428,7 @@
   }
   // 1 读取订单详情：要看卖家回复、却不知道卖家旺旺名的（不然旺旺里找不到会话）；显示「退款成功」、还不知道退了多少钱的
   async function readDetails(w) {
-    const miss = invOrders().filter(x => !x.o.nick && needsChat(invStatus(x))).map(x => x.o);
+    const miss = invOrders().filter(x => !x.o.nick && needsChat(invStatus(x), x.o)).map(x => x.o);
     const part = [...new Set(derived.rows.filter(x => !x.past && N.refundState(x.l, x.o) === 'refunded' && S.refunds[x.l.key] === undefined
       && (S.refundAmt || {})[x.l.key] == null && (S.decisions[x.l.key] || x.r.cat) === 'lab').map(x => x.o))];
     // 要附订单页面截图的（超过 1000 元、需用途说明）：顺便截图。每天自动刷新（后台模式）不截：截图要把详情页切到前台
@@ -2630,19 +2723,52 @@
       await chrome.storage.local.set({ dlJobs: dlJobs || [] }); return r.add.map(j => j.no + ' ' + (j.file || j.kind)); },
   };
   // 手动挂 PDF（比如卖家发到邮箱的）：用扩展的下载功能复制一份进「订单分拣-发票」，按订单改好名
-  async function attachFile(no, file) {
+  // r：addFile 读出的票面（发票号、金额、开票日期），读不了是 null
+  async function attachFile(no, file, r) {
     const x = invOrders().find(g => g.o.no === no);
     if (!x || !file) return;
     const ext = ((/\.(pdf|ofd|xml)$/i.exec(file.name) || [])[1] || 'pdf').toLowerCase();
-    const name = I.saveName({ time: x.o.time, amount: x.o.pay, shop: x.o.shop, no }, ext);
+    let name = I.saveName({ time: x.o.time, amount: x.o.pay, shop: x.o.shop, no }, ext);
+    // 同名文件已经有了（以前挂错、挪走的票还占着这个名字，2026-10-10 实测）：按发票号另起名，不让 Chrome 自动存成「… (1).pdf」后插件还按原名记
+    const base = p => String(p || '').split(/[\\/]/).pop();
+    const used = new Set(Object.values(X.dlDone || {}).concat(Object.values(S.invFiles || {})).flat().flatMap(g => [g.file, base(g.path)]).filter(Boolean));
+    if (used.has(name)) name = name.replace(/(\.\w+)$/, '_' + ((r && r.invNo) || stamp(new Date()).replace(/\D/g, '')) + '$1');
     const url = URL.createObjectURL(file);
     try {
       await chrome.runtime.sendMessage({ type: 'ownName', url, name });     // 后台决定文件名时按这个填，不然会用原文件名
-      await chrome.downloads.download({ url, filename: '订单分拣-发票/' + name, conflictAction: 'uniquify' });
-      (S.invFiles[no] = S.invFiles[no] || []).push({ file: name, at: Date.now(), from: 'manual', src: file.name });
-      persist(); render(); toast('已添加发票：' + name);
+      const id = await chrome.downloads.download({ url, filename: '订单分拣-发票/' + name, conflictAction: 'uniquify' });
+      // 以 Chrome 实际存下的文件为准（下载文件夹里本来就有同名文件时，Chrome 仍会加「 (1)」）
+      const path = await savedPath(id);
+      const g = { file: path ? base(path) : name, path, at: Date.now(), from: 'manual', src: file.name };
+      (S.invFiles[no] = S.invFiles[no] || []).push(g);
+      // 按刚读出的票面核对（和下载的发票一样：金额、开票日期；是同店另一单的就挪过去）。核对结果按实际位置记
+      if (r && r.isInvoice && r.amount != null) {
+        const orders = checkOrders([no], new Set([g]));
+        const [c0] = I.checkFiles([Object.assign({}, r, { file: no + '_' + g.file })], orders);
+        const have = (S.haveIdx || []).find(h => h.invNo && h.invNo === r.invNo);
+        const c = Object.assign({}, c0, { file: g.file, path, no }, have ? { kind: 'dup' } : {});
+        (S.fileChecks = S.fileChecks || {})[fcKey(g)] = { kind: c.kind, amount: c.amount, date: c.date, invNo: c.invNo, to: c.to || '', nos: c.nos || [], short: c.short || 0,
+          dup: have ? have.file : '', items: r.items || '', seller: r.seller || '' };
+        persist();
+        await applyFileCheck([c]);
+        chrome.storage.local.set({ invWant: invWant() });
+        render();
+        const warn = !['ok', 'more', 'less', 'merged'].includes(c.kind);
+        toast('已添加发票：' + g.file + (c.kind === 'move' ? '（票面金额属于订单 ' + c.to + '，已归入该单）' : warn ? '（' + (CHECK_NOTE[c.kind] || '⚠ 核对不通过') + '）' : ''));
+        return;
+      }
+      persist(); render(); toast('已添加发票：' + g.file);
     } catch (e) { toast('保存失败：' + e.message); }
     finally { setTimeout(() => URL.revokeObjectURL(url), 10000); }
+  }
+  // 下载的最终位置（chrome.downloads 回报的 filename，含 Chrome 自动加的序号）；10 秒内读不到给空
+  async function savedPath(id) {
+    for (let i = 0; i < 40 && id != null; i++) {
+      const [it] = await chrome.downloads.search({ id });
+      if (it && it.filename && (it.state !== 'in_progress' || i > 8)) return it.filename;
+      await sleepMs(250);
+    }
+    return '';
   }
 
   // ── 从淘宝读取订单（用户 2026-10-07：新人大多没用过淘宝网页版，卡在「导出订单表」；改成插件自己翻订单页读，订单表降为可选）──
@@ -2833,7 +2959,7 @@
   // ── 备份数据 / 从备份恢复（用户 2026-10-05）：全部数据只在本机浏览器里，删掉扩展或清浏览器数据就没了 ──
   // 备份文件：{ app: 'orderTriage', kind: 'backup', format: 1, version, at, localStorage: { 'orderTriage.*': 原样字符串 }, storage: chrome.storage.local 全部 }
   // 格式有不兼容的改动时 format 加一；旧插件见到不认识的 format 就拒绝，不去猜
-  const VERSION = EXT ? chrome.runtime.getManifest().version : '0.21.0';     // 网页版读不到 manifest，selftest 核对两处一致
+  const VERSION = EXT ? chrome.runtime.getManifest().version : '0.22.0';     // 网页版读不到 manifest，selftest 核对两处一致
   const BACKUP_FORMAT = 1;
   // 恢复时丢掉的扩展存储键：进行中的任务、页面领活记录、标签页编号这类临时状态。恢复回去的话，开着的淘宝页一读到就会接着干活
   // （重新提交开票申请、给卖家发消息、找客服督促、下载），标签页编号也早已失效。

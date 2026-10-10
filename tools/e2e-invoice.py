@@ -107,7 +107,11 @@ def make_pdfs(p):
         out[inv] = mk(inv, day, float(pay), no)
     for inv, date, amt in (('26990000000000000121', '2026-09-06', 25.0), ('26990000000000000128', '2026-09-10', 66.0),
                            ('26990000000000000124', '2026-09-10', 45.0), ('26990000000000000125', '2026-09-10', 10.5),
-                           ('26990000000000000127', '2026-09-12', 4.9)):
+                           ('26990000000000000127', '2026-09-12', 4.9),
+                           # [19]：同店两单的 450、300 两张，补发店先少 5 元（45）后补发的 50，手动添加的 66
+                           ('26990000000000000191', '2026-08-27', 450.0), ('26990000000000000192', '2026-10-08', 300.0),
+                           ('26990000000000000194', '2026-09-10', 45.0), ('26990000000000000195', '2026-10-10', 50.0),
+                           ('26990000000000000196', '2026-09-21', 66.0)):
         out[inv] = mk(inv, date, amt)
     out['26990000000000000123'] = mk('', '2026-09-10', 0, html='<meta charset="utf-8"><h2>USB 示波器 产品说明书</h2>'
                                      '<p>型号 X1，额定电压 5V，额定电流 1A。使用前请仔细阅读本说明书，按图连接探头后开机，保修一年。</p>')
@@ -235,7 +239,10 @@ def run(p, tmp):
         url = route.request.url
         m = re.match(r'https://einvoice-file\.oss-cn-beijing\.aliyuncs\.com/mock/OSTB_(\d+)\.pdf', url)
         if m and pdf_of(pdfs, m.group(1)):              # 模拟阿里云上的发票文件：虚构发票 PDF，末尾注释写着是哪一单
-            return route.fulfill(status=200, content_type='application/pdf', body=pdf_of(pdfs, m.group(1)))
+            # 旺旺模拟页点「下载文件」（带 ?name=原文件名）：和真实页面一样作为附件下载，文件名是卖家发来时的原名
+            nm = re.search(r'[?&]name=([^&]+)', url)
+            hd = {'Content-Disposition': "attachment; filename*=UTF-8''" + nm.group(1)} if nm else {}
+            return route.fulfill(status=200, content_type='application/pdf', headers=hd, body=pdf_of(pdfs, m.group(1)))
         if url.startswith('https://consumerservice.taobao.com/online-help'):      # 官方客服入口：真实页面会跳到 alimebot
             return route.fulfill(status=200, content_type='text/html; charset=utf-8',
                                  body='<meta charset="utf-8"><script>location.replace("https://ai.alimebot.taobao.com/intl/index.htm?from=mock")</script>')
@@ -909,6 +916,7 @@ def run(p, tmp):
     if home:
         part17(ctx, home, tmp, pdfs, dl_dir)
         part18(ctx, home, tmp)
+        part19(ctx, home, tmp, pdfs, dl_dir)
     ctx.close()
 
 
@@ -1179,6 +1187,159 @@ def part18(ctx, app, tmp):
     left = app.evaluate('__otDev.lists()')['recv']
     check(left == [], '确认收货以后清单里不再有这两单', left)
     app.evaluate('() => { __otDev.tmo = null; }')
+
+
+# [19] 2026-10-10 实测漏掉卖家发来的发票（数据虚构）：同店两单（Y1 已交易成功 450、Y2 还没交易成功 300）；Z1 下载的票核对不通过、卖家后来补发；
+# Q1 手动添加发票时下载文件夹里已有同名文件
+X19 = {
+    'Y1': ('5190000000000000191', '2026-08-08', '交易成功', '某某虚构双单店', '450.00', [('虚构 步进电机驱动器 套装', '标准款', 1, '450.00')]),
+    'Y2': ('5190000000000000192', '2026-10-03', '卖家已发货', '某某虚构双单店', '300.00', [('虚构 同步带轮 套装', '20 齿', 1, '300.00')]),
+    'Z1': ('5190000000000000193', '2026-09-08', '交易成功', '某某虚构补发店', '50.00', [('虚构 恒温焊台 烙铁头', '标准款', 1, '50.00')]),
+    'Q1': ('5190000000000000196', '2026-09-20', '交易成功', '某某虚构邮箱店', '66.00', [('虚构 数显卡尺 150mm', '标准款', 1, '66.00')]),
+}
+N19 = {k: v[0] for k, v in X19.items()}
+NICK19 = {'Y1': 'nick双单', 'Y2': 'nick双单', 'Z1': 'nick补发', 'Q1': 'nick邮箱'}
+F191 = 'dzfp_26990000000000000191_某大学_20260827153948.pdf'
+F192 = 'dzfp_26990000000000000192_某大学_20261008155508.pdf'
+F195 = 'dzfp_26990000000000000195_某大学_20261010100000.pdf'
+
+
+def part19(ctx, app, tmp, pdfs, dl_dir):
+    print('\n[19] 漏掉卖家发来的发票（2026-10-10 实测的情形，数据虚构）：核对不通过的单仍读旺旺；同店两单按金额各归各、未交易成功的先记在该单名下；'
+          '重复发送的不再下；手动添加重名不覆盖、按实际文件名记录')
+    store = lambda k: app.evaluate('k => chrome.storage.local.get(k).then(r => r[k])', k)
+    S = lambda: app.evaluate("JSON.parse(localStorage.getItem('orderTriage.app.v1'))")
+    Y1, Y2, Z1, Q1 = (N19[k] for k in ('Y1', 'Y2', 'Z1', 'Q1'))
+    app.bring_to_front(); app.wait_for_selector('#main:not([hidden])')
+    ctx.new_cdp_session(app).send('Browser.setDownloadBehavior', {'behavior': 'default'})
+    for pg in [pg for pg in ctx.pages if '/app/im/' in pg.url]: pg.close()
+    csv4 = tmp / '虚构订单表4.csv'
+    write_csv(csv4, X19)
+    app.set_input_files('#file', str(csv4)); app.wait_for_timeout(800)
+    app.evaluate('s => chrome.storage.local.get("scraped").then(r => chrome.storage.local.set({ scraped: Object.assign({}, r.scraped, s) }))',
+                 {N19[k]: {'no': N19[k], 'nick': n, 'status': X19[k][2], 'lines': [{'title': X19[k][5][0][0]}]} for k, n in NICK19.items()})
+    app.wait_for_timeout(800)
+    app.evaluate('''nos => { const S = JSON.parse(localStorage.getItem('orderTriage.app.v1'));
+        for (const o of S.orders) if (nos.includes(o.no)) for (const l of o.lines) S.decisions[l.key] = 'lab';
+        localStorage.setItem('orderTriage.app.v1', JSON.stringify(S)); }''', list(N19.values()))
+    app.reload(); app.wait_for_selector('#main:not([hidden])'); app.wait_for_timeout(800)
+
+    def row(no):
+        app.bring_to_front(); app.click('.flow li[data-step="2"]'); app.wait_for_timeout(600)
+        return app.evaluate("no => { const tr = [...document.querySelectorAll('.inv-table tbody tr')].find(tr => tr.textContent.includes(no)); "
+                            "return tr ? { st: tr.querySelector('.st').textContent.trim(), detail: [...tr.children[5].querySelectorAll('.detail')].map(d => d.textContent).join(' | ') } : null; }", no)
+    oss = 'https://einvoice-file.oss-cn-beijing.aliyuncs.com/mock/OSTB_'
+
+    # Z1：先下到一张票面 45.00 的（应报 50.00，少 5 元）→ 红色「下载的发票核对不通过」
+    folder = tmp / '订单分拣-发票19'
+    folder.mkdir()
+    d, shop, pay = X19['Z1'][1], X19['Z1'][3], X19['Z1'][4]
+    zname = f'{d}_{js_num(pay)}_{shop}_{Z1}.pdf'
+    zsrc = 'dzfp_26990000000000000194_某大学_20260910100000.pdf'
+    app.evaluate('f => chrome.storage.local.get("dlDone").then(r => chrome.storage.local.set({ dlDone: Object.assign({}, r.dlDone, f) }))',
+                 {Z1: [{'file': zname, 'path': str(folder / zname), 'at': int(time.time() * 1000), 'from': 'chat', 'src': zsrc, 'url': oss + '26990000000000000194.pdf'}]})
+    fc = wait_until(app, lambda: ((S() or {}).get('fileChecks') or {}).get('p:' + str(folder / zname)), 60) or {}
+    check(fc.get('kind') == 'short', 'Z1 先下到的票面 45.00（应报 50.00）：核对为少 1 元以上', fc)
+    rz = row(Z1) or {}
+    check(rz.get('st') == '下载的发票核对不通过', 'Z1：红色「下载的发票核对不通过」', rz)
+    want = app.evaluate('__otDev.want()') or {}
+    chat_nos = {o['no']: o.get('st') for o in want.get('chat', [])}
+    check(chat_nos.get(Z1) == 'badinv' and Y1 in chat_nos and Y2 not in chat_nos,
+          '旺旺要读的范围：核对不通过的 Z1 也在（以前不读，卖家补发的票漏掉）；Y1 在；还没交易成功的 Y2 不在发票清单里', chat_nos)
+
+    for pg in [pg for pg in ctx.pages if '/app/im/' in pg.url]: pg.close()
+    s0 = (store('chatScan') or {}).get('at', 0)
+    app.bring_to_front()
+    app.evaluate('() => { __otDev.scan(); }')
+    cs = wait_until(app, lambda: (c := store('chatScan')) and c.get('at', 0) != s0 and c, 300) or {}
+    convs = cs.get('convs') or {}
+    dd, bf = convs.get('某某虚构双单店') or {}, convs.get('某某虚构补发店') or {}
+    check(len(dd.get('asks', [])) == 3 and len(dd.get('files', [])) == 3,
+          '同店两单的会话：用户手打的「发票」「抬头 税号」和插件的索要都认成要过票（3 条），卖家发的 3 个文件都记下',
+          {'asks': [a.get('text') for a in dd.get('asks', [])], 'files': [f.get('name') for f in dd.get('files', [])]})
+    check(any(f.get('name') == F195 for f in bf.get('files', [])), '核对不通过的 Z1：这一轮照样读了补发店的会话，读到卖家补发的文件', bf.get('files'))
+    check((row(Y1) or {}).get('st') == '卖家已发送文件', 'Y1：卖家已发送文件', row(Y1))
+    jobs = sorted(app.evaluate('nos => __otDev.jobsFor(nos)', [Y1, Z1]))
+    check(jobs == sorted([Y1 + ' ' + F191, Y1 + ' ' + F192, Z1 + ' ' + F195]),
+          '要下载的：Y1 插件索要之前（用户手动要票之后）发来的那张、之后的 300 元那张；重发的「(1)」（同一张票）不下；Z1 只下补发的那张（先前那张已下过）', jobs)
+
+    for pg in [pg for pg in ctx.pages if '/app/im/' in pg.url]: pg.close()
+    app.evaluate('() => { __otDev.download(); }')
+
+    def landed():
+        dl, fcs = store('dlDone') or {}, (S() or {}).get('fileChecks') or {}
+        recs = (dl.get(Y1) or []) + (dl.get(Y2) or []) + (dl.get(Z1) or [])
+        return dl.get(Y2) and len(dl.get(Z1) or []) >= 2 and all(fcs.get('p:' + g.get('path', '')) for g in recs) and (dl, fcs)
+    wait_until(app, landed, 180)
+    app.wait_for_timeout(1500)
+    dl, fcs = store('dlDone') or {}, (S() or {}).get('fileChecks') or {}
+    kinds = lambda no: [(fcs.get('p:' + g.get('path', '')) or {}).get('kind') for g in dl.get(no) or []]
+    srcs = lambda no: [g.get('src') for g in dl.get(no) or []]
+    check(srcs(Y1) == [F191] and kinds(Y1) == ['ok'], 'Y1（450）：挂的是 450 元那张，核对相符', (srcs(Y1), kinds(Y1)))
+    y2 = (dl.get(Y2) or [{}])[0]
+    check(srcs(Y2) == [F192] and y2.get('movedFrom') == Y1 and kinds(Y2) == ['move'],
+          '300 元那张按金额挪给同店还没交易成功的 Y2（记在 Y2 名下，不挂在 Y1 上）', (srcs(Y2), y2.get('movedFrom'), kinds(Y2)))
+    check(sorted(kinds(Z1)) == ['ok', 'short'], 'Z1：补发的 50.00 核对相符，先前那张仍记为「少」', (srcs(Z1), kinds(Z1)))
+    ry1, rz, ry2 = row(Y1) or {}, row(Z1) or {}, row(Y2)
+    check(ry1.get('st') == '已下载' and '相符' in ry1.get('detail', ''), 'Y1 发票表：已下载、相符', ry1)
+    check(rz.get('st') == '已下载' and '⚠' in rz.get('detail', ''), 'Z1：拿到相符的票后不再标红（配不上的那张在说明里仍标 ⚠）', rz)
+    check(ry2 is None, 'Y2 还没交易成功：不在发票表里', ry2)
+    rej = ((S() or {}).get('rejectedSrc') or {}).get(F192) or {}
+    check(rej.get('kind') == 'move' and rej.get('to') == Y2, '300 元那张记为「已归入 Y2」，以后不再当成 Y1 的票', rej)
+
+    print('  兼容旧数据：旧版本把 300 元那张挂在 Y1、标「少」（Y2 不在候选里）；新版本打开后自动重新配单，不再挂回 Y1')
+    y1rec = (dl.get(Y1) or [{}])[0]
+    key = 'p:' + y2.get('path', '')
+    old = dict(y2)
+    old.pop('movedFrom', None)
+    app.evaluate('([y1, y2, rec]) => chrome.storage.local.get("dlDone").then(r => { const d = Object.assign({}, r.dlDone); d[y1] = [rec]; delete d[y2]; return chrome.storage.local.set({ dlDone: d }); })',
+                 [Y1, Y2, old])
+    app.wait_for_timeout(1500)
+    app.evaluate('''([key, name]) => { const S = JSON.parse(localStorage.getItem('orderTriage.app.v1'));
+        S.fileChecks[key] = Object.assign({}, S.fileChecks[key], { kind: 'short', to: '', short: 150 }); delete (S.rejectedSrc || {})[name];
+        localStorage.setItem('orderTriage.app.v1', JSON.stringify(S)); }''', [key, F192])
+    app.reload(); app.wait_for_selector('#main:not([hidden])')
+    back = wait_until(app, lambda: (d2 := store('dlDone') or {}) and [g.get('src') for g in d2.get(Y2) or []] == [F192] and not d2.get(Y1) and d2, 30)
+    check(bool(back), '打开新版本：以前挂在 Y1、核对为「少」的 300 元那张，按记下的票面金额重新配单，挪到 Y2', store('dlDone') and {k: [g.get('src') for g in (store('dlDone') or {}).get(k) or []] for k in (Y1, Y2)})
+    jobs = app.evaluate('nos => __otDev.jobsFor(nos)', [Y1])
+    check(jobs == [Y1 + ' ' + F191], 'Y1 再排下载：只下 450 元那张；挪走的 300 元那张、重发的「(1)」都不会挂回 Y1', jobs)
+    app.evaluate('([y1, rec]) => chrome.storage.local.get("dlDone").then(r => chrome.storage.local.set({ dlDone: Object.assign({}, r.dlDone, { [y1]: [rec] }) }))', [Y1, y1rec])
+    app.wait_for_timeout(1200)
+
+    # Y2 交易成功：自动出现在发票表里，票已经在它名下
+    app.evaluate('s => chrome.storage.local.get("scraped").then(r => chrome.storage.local.set({ scraped: Object.assign({}, r.scraped, s) }))',
+                 {Y2: {'no': Y2, 'nick': 'nick双单', 'status': '交易成功', 'lines': [{'title': X19['Y2'][5][0][0]}]}})
+    ry2 = wait_until(app, lambda: row(Y2), 15) or {}
+    check(ry2.get('st') == '已下载' and '已移至正确订单' in ry2.get('detail', ''), 'Y2 交易成功后自动列出：已下载（300 元那张，已移至正确订单）', ry2)
+    check((row(Y1) or {}).get('st') == '已下载', 'Y1 仍是已下载', row(Y1))
+
+    print('  手动添加发票：下载文件夹里已有同名文件')
+    inv_dir = dl_dir / '订单分拣-发票'
+    inv_dir.mkdir(parents=True, exist_ok=True)
+    d, shop, pay = X19['Q1'][1], X19['Q1'][3], X19['Q1'][4]
+    qname = f'{d}_{js_num(pay)}_{shop}_{Q1}.pdf'
+    (inv_dir / qname).write_bytes(b'%PDF-1.4\n%old file\n%%EOF\n')
+    # 这个名字的文件以前挂错、挪到了另一单（记录在 Y2 名下）
+    app.evaluate('([y2, rec]) => chrome.storage.local.get("dlDone").then(r => { const d = Object.assign({}, r.dlDone); d[y2] = (d[y2] || []).concat(rec); return chrome.storage.local.set({ dlDone: d }); })',
+                 [Y2, {'file': qname, 'path': str(inv_dir / qname), 'at': int(time.time() * 1000), 'from': 'chat', 'src': '旧文件.pdf'}])
+    app.wait_for_timeout(1000)
+    mail = tmp / '卖家邮箱发来的发票.pdf'
+    mail.write_bytes(pdfs['26990000000000000196'])
+    app.click('.flow li[data-step="2"]'); app.wait_for_timeout(500)
+    app.set_input_files(f'input[data-inv="attach"][data-no="{Q1}"]', str(mail))
+    rec = wait_until(app, lambda: ((S() or {}).get('invFiles') or {}).get(Q1), 20) or [{}]
+    exp1 = qname[:-4] + '_26990000000000000196.pdf'
+    r1 = rec[0]
+    check(r1.get('file') == exp1 and Path(r1.get('path', '')).name == exp1 and (inv_dir / exp1).is_file() and (inv_dir / qname).read_bytes().startswith(b'%PDF-1.4\n%old'),
+          '手动添加：同名文件已有 → 按发票号另起名「…_发票号.pdf」，旧文件没被覆盖，记录的就是实际存下的文件', (r1, sorted(p.name for p in inv_dir.iterdir() if Q1 in p.name)))
+    fq = ((S() or {}).get('fileChecks') or {}).get('p:' + r1.get('path', '')) or {}
+    check(fq.get('kind') == 'ok' and fq.get('amount') == 66, '手动添加的发票按实际文件核对（66.00 相符），核对结果按实际位置记', fq)
+    check((row(Q1) or {}).get('st') == '已下载', 'Q1：已下载', row(Q1))
+    app.set_input_files(f'input[data-inv="attach"][data-no="{Q1}"]', str(mail))
+    rec = wait_until(app, lambda: (l := ((S() or {}).get('invFiles') or {}).get(Q1)) and len(l) >= 2 and l, 20) or [{}, {}]
+    r2 = rec[-1]
+    check(r2.get('file') and r2.get('file') != exp1 and Path(r2.get('path', '')).name == r2.get('file') and (inv_dir / r2['file']).is_file(),
+          '再添加一次：Chrome 自动存成「… (1).pdf」，插件按 chrome.downloads 回报的实际文件名记录', (r2, sorted(p.name for p in inv_dir.iterdir() if Q1 in p.name)))
 
 
 def main():

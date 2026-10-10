@@ -48,7 +48,7 @@ extension/background.js    点扩展图标切到已开着的主页（focusHome�
 extension/taobao.js        淘宝订单页的内容脚本：只在有有效的 readJob 且向后台领到活时自动全部读取（进度 readProgress、结束 readDone），
                            结果写回 chrome.storage.local 的 scraped；用户自己打开订单页时什么都不做（不出面板）
 extension/invoice-list.js  「全部发票」页（i.taobao.com/my_itaobao/invoice）：同步三个标签的开票记录 → invSync；按 dlJobs 点「下载到本地」
-extension/chat.js          旺旺网页版（market.m.taobao.com/app/im，内容在 iframe chat-core）：扫描卖家回复 → chatScan（开票卡片单独记 cards，不算图片；
+extension/chat.js          旺旺网页版（market.m.taobao.com/app/im，内容在 iframe chat-core）：扫描卖家回复 → chatScan（用户手打的含「发票」或抬头税号的消息也算要过票；开票卡片单独记 cards，不算图片；
                            没读成的会话记 failed，读不出消息时不覆盖上次结果；知道旺旺名的不在左侧列表也按网址打开，收尾核对每家要么读到要么进 failed，日志 scan skip）；自动发送只在主页心跳 askBeat 编号对得上时做，等用户最多 3 分钟；
                            按 dlJobs 点「下载文件」；按 cardRun 点开票卡片的「去申请」
 extension/chat-main.js     旺旺页自身环境（world MAIN）：包一层 window.open，记下页面要新开的开票申请页地址（被弹窗拦截时由后台打开）
@@ -89,7 +89,10 @@ js/app.js                  界面、状态（localStorage）、读取订单、�
                            发票表「操作」列按状态一个主要操作（rowAction / rowAct：下载、催卖家、找客服督促、索要发票、申请开票、按入口申请、换开发票、联系卖家）；
                            window.__otDev 只给离线测试单独触发其中一段、逐单操作或改短时限（tmo）；读取进度也在步骤条下方，
                            没有订单时显示「开始使用」卡片（renderGuide），顶上进度条（renderDash，只显示不能点），
-                           应报金额只有一个来源 dueOf（实付 − 退款，和 derive 共用 lineDue）；下载的票核对不通过是红色 badinv（不算已取得），
+                           应报金额只有一个来源 dueOf（实付 − 退款，和 derive 共用 lineDue）；下载的票核对不通过是红色 badinv（不算已取得；同一单已有一张相符的票时不标红），
+                           下载的票按 PDF 金额和同店所有未取得发票的订单逐张配（verifyDownloads / checkOrders：含还没交易成功的同店实验室订单 pending，票先记在它的 dlDone 名下、交易成功后自动列出；
+                           以前没通过的按记下的票面重配 RECHECK；同一张票重复发送的记 copy 拿掉；已挂在别单的文件 fileOwner 不再下载、不再挂回），
+                           旺旺扫描范围 needsChat（还没取得发票、和卖家有会话往来的都读，含 badinv）；手动添加重名时按发票号另起名，按 chrome.downloads 回报的实际路径记（savedPath），
                            旺旺会话没读成是 chatfail（不退回「需向卖家索要」）；整理报销后订单记进 S.packed（以后算「已整理（第 N 批）」），
                            整理报销文件按手册结构输出（packPlan / makePack：不超过1k耗材 / 超过1k耗材 / 低值品、README.txt、报销清单.xlsx、用途说明 docx），
                            每次记一个批次 S.batches（第 4 步说明区下方「报销记录」、填到账、差额组合）；低值品标签 lowPill（S.lowval 按标题记住）；
@@ -107,7 +110,8 @@ tools/e2e-mock.py          离线端到端测试：主页「从淘宝读取订�
                            认不出「下一页」、没读出商品的订单不算删进回收站；「开始使用」卡片的读取进度颜色
 tools/e2e-invoice.py       离线：刷新开票记录、旺旺扫描（含「安全提醒」系统卡片）、下载改名（含本机假阿里云 https）、自动处理发票分段进度和只确认一次、
                            autoLog、操作列（催卖家只填不发、单单找客服督促）、图例不裁字、回主页按钮；自动发送不带用户自己打的字、残留队列不接管；
-                           每天自动处理不打断（主页正忙、30 分钟内有操作都推迟）；[17d] 要读的店都不在左侧列表；[18] 应开票截止日、天猫确认收货（确认页密码框不碰、排进平台申请）；[17] 下载的票核对（合开、挪单、不是发票、少 1 元以上、券前价、部分退款）和整理后记为已整理、读旺旺失败不退回索要
+                           每天自动处理不打断（主页正忙、30 分钟内有操作都推迟）；[17d] 要读的店都不在左侧列表；[18] 应开票截止日、天猫确认收货（确认页密码框不碰、排进平台申请）；[17] 下载的票核对（合开、挪单、不是发票、少 1 元以上、券前价、部分退款）和整理后记为已整理、读旺旺失败不退回索要；
+                           [19] 2026-10-10 漏票（核对不通过的单仍读旺旺、同店两单按金额各归各、未交易成功的先暂存后归位、重复发送不再下、旧数据重配、手动添加重名）
 tools/e2e-extras.py        离线：选文件夹读发票 PDF、二维码、备份恢复（autoLog 不进备份；清除本机数据前自动备份）、自动处理发票某段超时 + 只有一单需处理；[5d] 每天自动刷新给用户操作让路、「停止」、干活页被关掉；
                            出错提示不自动消失、发票表为空写明原因、两个主页不互相覆盖、示例数据不处理发票
 tools/e2e-reimburse.py     离线：报销规范——低值品标签与切换、没填姓名先开设置、超过 1000 元自动截订单页面（模拟详情页分段拼接）、3D 打印订单的消息末尾追加一句、

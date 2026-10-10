@@ -64,9 +64,11 @@
    * cards：卖家（或客服）发来的「请填写发票申请」卡片，点卡片上的「去申请」就能让这单进入淘宝平台开票流程（2026-10-05 实测）；
    *   卖家常常不等我们要就主动发，所以不看要没要过。卡片里没有订单号，只有商品标题和价格，归哪单见 chatForOrder
    */
+  //   用户自己在旺旺里手打的、含抬头或税号的消息（「上海某大学 税号…」）也算一次要发票（用户 2026-10-10：手动要过票，卖家随后发来的就是这单的票）
   function chatAnalyze(msgs, opts) {
     const taxId = opts && opts.taxId ? String(opts.taxId).toUpperCase() : '';
-    const asks = msgs.filter(m => m.self && m.text && (ASK_RE.test(m.text) || (taxId && m.text.toUpperCase().includes(taxId))))
+    const title = opts && opts.title && String(opts.title).replace(/\s+/g, '').length >= 4 ? String(opts.title).replace(/\s+/g, '') : '';
+    const asks = msgs.filter(m => m.self && m.text && (ASK_RE.test(m.text) || (taxId && m.text.toUpperCase().includes(taxId)) || (title && m.text.replace(/\s+/g, '').includes(title))))
       // 消息里单独的 15~20 位数字当订单号：前后不能紧挨着字母数字（税号里那一长串数字不算），也排除税号本身
       .map(m => ({ time: m.time, text: m.text.slice(0, 200),
                    nos: (m.text.match(/(?<![0-9A-Za-z])\d{15,20}(?![0-9A-Za-z])/g) || []).filter(n => !taxId || !taxId.includes(n)) }));
@@ -113,7 +115,8 @@
 
   /*
    * 一家店可能有好几单要发票、共用一个会话：把对方的回复分到具体某一单上。
-   *   - 我们的消息里写了这单的订单号：这条之后、下一次要发票之前对方发来的，算这单的
+   *   - 我们的消息里写了这单的订单号：这条之后、下一次要发票之前对方发来的，算这单的；这单下单后用户手打要过票的，
+   *     手打那条到下一次带订单号的要发票之间发来的文件也算（下载后按 PDF 金额核对，是同店别的单的会自动挪走）
    *   - 消息里没写订单号（比如手打的「需要发票」）：这家店只有这一单要发票就算它的；有好几单就标 shared，交给用户核对
    *   - 开票卡片按商品标题归单（peers：这家店还没解决的几单 [{ no, titles, time }]，见 cardOwner）
    * 返回和 chatAnalyze 一样的结构，另加 shared（这些回复归哪单分不清）；每张卡片带 shared（归属要核对）
@@ -125,19 +128,26 @@
     const asks = (a.asks || []).filter(k => !d0 || k.time.slice(0, 10) >= d0);
     const mine = asks.filter(k => k.nos.includes(no));
     const generic = asks.filter(k => !k.nos.length);
-    let spans = [], shared = false, myAsks = mine;
+    // 手打的要发票（没写订单号）：从这条到下一次带订单号的要发票为止
+    const genSpans = generic.map(k => [k.time, (asks.find(x => x.time > k.time && x.nos.length) || {}).time || '9999']);
+    let spans = [], shared = false, myAsks = mine, loose = [];
     if (mine.length) {
       spans = mine.map(k => [k.time, (asks.find(x => x.time > k.time) || {}).time || '9999']);
+      // 插件索要之前（或之后）用户自己手打要过（「发票」、抬头税号）：那段时间卖家发来的文件也可能是这单的票（2026-10-10 实测：
+      // 正确的票在插件索要之前、用户手动要票之后发来，被忽略了）。照样下载，读 PDF 金额后按金额归单
+      loose = genSpans;
     } else if (generic.length && !asks.some(k => k.nos.length && !k.nos.includes(no))) {
       spans = [[generic[0].time, '9999']];
       myAsks = generic;
       shared = (shopOrders || 1) > 1;
     } else if (generic.length) {
       // 这家店别的单用订单号要过；手打的那几次归不到这单，只在它们之后、下一次带号的要发票之前算「分不清」
-      spans = generic.map(k => [k.time, (asks.find(x => x.time > k.time && x.nos.length) || {}).time || '9999']);
+      spans = genSpans;
       myAsks = generic; shared = true;
     }
-    const inSpan = m => spans.some(([s, e]) => m.time >= s && m.time < e);
+    const inSpan = m => spans.some(([s, e]) => m.time >= s && m.time < e) || loose.some(([s, e]) => m.time >= s && m.time < e);
+    // 只落在手打那几段里的文件，同店还有别的单要发票时归属要核对（下载后按金额自动归单）
+    if (loose.length && (shopOrders || 1) > 1 && (a.files || []).some(m => !spans.some(([s, e]) => m.time >= s && m.time < e) && inSpan(m))) shared = true;
     const ps = peers && peers.length ? peers : [{ no, titles: [], time: orderTime }];
     const cards = (a.cards || []).filter(k => !d0 || String(k.time).slice(0, 10) >= d0).map(k => {
       const own = cardOwner(k, ps);
@@ -268,6 +278,8 @@
    * 下载的发票文件 → 核对它是不是文件名里那一单的（同一家店买过好几次时，卖家发的文件常常归错单）。
    *   pdfs:   [{ file, invNo, date: 'YYYY-MM-DD', amount, titleOk }]（parseInvoiceText 读出来的）
    *   orders: [{ no, shop, time, amount }]
+   *   orders 里可以有还没交易成功的同店订单（pending，不在发票清单里）：票是那一单的就挪过去，等它交易成功后自动归位；
+   *   taken = 这单已有一张核对相符的票。
    * 规则：价税合计 = 应报金额（实付 − 退款）；开票日期不早于下单日期（淘宝页面上的时间可能差几天，放宽 3 天）、不晚于下单后 180 天。
    * 先看文件名那一单（相符 → 多一点 / 少 1 元以内），明显不符才去同店找别的单（挪单、合开、分不清）。
    * 返回每个文件一条：
@@ -295,6 +307,12 @@
       const base = { file: f.file, no: no || '', amount: f.amount, date: f.date, invNo: f.invNo };
       if (f.titleOk === false) return Object.assign(base, { kind: 'title' });
       if (!o) return Object.assign(base, { kind: 'none' });
+      // 文件名那单已经有一张核对相符的票（o.taken）、同店另一单金额正好对得上又还没有票：归那一单
+      // （同店两单同价、卖家先后发来两张，两张都按第一单命名下载的）
+      if (o.taken) {
+        const alt = orders.filter(x => x.no !== o.no && !x.taken && x.shop === o.shop && eq(f.amount, x.amount) && dateOk(f, x));
+        if (alt.length === 1) return Object.assign(base, { kind: 'move', to: alt[0].no });
+      }
       if (eq(f.amount, o.amount) && dateOk(f, o)) return Object.assign(base, { kind: 'ok' });
       // 文件名那一单差得不多（少 1 元以内、多不超过 3 成）就先认它，明显不符才去同店找别的单：
       // 卖家按用券前的价开（实付 10.00、票面 10.50）时，同店正好有一单实付 10.50，以前这张票会被挪过去

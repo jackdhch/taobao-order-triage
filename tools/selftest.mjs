@@ -176,6 +176,23 @@ const hand = I.chatAnalyze(chat);                                               
 assert.equal(I.chatForOrder(hand, '500000000000000001', 1).shared, false);
 assert.equal(I.chatForOrder(hand, '500000000000000001', 2).shared, true);
 assert.equal(I.status({ chat: I.chatForOrder(hand, '500000000000000001', 2) }, want).shared, true);
+// 2026-10-10 实测（数据虚构）：用户先手打「发票」「抬头 税号」，卖家随后发来正确的票；插件后来又带订单号索要，卖家发来的是同店另一单的票、
+// 之后又重发了一次正确的票。手打要票之后、插件索要之前的那张也要算这单的（以前只看插件索要之后的）；含抬头的手打消息也算要过票
+const redo = I.chatAnalyze([
+  { self: true, time: '2026-08-27 02:17:00', text: '发票' },
+  { self: true, time: '2026-08-27 02:18:00', text: '某某大学 121000009999999996' },
+  { self: false, time: '2026-08-27 04:03:00', file: { name: 'dzfp_26990000000000000191_某某大学_20260827153948.pdf' } },
+  { self: true, time: '2026-10-04 00:55:00', text: '您好，订单 5190000000000000191（26.8.8，¥450）需要开电子普通发票' },
+  { self: false, time: '2026-10-08 03:57:00', file: { name: 'dzfp_26990000000000000192_某某大学_20261008155508.pdf' } },
+  { self: true, time: '2026-10-09 12:35:00', text: '300 元那张是另一单的，这单的还没收到' },
+  { self: false, time: '2026-10-10 02:33:00', file: { name: 'dzfp_26990000000000000191_某某大学_20260827153948(1).pdf' } },
+], { taxId: '121000009999999996', title: '某某大学' });
+assert.equal(redo.asks.length, 3);
+assert.equal(I.chatAnalyze([{ self: true, time: '1', text: '抬头：某某 大学' }], { title: '某某大学' }).asks.length, 1);      // 只写了抬头也算
+assert.deepEqual(I.chatForOrder(redo, '5190000000000000191', 1, '2026-08-08').files.map(f => f.time),
+  ['2026-08-27 04:03:00', '2026-10-08 03:57:00', '2026-10-10 02:33:00']);
+assert.equal(I.chatForOrder(redo, '5190000000000000191', 1, '2026-08-08').shared, false);
+assert.equal(I.parseInvoiceName('dzfp_26990000000000000191_某某大学_20260827153948(1).pdf').invNo, '26990000000000000191');   // 重发的「(1)」也认得出发票号
 
 // 已整理过的发票：平台票按开票日期+金额；卖家票按金额+下单后 180 天内且只有一张
 const idx = [{ date: '2026-08-10', amount: 27.3, file: 'a.pdf' }, { date: '2026-08-20', amount: 9.9, file: 'b.pdf' }, { date: '2026-08-21', amount: 9.9, file: 'c.pdf' }];
@@ -268,6 +285,15 @@ assert.equal(I.parseInvoiceText('电子发票 发票号码： 开票日期： 1 
   assert.equal(r[2].to, '100000000000000102');
   assert.deepEqual(r[3].nos, ['100000000000000102', '100000000000000105']);
   assert.deepEqual(r[4].nos, ['100000000000000102', '100000000000000103']);
+  // 同店两单（450 已交易成功、300 还没交易成功 = pending）：300 元的票按 450 那单命名下载，挪给 300 那单（2026-10-10 实测，数据虚构）
+  const two = [{ no: '100000000000000301', shop: '丁店', time: '2026-08-08 10:00:00', amount: 450 },
+               { no: '100000000000000302', shop: '丁店', time: '2026-10-03 10:00:00', amount: 300, pending: true }];
+  const t1 = I.checkFiles([f('100000000000000301', 300, '2026-10-08'), f('100000000000000301', 450, '2026-08-27')], two);
+  assert.deepEqual(t1.map(x => [x.kind, x.to || '']), [['move', '100000000000000302'], ['ok', '']]);
+  // 文件名那单已有一张相符的票（taken），同店另一单同价还没有票：第二张归另一单
+  const same = [{ no: '100000000000000401', shop: '戊店', time: '2026-08-01', amount: 20, taken: true }, { no: '100000000000000402', shop: '戊店', time: '2026-08-02', amount: 20 }];
+  assert.equal(I.checkFiles([f('100000000000000401', 20, '2026-08-05')], same)[0].to, '100000000000000402');
+  assert.equal(I.checkFiles([f('100000000000000401', 20, '2026-08-05')], same.map(o => Object.assign({}, o, { taken: false })))[0].kind, 'ok');
 }
 // 订单详情页判断退款（照真实页面文字的排列，内容虚构）
 {
@@ -344,7 +370,7 @@ assert.equal(I.detailRefund('某商品 退款完成 ￥12.25 x1').refunded, true
   assert.ok(scriptsFor('https://invoice-ua.taobao.com/e-invoice/invoice-apply-online.html?disableNav=YES%2CYES&orderId=1&channel=card').includes('extension/apply-card.js'));
   assert.ok(scriptsFor('https://invoice-ua.taobao.com/e-invoice/invoice-detail-tm.html?disableNav=YES&orderId=1').includes('extension/apply-card.js'));
   assert.ok(scriptsFor('https://market.m.taobao.com/app/im/chat-core/index.html').includes('extension/chat-main.js'));
-  assert.equal(mf.version, '0.21.0');
+  assert.equal(mf.version, '0.22.0');
   // 备份文件里写的插件版本：网页版读不到 manifest，用 app.js 里写死的版本号，两处要一致
   const appJs = fs.readFileSync(new URL('../js/app.js', import.meta.url), 'utf8');
   assert.equal((/const VERSION = EXT \? chrome\.runtime\.getManifest\(\)\.version : '([\d.]+)'/.exec(appJs) || [])[1], mf.version);

@@ -1,8 +1,9 @@
 // 淘宝旺旺网页版（market.m.taobao.com/app/im/chat，聊天内容在 iframe chat-core 里；本脚本在每个框架里都注入，
 // 只在有会话列表的那个框架里干活）
 //
-// 扫描：只看主页给的「还需要卖家回复」的那几家店（invWant.chat）。逐个点开会话，往上滚加载聊天记录到那几单最早的日期，
-//       记下我们要发票的消息、之后对方发来的文件 / 图片（可能是二维码）/ 提到邮箱的话，存进扩展存储 chatScan。
+// 扫描：只看主页给的「还需要卖家回复」的那几家店（invWant.chat：还没取得发票、和卖家有会话往来的，含下载的票核对不通过的）。
+//       逐个点开会话，往上滚加载聊天记录到那几单最早的日期，记下我们要发票的消息（插件发的、用户自己手打的含「发票」或抬头税号的）、
+//       之后对方发来的文件 / 图片（可能是二维码）/ 提到邮箱的话，存进扩展存储 chatScan。
 //       只点左侧会话、只滚动消息列表；不碰输入框和「发送」。打开会话会让对方看到「已读」，所以范围只限这几家。
 // 下载：主页里点了「下载」的聊天文件排在 dlJobs 里，这里打开会话找到那个文件点「下载文件」。
 // 发消息：主页排的 chatQueue(kind=compose)：逐家打开会话，把写好的消息填进输入框（.editBox pre.edit[contenteditable=true]），
@@ -217,7 +218,7 @@
         if (unreliable(msgs, (q.out || {})[header()])) fail(MAYBE_CHANGED);
         else {
           next.out = Object.assign({}, q.out, { [header()]: Object.assign({ at: Date.now(), orders, first: (msgs[0] || {}).time || '', byNick: cur.nick, matched },
-            I.chatAnalyze(msgs, { taxId: q.taxId })) });
+            I.chatAnalyze(msgs, { taxId: q.taxId, title: q.title })) });
           next.read++;
           next.got.push({ name: header(), nick: cur.nick });
         }
@@ -466,7 +467,7 @@
             const msgs = collected();
             const orders = [...document.querySelectorAll('.ww_tab .order-id')].map(text).filter(s => /^\d{15,20}$/.test(s));
             if (unreliable(msgs, out[header()])) { skip(failed, Object.assign({}, g, { shop: header() || g.shop }), MAYBE_CHANGED); continue; }
-            out[header()] = Object.assign({ at: Date.now(), orders, first: (msgs[0] || {}).time || '' }, I.chatAnalyze(msgs, { taxId: invWant.taxId }));
+            out[header()] = Object.assign({ at: Date.now(), orders, first: (msgs[0] || {}).time || '' }, I.chatAnalyze(msgs, { taxId: invWant.taxId, title: invWant.title }));
             got.push({ name: header(), nick: g.nick }); read++;
           } catch (e) { skip(failed, g, '出错：' + e.message); }      // 一个会话出错不影响别的会话
           await sleep(800 + Math.random() * 800);
@@ -474,7 +475,7 @@
         // 按旺旺名逐家打开（和在订单页点旺旺图标打开的是同一个会话）：一家看完跳下一家（页面会重新加载），进度存在 chatQueue 里；
         // 全部看完才写 chatScan，主页的一键处理靠它往下走
         if (queue.length) {
-          await chrome.storage.local.set({ chatQueue: { at: Date.now(), kind: 'scan', since, taxId: invWant.taxId, out,
+          await chrome.storage.local.set({ chatQueue: { at: Date.now(), kind: 'scan', since, taxId: invWant.taxId, title: invWant.title, out,
             items: queue.map(g => ({ nick: g.nick, shop: g.shop, nos: g.nos, fresh: g.fresh })), done: k, failed, read, got, none } });
           panel.set('已读取会话列表中的 ' + read + ' 个会话；另有 ' + queue.length + ' 家店铺按卖家旺旺名逐个打开…');
           return goChat(queue[0].nick);
