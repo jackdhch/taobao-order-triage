@@ -38,7 +38,8 @@ MOCKS = [(INV_URL, 'mock-invoice.html'),
          ('https://dppt.hebei.chinatax.gov.cn:8443/', 'mock-qr.html'),                   # 同上（[20] 拍屏照片里的二维码，/v/… 跳到 /qrcode?cs=…）
          ('https://ai.alimebot.taobao.com/', 'mock-alime.html')]                         # 淘宝官方客服（找 88VIP 人工客服督促）
 TITLE, TAX = '某大学', '121000009999999996'
-NAME, SID = '张三', '12345678'                          # 虚构的报销人（整理报销文件的文件夹名「学号_姓名_总金额元」）
+NAME = '张三'                                          # 虚构的报销人（写进用途说明草稿，不进文件夹名）
+YYMMDD = time.strftime('%y%m%d')                          # 整理报销文件的文件夹名开头是生成当天
 
 # 虚构订单：key → (订单号, 日期, 状态, 店铺, 实付, [(商品, 规格, 数量, 单价)])
 O = {
@@ -310,7 +311,8 @@ def run(p, tmp):
     app.wait_for_timeout(600)
     store = lambda k: app.evaluate('k => chrome.storage.local.get(k).then(r => r[k])', k)
     app.click('#btn-settings')
-    app.fill('#person-name', NAME); app.fill('#person-sid', SID)
+    app.fill('#person-name', NAME)
+    check(app.locator('#person-sid').count() == 0, '设置里没有学号（用户 2026-10-13：文件夹名不再带学号、姓名）')
     app.fill('#inv-title', TITLE)
     app.fill('#inv-tax', TAX[:-1] + '7')                # 最后一位打错
     app.click('#rules-save')
@@ -841,7 +843,7 @@ def run(p, tmp):
     check(len(done) == 1 and NO['C'] in done[0], '新开的客服页先转人工，再只发了 C 这一单的督促', pg2 and pg2.evaluate('window.__mock.sent'))
     check(not app.locator('#dlg-list[open]').count(), '逐单操作不弹确认清单')
 
-    print('\n[13] 整理成报销文件：选下载好的发票文件夹 → 预览 → 生成「订单分拣-报销/学号_姓名_总金额元/」（按报销规范分类）、README.txt、报销清单.xlsx 和压缩包；原文件不动')
+    print('\n[13] 整理成报销文件：选下载好的发票文件夹 → 预览 → 生成「订单分拣-报销/YYMMDD_第N批采购报销_金额/」（发票「序号_开票日期_金额-商品-数量」）、报销清单.xlsx 和压缩包；原文件不动')
     import zipfile
     import openpyxl
     src = dl_dir / '订单分拣-发票'
@@ -851,24 +853,27 @@ def run(p, tmp):
     app.set_input_files('#inv-pack-dir', str(src))
     app.wait_for_selector('#dlg-pack[open]', timeout=10000)
     names = app.evaluate("[...document.querySelectorAll('#pack-list .pk-row')].map(r => r.querySelector('.detail').textContent.split('　←')[0])")
-    pat = re.compile(r'不超过1k耗材/发票\d+\.(pdf|ofd|xml)|(超过1k耗材|低值品)/发票/\d+_.+_\d+\.\d{2}元\.(pdf|ofd|xml)')
-    check(names and all(pat.fullmatch(n) for n in names), f'预览了 {len(names)} 张发票，不超过 1000 元的按「不超过1k耗材/发票N」命名', names[:3])
+    pat = re.compile(r'\d+(\+\d+)*_\d{6}_\d+\.\d{2}-[^-]+-(\d+[^\d.-]+|\d+单合开)\.(pdf|ofd|xml)')
+    check(names and all(pat.fullmatch(n) for n in names), f'预览了 {len(names)} 张发票，按「序号_开票日期_金额-商品-数量」命名', names[:3])
+    check(app.input_value('#pack-start') == '1' and names and names[0].startswith('1_'), '第一次整理：起始序号默认 1', (app.input_value('#pack-start'), names[:1]))
     app.fill('#pack-name', '测试批'); app.click('#pack-go')
     out = dl_dir / '订单分拣-报销'
     zp = wait_until(app, lambda: out.is_dir() and (z := [x for x in out.iterdir() if x.suffix == '.zip' and not x.name.endswith('.crdownload')]) and z[0], 30)
     folder = [x for x in out.iterdir() if x.is_dir()] if out.is_dir() else []
     inside = sorted(str(x.relative_to(folder[0])) for x in folder[0].rglob('*') if x.is_file()) if folder else []
-    check(bool(folder) and folder[0].name.startswith(SID + '_' + NAME + '_') and folder[0].name.endswith('元') and 'README.txt' in inside and '报销清单.xlsx' in inside
-          and len(inside) == len(names) + 2, '下载文件夹里多了「订单分拣-报销/学号_姓名_总金额元/」：发票 + README.txt + 报销清单.xlsx', inside)
+    check(len(folder) == 1 and re.fullmatch(YYMMDD + r'_第1批采购报销_\d+\.\d{2}', folder[0].name) and '报销清单.xlsx' in inside and 'README.txt' not in inside
+          and len(inside) == len(names) + 1 and not [n for n in inside if '/' in n], '下载文件夹里多了「订单分拣-报销/YYMMDD_第1批采购报销_金额/」：发票 + 报销清单.xlsx，没有子文件夹、没有 README.txt', (folder and folder[0].name, inside))
+    check(folder and not re.search('报销给|' + NAME, folder[0].name), '文件夹名里没有报销给谁、姓名', folder and folder[0].name)
     ok_zip = False
     if zp:
         app.wait_for_timeout(1000)
         with zipfile.ZipFile(zp) as z:
-            ok_zip = z.testzip() is None and len(z.namelist()) == len(names) + 2 and any(n.endswith('报销清单.xlsx') for n in z.namelist())
+            ok_zip = z.testzip() is None and len(z.namelist()) == len(names) + 1 and any(n.endswith('报销清单.xlsx') for n in z.namelist()) and zp.stem == folder[0].name
     check(ok_zip, '同名压缩包能正常打开，里面也是这些文件', zp and zp.name)
-    readme = (folder[0] / 'README.txt').read_text(encoding='utf-8-sig') if folder else ''
-    xrows = [[c.value for c in r] for r in openpyxl.load_workbook(folder[0] / '报销清单.xlsx')['报销清单'].iter_rows()] if folder else []
-    check(xrows and xrows[-1][0] == '合计' and '尚无发票的实验室订单' in readme and f'报销人：{NAME}' in readme, '报销清单里有合计，README.txt 最后列出尚无发票的实验室订单', readme[:120])
+    wb = openpyxl.load_workbook(folder[0] / '报销清单.xlsx') if folder else None
+    xrows = [[c.value for c in r] for r in wb['报销清单'].iter_rows()] if wb else []
+    check(xrows and xrows[0] == ['序号', '文件名', '开票日期', '金额', '发票号码', '订单号', '商品'] and xrows[-1][0] == '合计' and '尚无发票' in wb.sheetnames,
+          '报销清单.xlsx：序号、文件名、开票日期、金额、发票号码、订单号、商品，末行合计；另一张表「尚无发票」', xrows[:1])
     check(sorted(x.name for x in src.iterdir()) == before, '原来的「订单分拣-发票」文件夹一个文件都没变')
 
     print('\n[14] 每天自动处理：后台到点打开主页（带 #auto），主页自己点「检查开票情况」')
@@ -1026,15 +1031,18 @@ def part17(ctx, app, tmp, pdfs, dl_dir):
     app.fill('#pack-name', '测试批二'); app.click('#pack-go')
     out = dl_dir / '订单分拣-报销'
     tot = 25 + 66 + 45 + 10.5 + 4.9
-    folder2 = wait_until(app, lambda: next((x for x in out.iterdir() if x.is_dir() and x.name == f'{SID}_{NAME}_{tot:.2f}元' and (x / '报销清单.xlsx').is_file()), None), 30)
+    folder2 = wait_until(app, lambda: next((x for x in out.iterdir() if x.is_dir() and x.name == f'{YYMMDD}_第2批采购报销_{tot:.2f}' and (x / '报销清单.xlsx').is_file()), None), 30)
     app.wait_for_timeout(1000)
     xr = [[c.value for c in r] for r in openpyxl.load_workbook(folder2 / '报销清单.xlsx')['报销清单'].iter_rows()] if folder2 else []
-    m2 = next((x for x in xr if N17['M2'] in str(x[7])), [])
-    s1 = next((x for x in xr if N17['S1'] in str(x[7])), [])
+    m2 = next((x for x in xr if N17['M2'] in str(x[5])), [])
+    s1 = next((x for x in xr if N17['S1'] in str(x[5])), [])
     total = next((x for x in xr if x and x[0] == '合计'), [])
-    check(m2 and N17['M1'] in m2[7] and m2[6] == 25 and '合开 2 单' in m2[12], '报销清单：合开的两单一行（订单号两个、金额 25.00），备注写明合开', m2)
-    check(s1 and '票面比应报少 5.00 元' in s1[12], '报销清单备注写明票面比应报少 5.00 元', s1)
-    check(total and abs(float(total[6]) - tot) < 0.005, '合计 = 每张票只算一次', total)
+    check(m2 and N17['M1'] in m2[5] and m2[3] == 25 and re.fullmatch(r'\d+\+\d+', str(m2[0])) and m2[1].startswith(str(m2[0]) + '_') and m2[1].endswith('等-2单合开.pdf'),
+          '报销清单：合开的两单一行（序号「a+b」，订单号两个、金额 25.00），文件名写「…等-2单合开」', m2)
+    first = min(int(str(x[0]).split('+')[0]) for x in xr[1:] if x and x[0] != '合计') if len(xr) > 2 else 0
+    check(first > 1 and str(folder2.name).startswith(YYMMDD + '_第2批'), '第二批的序号接着第一批往下编；批次名没写数字的按下一批（第2批）', (first, folder2 and folder2.name))
+    check(s1 and s1[3] == 45, '少 1 元以上的那张按票面金额 45.00 写（预览里写明少了多少）', s1)
+    check(total and abs(float(total[3]) - tot) < 0.005, '合计 = 每张票只算一次', total)
     st = S()
     packed = st.get('packed') or {}
     check(all(N17[k] in packed for k in ('M1', 'M2', 'V2', 'S1', 'C1', 'R1')) and any(x.get('invNo') == '26990000000000000121' for x in st.get('haveIdx', [])),

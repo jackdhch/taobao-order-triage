@@ -4,7 +4,8 @@
  *   - 低值品判断（用户 2026-10-09 定的三条规则 + 两张写死的关键词表，不用 AI）
  *   - 要补的材料：价税合计超过 1000 元（订单页面 + 支付记录）、与科研无关的字样（用途说明）、3D 打印（明细清单）
  *   - 报销批次：到账有差额时找「哪几张票加起来正好等于差额」；导入已整理的文件夹时从文件夹名认出历史批次
- *   - 报销文件夹名「学号_姓名_总金额元」（工程师没有学号：「姓名_总金额元」）
+ *   - 整理报销文件的命名（用户 2026-10-13 定）：文件夹「YYMMDD_第N批采购报销_金额」「YYMMDD_第N批采购报销低值品_金额」，
+ *     发票「序号_开票日期YYMMDD_金额-商品摘要-数量.pdf」，序号接着上一批
  */
 (function (root) {
   'use strict';
@@ -147,21 +148,28 @@
     const ns = (batches || []).map(b => batchNo(b.name)).filter(n => n > 0);
     return '第 ' + (Math.max(ns.length ? Math.max(...ns) : 0, (batches || []).length) + 1) + ' 批';
   }
-  // 以前整理好的报销文件夹名「YYMMDD_……第X批……_金额_报销给某人」（用户手工整理的几批就是这样命名的）→ 历史批次
+  // 报销文件夹名 → 历史批次。两种写法都认：插件生成的「YYMMDD_第N批采购报销_金额」「YYMMDD_第N批采购报销低值品_金额」，
+  // 以前手工整理的「YYMMDD_……第X批……_金额_报销给某人」。low：低值品那个文件夹（同一批的两个文件夹合成一个批次）
   function parseBatchDir(dir) {
-    const m = /^(\d{2})(\d{2})(\d{2})_(.*第\s*[一二三四五六七八九十百零〇两\d]+\s*批.*?)_(\d+(?:\.\d{1,2})?)元?_报销给(.+)$/.exec(String(dir || '').trim());
+    const m = /^(\d{2})(\d{2})(\d{2})_(.*第\s*[一二三四五六七八九十百零〇两\d]+\s*批.*?)_(\d+(?:\.\d{1,2})?)元?(?:_报销给(.+))?$/.exec(String(dir || '').trim());
     if (!m) return null;
     const date = '20' + m[1] + '-' + m[2] + '-' + m[3];
     if (isNaN(Date.parse(date))) return null;
     const nm = (/第\s*[一二三四五六七八九十百零〇两\d]+\s*批/.exec(m[4]) || [m[4]])[0].replace(/\s+/g, '');
-    return { date, name: nm, label: m[4], amount: +m[5], to: m[6], dir: String(dir).trim() };
+    return { date, name: nm, label: m[4], amount: +m[5], to: m[6] || '', dir: String(dir).trim(), low: /低值品/.test(m[4]) };
   }
-  // 报销文件夹名：学号_姓名_总金额元（手册 3.2.2，例如「12345678_张三_256.80元」）；没有学号时「姓名_总金额元」
+  // 报销文件夹名（用户 2026-10-13）：YYMMDD_第N批采购报销_金额、YYMMDD_第N批采购报销低值品_金额（不写报销给谁、哪个单位）
   const clean = s => String(s || '').replace(/[\\/:*?"<>|\s]+/g, '');
-  const packDirName = (person, total) => [clean(person && person.sid), clean(person && person.name), (+total || 0).toFixed(2) + '元'].filter(Boolean).join('_');
+  const yymmdd = d => { const s = String(d || '').replace(/\D/g, ''); return s.length >= 8 ? s.slice(2, 8) : s.slice(0, 6); };
+  const packDirName = (date, n, total, low) => yymmdd(date) + '_第' + (n > 0 ? n : 1) + '批采购报销' + (low ? '低值品' : '') + '_' + (+total || 0).toFixed(2);
+  // 每张发票的文件名：序号_开票日期YYMMDD_金额-商品摘要-数量（「171_260622_90.00-碳板0.2mm-4张.pdf」；合开「173+174+175_…-碳板等-3单合开.pdf」）
+  const invoiceFileName = x => [x.label, yymmdd(x.date), (+x.amount || 0).toFixed(2)].join('_') + '-' + clean(x.summary) + '-' + clean(x.qty) + '.' + (x.ext || 'pdf');
+  // 文件名开头的序号（「171_260622_…」「173+174_260622_…」）里最大的那个：下一批接着编
+  const seqOf = name => { const m = /^(\d+(?:\+\d+)*)_\d{6}_/.exec(String(name || '').split(/[\\/]/).pop()); return m ? Math.max(...m[1].split('+').map(Number)) : 0; };
+  const lastSeq = names => (names || []).reduce((a, n) => Math.max(a, typeof n === 'number' ? n : seqOf(n)), 0);
 
   const api = { DEVICE, CONSUMABLE, SENSITIVE, ASK_3D, BIG, lowWords, lowJudge, unitPrice, sensitiveWords, is3d, required, missing,
-                diffCombos, diffHint, cnNum, batchNo, nextBatchName, parseBatchDir, packDirName };
+                diffCombos, diffHint, cnNum, batchNo, nextBatchName, parseBatchDir, packDirName, invoiceFileName, seqOf, lastSeq, yymmdd };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Reimburse = api;
 })(typeof self !== 'undefined' ? self : this);

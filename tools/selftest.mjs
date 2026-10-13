@@ -269,7 +269,7 @@ assert.equal(I.status({ have: idx[0], plat: { tab: 'issued', title: '企业-某�
 // PDF 抽出来的文字：标签和值分开、字间夹空格（照真实发票的排列，内容虚构）
 const pt = '电 子 发 票 （ 普 通 发 票 ） 发 票 号 码： 开票 日期： 购 买 方 信 息 统一社会信用代码/ 纳税人识别号 ： 名称： 名称： 项目名称 金 额 税 额 价 税合 计（ 小写） '
   + '12345678901234567890 2026 年 08 月 17 日 某大学 121000009999999996 ¥ 17.61 ¥ 2.29 ¥ 19.90 壹拾玖圆玖角';
-assert.deepEqual(I.parseInvoiceText(pt, '某大学'), { invNo: '12345678901234567890', date: '2026-08-17', amount: 19.9, isInvoice: true, titleOk: true, items: '', seller: '' });
+assert.deepEqual(I.parseInvoiceText(pt, '某大学'), { invNo: '12345678901234567890', date: '2026-08-17', amount: 19.9, isInvoice: true, titleOk: true, items: '', seller: '', unit: '' });
 assert.equal(I.parseInvoiceText('产品说明书 型号 12345678901234567890').isInvoice, false);
 assert.equal(I.parseInvoiceText('发票号码 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 开票日期').invNo, '12345678901234567890');     // 逐字隔开的号码
 assert.equal(I.parseInvoiceText('电子发票 发票代码 发票号码 开票日期 031002100111 07921694 2026年03月13日 ¥52.00').invNo, '07921694');
@@ -427,7 +427,7 @@ assert.equal(I.detailRefund('某商品 退款完成 ￥12.25 x1').refunded, true
   assert.ok(scriptsFor('https://invoice-ua.taobao.com/e-invoice/invoice-apply-online.html?disableNav=YES%2CYES&orderId=1&channel=card').includes('extension/apply-card.js'));
   assert.ok(scriptsFor('https://invoice-ua.taobao.com/e-invoice/invoice-detail-tm.html?disableNav=YES&orderId=1').includes('extension/apply-card.js'));
   assert.ok(scriptsFor('https://market.m.taobao.com/app/im/chat-core/index.html').includes('extension/chat-main.js'));
-  assert.equal(mf.version, '0.23.0');
+  assert.equal(mf.version, '0.24.0');
   // 备份文件里写的插件版本：网页版读不到 manifest，用 app.js 里写死的版本号，两处要一致
   const appJs = fs.readFileSync(new URL('../js/app.js', import.meta.url), 'utf8');
   assert.equal((/const VERSION = EXT \? chrome\.runtime\.getManifest\(\)\.version : '([\d.]+)'/.exec(appJs) || [])[1], mf.version);
@@ -523,7 +523,11 @@ const RB = req('../js/reimburse.js'), OF = req('../js/office.js');
   assert.equal(RB.diffCombos(multi.concat({ seq: 9, title: '戊', amount: 1 }), 21, 3).every(c => c.length <= 3), true);
   // 历史批次文件夹名、批次名、报销文件夹名
   assert.deepEqual(RB.parseBatchDir('260401_实验室第一批采购_1234.56_报销给张三'),
-    { date: '2026-04-01', name: '第一批', label: '实验室第一批采购', amount: 1234.56, to: '张三', dir: '260401_实验室第一批采购_1234.56_报销给张三' });
+    { date: '2026-04-01', name: '第一批', label: '实验室第一批采购', amount: 1234.56, to: '张三', dir: '260401_实验室第一批采购_1234.56_报销给张三', low: false });
+  // 插件生成的（用户 2026-10-13 定）：没有「报销给某人」；低值品那个文件夹标 low
+  assert.deepEqual(RB.parseBatchDir('261013_第5批采购报销_1234.50'),
+    { date: '2026-10-13', name: '第5批', label: '第5批采购报销', amount: 1234.5, to: '', dir: '261013_第5批采购报销_1234.50', low: false });
+  assert.equal(RB.parseBatchDir('261013_第5批采购报销低值品_884.20').low, true);
   assert.equal(RB.parseBatchDir('260717_第三批_88_报销给某某').amount, 88);
   assert.equal(RB.parseBatchDir('260401_采购_1234.56_报销给张三'), null);
   assert.equal(RB.parseBatchDir('订单分拣-发票'), null);
@@ -531,13 +535,21 @@ const RB = req('../js/reimburse.js'), OF = req('../js/office.js');
   assert.equal(RB.nextBatchName([]), '第 1 批');
   assert.equal(RB.nextBatchName([{ name: '第一批' }, { name: '第四批' }]), '第 5 批');
   assert.equal(RB.nextBatchName([{ name: '第 2 批' }, { name: '补交' }, { name: '另一批' }]), '第 4 批');
-  assert.equal(RB.packDirName({ name: '张三', sid: '12345678' }, 256.8), '12345678_张三_256.80元');
-  assert.equal(RB.packDirName({ name: '张三', sid: '' }, 1000), '张三_1000.00元');
+  // 报销文件夹、发票文件名（用户 2026-10-13 定的格式）；文件夹名里不能有报销给谁、哪个单位
+  assert.equal(RB.packDirName('2026-10-13', 5, 1234.5), '261013_第5批采购报销_1234.50');
+  assert.equal(RB.packDirName('2026-10-13', 5, 884.2, true), '261013_第5批采购报销低值品_884.20');
+  assert.equal(RB.invoiceFileName({ label: '171', date: '2026-06-22', amount: 90, summary: '碳板0.2mm', qty: '4张' }), '171_260622_90.00-碳板0.2mm-4张.pdf');
+  assert.equal(RB.invoiceFileName({ label: '253', date: '2026-09-24', amount: 456, summary: 'DM40数字万用表', qty: '1件', ext: 'pdf' }), '253_260924_456.00-DM40数字万用表-1件.pdf');
+  assert.equal(RB.invoiceFileName({ label: '173+174+175', date: '2026-06-25', amount: 66.5, summary: '碳板等', qty: '3单合开' }), '173+174+175_260625_66.50-碳板等-3单合开.pdf');
+  assert.equal(RB.seqOf('第5批/173+174+175_260625_66.50-碳板等-3单合开.pdf'), 175);
+  assert.equal(RB.lastSeq(['171_260622_90.00-碳板0.2mm-4张.pdf', '说明.pdf', 12, 'a/253_260924_456.00-DM40数字万用表-1件.pdf']), 253);
+  assert.equal(RB.lastSeq([]), 0);
   // 发票明细（项目名称）和销售方：低值品、补材料用
   const inv2 = '电子发票（普通发票） 发票号码：26990000000000000777 开票日期：2026年09月01日 购买方信息 名称：某大学 统一社会信用代码/纳税人识别号：121000009999999996 '
     + '销售方信息 名称：某某虚构商店 统一社会信用代码/纳税人识别号：91000000000000000X 项目名称 规格型号 *电子测量仪器*数字万用表 DT-9205 个 1 400.00 400.00 13% 52.00 价税合计（小写）¥452.00';
   const pi = I.parseInvoiceText(inv2, '某大学');
   assert.equal(pi.items, '*电子测量仪器*数字万用表DT-');
+  assert.equal(pi.unit, '个', '发票明细第一项的单位（整理报销文件写数量用）');
   assert.equal(pi.seller, '某某虚构商店');
   assert.equal(pi.amount, 452);
   // 旺旺里卖家发来的表格（3D 打印明细）：不算发票文件，单独记 docs
@@ -575,15 +587,16 @@ const RB = req('../js/reimburse.js'), OF = req('../js/office.js');
     assert.equal(open, close, t);
   }
 }
-// 主页：整理报销文件的目录结构和命名、批次进备份、设置里有姓名学号
+// 主页：整理报销文件的命名（用户 2026-10-13 格式）、批次进备份、设置里只有姓名（没有学号）
 {
   const appJs = fs.readFileSync(new URL('../js/app.js', import.meta.url), 'utf8');
   const html = fs.readFileSync(new URL('../index.html', import.meta.url), 'utf8');
-  assert.ok(appJs.includes("CAT_DIR = { small: '不超过1k耗材', big: '超过1k耗材', low: '低值品' }"));
-  assert.ok(appJs.includes("CAT_DIR.small + '/发票' + r.seq + '.' + ext") && appJs.includes("CAT_DIR[r.cat] + '/附件原图/'"));
-  assert.ok(appJs.includes("put('README.txt'") && appJs.includes("put('报销清单.xlsx'") && !appJs.includes("'/汇总.csv'") && !appJs.includes("'低值品（单张超过200元）/'"));
+  const code = appJs.replace(/^\s*\/\/.*$/gm, '');
+  assert.ok(!code.includes('不超过1k') && !code.includes('超过1k耗材') && !code.includes("put('README.txt'") && !code.includes('附件原图'), '不再有手册结构的子文件夹和 README.txt');
+  assert.ok(appJs.includes("put('报销清单.xlsx'") && appJs.includes('RB.invoiceFileName(') && appJs.includes('RB.packDirName(today, bn, sum(low), true)'));
+  assert.ok(!/科创空间|海创空间|报销给/.test(appJs.replace(/^\s*\/\/.*$/gm, '')), '界面和文件名里不出现单位名、报销给谁');
   assert.ok(!/const BACKUP_SKIP = \[[^\]]*'batches'/.test(appJs), '报销批次要进备份');
-  assert.ok(html.includes('id="person-name"') && html.includes('id="person-sid"') && html.includes('src="js/reimburse.js"') && html.includes('src="js/office.js"'));
+  assert.ok(html.includes('id="person-name"') && !html.includes('person-sid') && !html.includes('学号') && html.includes('id="pack-start"') && html.includes('src="js/reimburse.js"') && html.includes('src="js/office.js"'));
   const mf = JSON.parse(fs.readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
   assert.ok(mf.host_permissions.includes('<all_urls>'), 'chrome.tabs.captureVisibleTab 要 <all_urls>');
 }
@@ -645,4 +658,4 @@ const RB = req('../js/reimburse.js'), OF = req('../js/office.js');
   for (const u of ['https://trade.taobao.com/trade/detail/trade_order_detail.htm?biz_order_id=1', 'https://trade.tmall.com/detail/orderDetail.htm?biz_order_id=1',
     'https://trade.taobao.com/trade/confirm_goods.htm?biz_order_id=1']) assert.ok(scriptsFor(u).includes('extension/recv.js'), u);
 }
-console.log('自检通过：读表（xml:space）、合并规则、日期格式、先抓后导表、关键词建议、发票逻辑、已整理发票去重、读发票 PDF 文字、补差价待定、同店默认实验室、下载发票按金额日期对单、给卖家的消息、详情页退款、zip 打包、开票卡片、manifest 匹配与版本号、回主页按钮、措辞、调试日志不进备份、催卖家话术、发票状态的文件名、低值品判断表、与科研无关的字样、3D 打印识别、到账差额组合、历史批次文件夹名、xlsx / docx 结构、整理目录结构、应开票截止日（10 日）、签收与交易成功日期、确认收货不碰密码框、拍屏二维码照片识别、平台申请的单读卖家直接发来的发票图、客服确认时回完整的话');
+console.log('自检通过：读表（xml:space）、合并规则、日期格式、先抓后导表、关键词建议、发票逻辑、已整理发票去重、读发票 PDF 文字、补差价待定、同店默认实验室、下载发票按金额日期对单、给卖家的消息、详情页退款、zip 打包、开票卡片、manifest 匹配与版本号、回主页按钮、措辞、调试日志不进备份、催卖家话术、发票状态的文件名、低值品判断表、与科研无关的字样、3D 打印识别、到账差额组合、历史批次文件夹名、xlsx / docx 结构、整理目录结构、应开票截止日（10 日）、签收与交易成功日期、确认收货不碰密码框、报销文件夹与发票文件名（序号接着上一批）、拍屏二维码照片识别、平台申请的单读卖家直接发来的发票图、客服确认时回完整的话');

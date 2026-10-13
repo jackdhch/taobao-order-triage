@@ -272,7 +272,14 @@
     return { invNo: no, date: d ? d[1] + '-' + d[2].padStart(2, '0') + '-' + d[3].padStart(2, '0') : '',
              amount: amts.length ? Math.max(...amts) : null, isInvoice: /发票/.test(flat) && !!no,
              titleOk: title ? flat.includes(String(title).replace(/\s+/g, '')) : null,
-             items: invoiceItems(flat), seller: invoiceSeller(flat, title) };
+             items: invoiceItems(flat), seller: invoiceSeller(flat, title), unit: invoiceUnit(flat) };
+  }
+  // 发票明细第一项的单位（「*金属制品*碳板0.2mm张4…」的「张」）：整理报销文件时数量写成「4张」；读不到就是 ''（文件名里写「件」）
+  const UNITS = '张|个|只|件|根|条|卷|包|套|盒|块|对|支|颗|台|把|瓶|袋|本|副|组|片|米|批|次|项|箱|桶|罐|双|粒|枚|架|辆';
+  function invoiceUnit(flat) {
+    const m = /\*[^*¥￥]{1,20}\*([^*¥￥]{0,80})/.exec(flat);
+    const u = m && new RegExp('(' + UNITS + ')(?=\\d)').exec(m[1].replace(/规格型号|单位|数量|单价|金额|税率|税额/g, ''));
+    return u ? u[1] : '';
   }
   // 发票明细（项目名称）：全电发票写成「*税收分类简称*商品名」，名字后面紧跟规格、单位、数量、金额。
   // 只取到第一个数字或 ¥ 为止，够判断「模块」、与科研无关的字样、3D 打印就行（低值品、补材料用）；最多 300 字

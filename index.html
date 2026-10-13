@@ -436,7 +436,7 @@ footer p{margin:0 0 4px; max-width:90ch}
         <button data-pick="backup-file" title="选择以前备份的 JSON 文件，核对后用其覆盖当前全部数据；进行中的任务（申请、发消息、下载等）不恢复">从备份恢复</button>
       </div>
     </details>
-    <button class="btn" id="btn-settings" title="报销人姓名和学号、发票抬头、税号、邮箱、消息模板、每天自动刷新发票情况、关于">设置</button>
+    <button class="btn" id="btn-settings" title="报销人姓名、发票抬头、税号、邮箱、消息模板、每天自动刷新发票情况、关于">设置</button>
   </header>
 
   <!-- 选文件用的输入框：都藏起来，由按钮触发 -->
@@ -505,8 +505,7 @@ footer p{margin:0 0 4px; max-width:90ch}
     <p class="set-note" id="set-note" hidden></p>
     <h4>报销人</h4>
     <div class="inv-set">
-      <label>姓名<input id="person-name" type="text" autocomplete="off" title="写入报销文件夹名「学号_姓名_总金额元」和 README.txt"></label>
-      <label>学号（工程师可留空）<input id="person-sid" type="text" autocomplete="off" spellcheck="false" title="没有学号时文件夹名为「姓名_总金额元」"></label>
+      <label>姓名<input id="person-name" type="text" autocomplete="off" title="写入用途说明草稿（不写进文件夹名）"></label>
     </div>
     <h4>发票信息</h4>
     <div class="inv-set">
@@ -578,7 +577,8 @@ footer p{margin:0 0 4px; max-width:90ch}
     <h3>整理报销文件</h3>
     <p id="pack-note"></p>
     <div class="inv-set">
-      <label>批次名称（记入「报销记录」）<input id="pack-name" type="text" title="默认「第 N 批」；用于第 4 步的报销记录和到账核对"></label>
+      <label>批次名称（记入「报销记录」）<input id="pack-name" type="text" title="默认「第 N 批」；文件夹名里的「第N批」取这里的数字，也用于第 4 步的报销记录和到账核对"></label>
+      <label>起始序号<input id="pack-start" type="number" min="1" step="1" title="发票按下单顺序从这个号连续编号（低值品和普通发票共用）；默认接着上一批最后一个序号"></label>
     </div>
     <div id="pack-list" class="pk-list"></div>
     <div class="row"><span class="msg">复制到「订单分拣-报销」，原文件不变。</span><button class="btn" id="pack-cancel" title="关闭窗口，不生成文件">取消</button><button class="btn primary" id="pack-go">生成报销文件夹和压缩包</button></div>
