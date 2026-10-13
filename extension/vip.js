@@ -95,8 +95,9 @@
         if (done.has(m) || !/\bleft\b/.test(m.className)) continue;
         const tx = text(m);
         const btns = [...m.querySelectorAll('button')].filter(x => !x.disabled);
-        const sub = btns.find(x => /^提交投诉$/.test(text(x)));
-        if (sub) { done.add(m); fullClick(sub); note('已点「提交投诉」'); await sleep(2500); continue; }
+        // 客服问要不要投诉时给两个按钮「不需投诉」「帮我投诉」（2026-10-13 实测，没人点就超时结束会话）：督促清单是用户在主页确认过的，点「帮我投诉」
+        const sub = btns.find(x => /^(提交投诉|帮我投诉)$/.test(text(x)));
+        if (sub) { done.add(m); fullClick(sub); note('已点「' + text(sub) + '」'); await sleep(2500); continue; }
         const form = btns.find(x => /填写开票申请/.test(text(x)));
         if (form) {
           done.add(m); fullClick(form); formNote = true;
