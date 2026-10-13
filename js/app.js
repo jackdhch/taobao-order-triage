@@ -532,11 +532,13 @@
         tip: '实验室 ' + n.lab + ' 件、个人 ' + n.personal + ' 件、待定 ' + n.unsure + ' 件、退款 ' + n.ref + ' 件' + (n.lowAsk ? '、待确认是否低值品 ' + n.lowAsk + ' 件' : ''),
         // 主按钮随分类筛选变：待定 → 逐件按 1 / 2；实验室 / 个人 → 把这一类自动判断、未确认的一次确认；全部 → 确认核对完成
         hint: cat === 'unsure' ? (n.unsure ? '按 1 实验室、2 个人，还有 ' + n.unsure + ' 件待定' : '没有待定的商品')
-          : cat === 'lab' ? (n.lowAsk ? '点黄色标签确认是否低值品，还有 ' + n.lowAsk + ' 件' : '从上往下看商品图，判错的按 2 改为个人')
+          : cat === 'lab' ? (n.lowAsk ? '还有 ' + n.lowAsk + ' 件要确认是否低值品，点右边按钮找到它' : '从上往下看商品图，判错的按 2 改为个人')
           : cat === 'personal' ? '从上往下看商品图，判错的按 1 改为实验室'
-          : n.unsure ? '按 1 实验室、2 个人，还有 ' + n.unsure + ' 件待定' : n.lowAsk ? '点黄色标签确认是否低值品，还有 ' + n.lowAsk + ' 件'
+          : n.unsure ? '按 1 实验室、2 个人，还有 ' + n.unsure + ' 件待定' : n.lowAsk ? '还有 ' + n.lowAsk + ' 件要确认是否低值品，点右边按钮找到它'
           : sorted ? '已全部确认' : '核对下方判断，判错的按 1 / 2 改正',
-        acts: cat === 'unsure' ? pb('data-flow="sort-cat"', '按 1 / 2 判断', '待定的商品逐件判断：按 1 判为实验室，按 2 判为个人', true, true)
+        // 待确认低值品的商品可能排在列表很靠下（2026-10-13 用户找不到黄色标签、卡在这一步）：主按钮改成跳到那一件
+        acts: n.lowAsk && cat !== 'unsure' && cat !== 'personal' && !(cat === 'all' && n.unsure) ? pb('data-flow="sort-ask"', '找到待确认的 ' + n.lowAsk + ' 件', '跳到下一件待确认是否低值品的商品（黄色标签），选「是」或「否」', true, false)
+          : cat === 'unsure' ? pb('data-flow="sort-cat"', '按 1 / 2 判断', '待定的商品逐件判断：按 1 判为实验室，按 2 判为个人', true, true)
           : cat !== 'all' ? (catTodo.length ? pb('data-flow="sort-cat"', '这 ' + catTodo.length + ' 件都是' + SORT_NAME[cat] + '，确认', esc(catTip), true, false)
             : pb('data-flow="sort-cat"', '已全部确认', '「' + SORT_NAME[cat] + '」中的商品均已确认', true, true))
           : pb('data-flow="sort-done"', '确认核对完成', n.unsure ? '还有 ' + n.unsure + ' 件待定，判完才能确认'
@@ -914,6 +916,15 @@
     i = i < 0 ? 0 : Math.min(rows.length - 1, Math.max(0, i + d));
     view.focus = rows[i].l.key;
     renderList(); scrollToFocus();
+  }
+  // 跳到下一件待确认是否低值品的商品：在当前筛选里找，找不到就切回「全部」
+  function jumpLowAsk() {
+    let rows = visibleRows().filter(lowAsk);
+    if (!rows.length) { view.cat = 'all'; view.q = ''; document.getElementById('q').value = ''; rows = visibleRows().filter(lowAsk); }
+    if (!rows.length) return;
+    const i = rows.findIndex(x => x.l.key === view.focus);
+    view.focus = rows[(i + 1) % rows.length].l.key;
+    render(); scrollToFocus();
   }
   function scrollToFocus() {
     const el = document.querySelector('.line.focus');
@@ -3071,7 +3082,7 @@
   // ── 备份数据 / 从备份恢复（用户 2026-10-05）：全部数据只在本机浏览器里，删掉扩展或清浏览器数据就没了 ──
   // 备份文件：{ app: 'orderTriage', kind: 'backup', format: 1, version, at, localStorage: { 'orderTriage.*': 原样字符串 }, storage: chrome.storage.local 全部 }
   // 格式有不兼容的改动时 format 加一；旧插件见到不认识的 format 就拒绝，不去猜
-  const VERSION = EXT ? chrome.runtime.getManifest().version : '0.24.2';     // 网页版读不到 manifest，selftest 核对两处一致
+  const VERSION = EXT ? chrome.runtime.getManifest().version : '0.24.3';     // 网页版读不到 manifest，selftest 核对两处一致
   const BACKUP_FORMAT = 1;
   // 恢复时丢掉的扩展存储键：进行中的任务、页面领活记录、标签页编号这类临时状态。恢复回去的话，开着的淘宝页一读到就会接着干活
   // （重新提交开票申请、给卖家发消息、找客服督促、下载），标签页编号也早已失效。
@@ -3232,6 +3243,7 @@
         else if (k === 'inv-close') { J.note = ''; render(); }
         else if (k === 'sort-done') confirmSort();
         else if (k === 'sort-cat') confirmCat();
+        else if (k === 'sort-ask') jumpLowAsk();
         else if (k === 'inv-run') runInvoice(false);
         else if (k === 'inv-stop') stopRun('用户点「停止」');
         else if (k === 'pack') { if (personOk()) $('inv-pack-dir').click(); }

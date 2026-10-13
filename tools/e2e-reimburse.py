@@ -153,8 +153,12 @@ def run(p, tmp):
     check(pills.get('某某说不清的器件') == '是否低值品？' and pills.get('某某说不清的部件') == '是否低值品？', '关键词判断不出的：黄色「是否低值品？」', pills)
     asked = app.evaluate("[...document.querySelectorAll('.line')].filter(l => l.querySelector('.title').textContent.includes('说不清')).map(l => l.className)")
     check(len(asked) == 2 and all('is-uns' in x for x in asked), '待确认是否低值品的整行标黄（和待定一样，位置按下单日期）', asked)
-    check(app.is_disabled('#summary [data-flow="sort-done"]') and '是否低值品' in app.inner_text('#summary .fd-hint'),
-          '还有待确认的时「确认核对完成」不能点，提示一行点黄色标签', app.inner_text('#summary .fd-hint'))
+    btn = app.inner_text('#summary [data-flow="sort-ask"]') if app.query_selector('#summary [data-flow="sort-ask"]') else ''
+    check(btn == '找到待确认的 2 件' and not app.query_selector('#summary [data-flow="sort-done"]') and '低值品' in app.inner_text('#summary .fd-hint'),
+          '还有待确认低值品时，主按钮变成「找到待确认的 2 件」（2026-10-13 用户在长列表里找不到黄色标签）', (btn, app.inner_text('#summary .fd-hint')))
+    app.evaluate('window.scrollTo(0, 0)'); app.click('#summary [data-flow="sort-ask"]'); app.wait_for_timeout(600)
+    foc = app.evaluate("(() => { const l = document.querySelector('.line.focus'); return l ? [l.querySelector('.title').textContent.trim(), !!l.querySelector('.low-ask')] : null })()")
+    check(foc and '说不清' in foc[0] and foc[1], '点它跳到第一件待确认的商品并选中', foc)
     asks = app.evaluate('''() => [...document.querySelector('.line .low-ask').querySelectorAll('button')].map(b => b.textContent + '|' + (b.title ? 'tip' : ''))''')
     check(asks == ['是|tip', '否|tip'], '待确认时直接给「是 / 否」两个选项，都有悬停说明', asks)
     app.click('.line:has-text("某某说不清的器件") [data-low][data-lowv="low"]'); app.wait_for_timeout(300)
