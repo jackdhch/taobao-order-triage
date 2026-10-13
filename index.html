@@ -386,6 +386,12 @@ body.is-ext .web-only, body:not(.is-ext) .ext-only{display:none!important}
 .ask-row .detail,.ask-row .ask-msg{grid-column:2; font-size:12px}
 .ask-row .ask-msg{color:var(--muted); background:var(--sunk); padding:4px 6px; border-radius:4px}
 
+/* 回到顶部：列表很长（几百件商品、上百单发票），往下翻过一屏才出现（用户 2026-10-13） */
+.to-top{position:fixed; right:22px; bottom:22px; z-index:20; background:var(--accent); color:var(--accent-ink); border:0; border-radius:999px;
+  padding:9px 16px; font:inherit; font-weight:600; cursor:pointer; box-shadow:0 2px 8px rgba(0,0,0,.18)}
+.to-top[hidden]{display:none}
+.to-top:hover{filter:brightness(1.08)}
+.to-top:focus-visible{outline:2px solid var(--text); outline-offset:2px}
 .toast{position:fixed; left:50%; bottom:22px; transform:translateX(-50%); background:var(--text); color:var(--surface); padding:8px 14px; border-radius:8px;
        font-size:13px; display:flex; gap:12px; align-items:center; z-index:50; box-shadow:var(--shadow); max-width:calc(100vw - 32px)}
 .toast button{appearance:none; border:0; background:none; color:inherit; text-decoration:underline; cursor:pointer; padding:0}
@@ -612,6 +618,7 @@ footer p{margin:0 0 4px; max-width:90ch}
 </dialog>
 
 <div class="toast" id="toast" hidden></div>
+<button type="button" class="to-top" id="to-top" title="回到页面顶部（步骤和总览）" hidden>↑ 回到顶部</button>
 
 <script src="js/xlsx-lite.js"></script>
 <script src="js/normalize.js"></script>
