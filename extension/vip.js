@@ -86,7 +86,7 @@
     const head = job.follow ? '跟进中（督促消息此前已发送）。' : '已发送 ' + job.orders.length + ' 单督促消息。';
     const note = s => { notes.push(s); panel.set(head + notes.join('；') + '。正在等待客服处理…'); };
     const t1 = Date.now();
-    let seen = msgs().length, lastNew = Date.now(), formNote = false, yesDone = false;
+    let seen = msgs().length, lastNew = Date.now(), formNote = false, yesDone = false, askDone = false;
     while (Date.now() - t1 < 30 * 60000 && Date.now() - lastNew < 10 * 60000) {
       await sleep(2000);
       const all = msgs();
@@ -111,6 +111,10 @@
         // 但插件也没接话；客服等不到确认就不往下走）。整段对话只回一次
         if (!btns.length && !yesDone && all.indexOf(m) >= okFrom && /(卖家|商家|店家).{0,8}(一直|还|仍)?(没有|没|未)(给您?|帮您?)?开(具)?(发)?票.{0,4}(吗|么|嘛)/.test(tx)) {
           done.add(m); yesDone = true; await say('是的，卖家一直没开'); note('客服确认卖家是否未开票，已回复「是的，卖家一直没开」'); continue;
+        }
+        // 客服只问一句「针对商家发票的问题 您看是否需要发起投诉呢」，不带订单号也没有按钮（2026-10-13 实测）→ 回「需要」。整段对话只回一次
+        if (!btns.length && !askDone && all.indexOf(m) >= okFrom && /(是否|要不要|需不需要|需要).{0,6}(发起|帮您)?投诉(吗|么|呢)?/.test(tx) && !/已(经)?(帮您)?发起/.test(tx)) {
+          done.add(m); askDone = true; await say('需要，这几单都帮我发起投诉，谢谢'); note('客服问是否需要投诉，已回复「需要」'); continue;
         }
         const ono = (tx.match(/\d{19}/g) || []).find(n => job.orders.some(o => o.no === n));
         if (!btns.length && ono && !okDone.has(ono) && all.indexOf(m) >= okFrom && /帮您发起投诉/.test(tx) && !/已(经)?帮您发起投诉|投诉已发起/.test(tx)) {
