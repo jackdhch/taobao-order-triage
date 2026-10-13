@@ -86,7 +86,7 @@
     const head = job.follow ? '跟进中（督促消息此前已发送）。' : '已发送 ' + job.orders.length + ' 单督促消息。';
     const note = s => { notes.push(s); panel.set(head + notes.join('；') + '。正在等待客服处理…'); };
     const t1 = Date.now();
-    let seen = msgs().length, lastNew = Date.now(), formNote = false;
+    let seen = msgs().length, lastNew = Date.now(), formNote = false, yesDone = false;
     while (Date.now() - t1 < 30 * 60000 && Date.now() - lastNew < 10 * 60000) {
       await sleep(2000);
       const all = msgs();
@@ -106,6 +106,11 @@
         // 客服说要帮着投诉商家：「…订单5190000000000000301…小二马上帮您发起投诉商家拒绝开票处理呢，您看可以吗？」
         // 或「…5190000000000000302订单…小二马上帮您发起投诉商家拒绝开票处理，投诉发起后可以先交给我们…」（2026-10-05 两种说法都见过）。
         // 要写着这次督促的某个订单号；「已帮您发起投诉」是事后说明，不回；每单只回一次「OK」
+        // 客服确认情况：「是订单卖家一直没有开票吗」→ 回一句完整的话（2026-10-13 实测：这里出现过一条孤零零的「1」，不是插件发的，
+        // 但插件也没接话；客服等不到确认就不往下走）。整段对话只回一次
+        if (!btns.length && !yesDone && all.indexOf(m) >= okFrom && /(卖家|商家|店家).{0,8}(一直|还|仍)?(没有|没|未)(给您?|帮您?)?开(具)?(发)?票.{0,4}(吗|么|嘛)/.test(tx)) {
+          done.add(m); yesDone = true; await say('是的，卖家一直没开'); note('客服确认卖家是否未开票，已回复「是的，卖家一直没开」'); continue;
+        }
         const ono = (tx.match(/\d{19}/g) || []).find(n => job.orders.some(o => o.no === n));
         if (!btns.length && ono && !okDone.has(ono) && all.indexOf(m) >= okFrom && /帮您发起投诉/.test(tx) && !/已(经)?帮您发起投诉|投诉已发起/.test(tx)) {
           done.add(m); okDone.add(ono); await say('OK'); note('订单 ' + ono + '：客服提出投诉商家，已回复「OK」'); continue;

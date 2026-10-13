@@ -23,8 +23,10 @@
     mock.sent.push(t); add('right', t); ta.value = '';
     if (!mock.human && /督促/.test(t)) mock.early.push(t);
     if (mock.human) {
-      // 人工客服：收到第一句督促后问要不要投诉；回 OK 后发「提交投诉」卡片（按钮也只认完整点击）
-      if (/督促/.test(t) && !mock.asked) { mock.asked = true; const no = (t.match(/\d{19}/) || [''])[0];
+      // 人工客服：收到第一句督促后先问「是订单卖家一直没有开票吗」（2026-10-13 实测），得到确认才问要不要投诉；回 OK 后发「提交投诉」卡片（按钮也只认完整点击）
+      if (/督促/.test(t) && !mock.confirm) { mock.confirm = true; mock.no = (t.match(/\d{19}/) || [''])[0];
+        setTimeout(() => add('left', '亲，是订单卖家一直没有开票吗？'), 1200); }
+      if (mock.confirm && !mock.asked && /是的|没开/.test(t)) { mock.asked = true; const no = mock.no;
         setTimeout(() => add('left', '亲，核实您这边' + no + '订单申请开票查看到商家已延迟开票，为了更好的帮您，小二马上帮您发起投诉商家拒绝开票处理，投诉发起后可以先交给我们，我们平台会尽全力协助您处理开票问题的。'), 1500); }
       if (t === 'OK' && mock.asked && !mock.card) {
         mock.card = true;

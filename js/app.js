@@ -70,9 +70,11 @@
   // 还要卖家回复的单（旺旺要看的范围）：需向卖家索要 / 已索要 / 卖家已回 / 卖家发来开票卡片 / 已索要后又找客服督促过的 / 下载的票核对不通过；
   // 另外凡是还没取得发票、和这家店的会话里要过票或卖家发过文件的单，每轮都重读这家的会话
   // （2026-10-10 实测：核对不通过的单不在扫描范围里，卖家之后补发的正确发票没读到）
-  const CHAT_KEYS = ['ask', 'asked', 'replied', 'card', 'chatfail', 'badinv'];
+  // 2026-10-13 起：凡是还在等发票的单（未开票一组：平台申请中、可平台申请、督促过的……）都读这家的会话——
+  // 平台申请的单，卖家也可能直接在旺旺发发票二维码（2026-10 实测漏过一单：插件从没打开那家的会话）
+  const CHAT_KEYS = ['ask', 'asked', 'replied', 'card', 'chatfail', 'badinv', 'photo'];
   function needsChat(st, o) {
-    if (CHAT_KEYS.includes(st.key) || (st.key === 'urged' && st.base === 'asked')) return true;
+    if (CHAT_KEYS.includes(st.key) || INV_GROUP[st.key] === 'todo') return true;
     if (['done', 'ready'].includes(INV_GROUP[st.key]) || st.key === 'none' || st.key === 'gone') return false;
     const c = o && chatOf(o);
     return !!c && !!((c.asks || []).length || (c.files || []).length);
@@ -87,8 +89,10 @@
     const pick = xs => xs.map(x => ({ no: x.o.no, shop: x.o.shop, nick: x.o.nick || '', time: x.o.time, amount: x.o.pay }));
     const first = xs => xs.map(x => (x.o.time || '').slice(0, 10)).filter(Boolean).sort()[0] || '';
     const chat = list.filter(x => needsChat(invStatus(x), x.o));
-    // st：这单现在的状态。还没联系过卖家的（ask）找不到会话是正常的，旺旺页不把它算成「未能读取」
-    return { orders: pick(list), since: first(list), chat: pick(chat).map((o, i) => Object.assign(o, { st: invStatus(chat[i]).key })), chatSince: first(chat),
+    // st：这单现在的状态。还没联系过卖家的（ask）找不到会话是正常的，旺旺页不把它算成「未能读取」；
+    // fresh：从没读到过这家会话的（平台申请中等）同样，没有会话不算失败
+    return { orders: pick(list), since: first(list), chat: pick(chat).map((o, i) => { const st = invStatus(chat[i]).key;
+               return Object.assign(o, { st, fresh: st !== 'chatfail' && !chatOf(chat[i].o) }); }), chatSince: first(chat),
              title: S.invoice.title, taxId: S.invoice.taxId };
   }
   function mergeFromExt(scraped) {
@@ -469,7 +473,7 @@
   // 发票的三类：还没开 / 开好了还没下载 / 已开好并下载
   // badinv：下载的票核对不通过（少 1 元以上、金额不符、读不出等），不算已取得；chatfail：旺旺会话没能读取（不退回「需向卖家索要」）
   const INV_GROUP = { apply: 'todo', ask: 'todo', asked: 'todo', applying: 'todo', urged: 'todo', card: 'todo', wrong: 'todo', check: 'todo',
-                      badinv: 'todo', chatfail: 'todo', gone: 'gone', ready: 'ready', replied: 'ready', paper: 'ready', done: 'done', have: 'done' };
+                      badinv: 'todo', chatfail: 'todo', photo: 'todo', gone: 'gone', ready: 'ready', replied: 'ready', paper: 'ready', done: 'done', have: 'done' };
   function invCounts() {
     const c = { todo: 0, ready: 0, done: 0 };
     for (const x of invOrders()) { const g = INV_GROUP[invStatus(x).key]; if (g) c[g]++; }
@@ -1083,7 +1087,7 @@
     if (cs && ['ask', 'apply', 'asked'].includes(st.key))
       return { key: 'check', base: st.key, label: '疑似已整理，请核对', detail: '已整理的发票中有同金额的：' + cs.map(x => x.file).join('、') + '（多单对应同一张或一单对应多张，插件不做推断）' };
     if (st.key === 'apply' && noPlatformOf(o)) return chatFailOr(o, askedOr(o, { key: 'ask', label: I.LABEL.ask, detail: '批量开票页中无此订单，无法在平台开票' }));
-    return withBatch(o, withCardFail(o, withVip(o, withCheck(o, chatFailOr(o, askedOr(o, rejectedOnly(o, st)))))));
+    return withBatch(o, withCardFail(o, withVip(o, withCheck(o, chatFailOr(o, askedOr(o, withQr(o, rejectedOnly(o, st))))))));
   }
   // 插件整理过的单：写明是哪一批（「已整理（第 3 批）」）
   function withBatch(o, st) {
@@ -1188,12 +1192,13 @@
   //   ok 绿 已取得 / info 紫 已开具待取得 / plat 蓝 已进入淘宝开票流程 / wait 黄 等待卖家回复 / urge 青 已由淘宝客服督促 / bad 红 需处理 / off 灰 无需开票
   //   off 只给退款的单用，invOrders 已排除退款商品，发票栏里实际不出现，所以图例里没有它
   const TONE = { have: 'ok', done: 'ok', ready: 'info', paper: 'info', replied: 'info', applying: 'plat', asked: 'wait', urged: 'urge',
-                 card: 'bad', apply: 'bad', ask: 'bad', wrong: 'bad', check: 'bad', badinv: 'bad', chatfail: 'bad', none: 'off', gone: 'off' };
+                 card: 'bad', apply: 'bad', ask: 'bad', wrong: 'bad', check: 'bad', badinv: 'bad', chatfail: 'bad', photo: 'bad', none: 'off', gone: 'off' };
   const WAIT_TONES = ['plat', 'wait', 'urge'];
   // 下载的票读出来有问题，要用户核对：少了 1 元以上、金额对不上、分不清、抬头不符、读不出金额（扫描版的真发票也读不出，所以不直接判成「不是发票」）、没能取回核对
   const BAD_CHECK = ['short', 'amount', 'many', 'title', 'unread', 'error'];
   function invTone(o, st) {
-    if (st.key === 'replied' && (st.shared || needsMsg(st))) return 'bad';     // 分不清是哪单的、卖家要邮箱的
+    // 分不清是哪单的、卖家要邮箱的、二维码要手动下载或核对没通过的
+    if (st.key === 'replied' && (st.shared || needsMsg(st) || st.qr === 'link' || st.qr === 'fail')) return 'bad';
     return TONE[st.key] || 'off';
   }
   // ── 状态标签可点：去这个状态对应的地方（用户 2026-10-05）。用户自己点开的页面插件不会关 ──
@@ -1203,7 +1208,7 @@
   const CHAT_TIP = '打开与该店铺的旺旺聊天', INV_TIP = '打开本单的淘宝发票详情页';
   const PILL_GO = {
     asked: ['chat', CHAT_TIP], ask: ['chat', CHAT_TIP], replied: ['chat', CHAT_TIP + '，查看卖家发送的内容'],
-    card: ['chat', CHAT_TIP + '，查看卖家发送的开票申请入口'],
+    card: ['chat', CHAT_TIP + '，查看卖家发送的开票申请入口'], photo: ['chat', CHAT_TIP + '，查看卖家发送的图片'],
     // 「抬头不符」不放在这里：操作列的「换开发票」打开的就是同一个发票详情页，留一个入口（用户 2026-10-08）
     applying: ['inv', INV_TIP + '（开票进度、商家剩余处理时间）'], ready: ['inv', INV_TIP], paper: ['inv', INV_TIP],
     urged: ['complaint', '打开淘宝投诉记录（投诉总表；单笔投诉详情仅能在手机淘宝查看）'],
@@ -1241,11 +1246,15 @@
     inv: '打开本单的淘宝发票详情页：抬头与设置不符，请在该页申请换开',
     chat: '打开与该店铺的旺旺聊天，请卖家核对发票（下载的 PDF 核对不通过）',
     open: '打开与该店铺的旺旺聊天：上次读取卖家回复时未能打开这个会话；下次「自动处理发票」会重新读取',
+    img: '打开卖家发送的图片（插件未识别出二维码）：是发票的，保存后用「手动添加发票」添加',
+    qrlink: '打开卖家发送的二维码中的链接（插件无法自动下载）：下载发票后用「手动添加发票」添加',
   };
   function rowAction(x, s, isLate) {
     const k = s.key === 'check' ? s.base : s.key, A = (act, label) => ({ act, label, tip: ACT_TIP[act] });
     if (k === 'ask') return A('ask', '索要发票');
     if (k === 'replied' && s.email) return A('ask', '回复邮箱');
+    if (k === 'replied' && (s.qr === 'link' || s.qr === 'fail')) return A('qrlink', '打开二维码链接');
+    if (k === 'photo') return A('img', '查看图片');
     if (k === 'asked') return isLate ? A('vip', '找客服督促') : A('nudge', '催卖家');
     if (k === 'applying' || k === 'urged') return isLate ? A('vip', '找客服督促') : null;
     if (k === 'card') return A('card', '按入口申请');
@@ -1267,6 +1276,12 @@
     alog('start', 'row-' + act, who + ' ' + no);
     if (act === 'inv') return openUrl(invDetailUrl(no));
     if (act === 'chat' || act === 'open') return openChat(no);
+    // 卖家发来的图片、二维码里的链接：只开 http(s) 地址，用户点了才开
+    if (act === 'img' || act === 'qrlink') {
+      const s = invStatus(x), u = act === 'img' ? s.img : s.url;
+      if (/^https?:\/\//i.test(u || '')) openUrl(u); else toast('无法打开：不是网页地址');
+      return;
+    }
     if (act === 'ask' || act === 'nudge') {
       if (!o.nick) await inspectOrders([o]);                 // 顺便核对是不是已经整单退款
       if (!invOrders().some(g => g.o.no === no)) return;      // 整单退款了：inspectOrders 已提示
@@ -1346,9 +1361,9 @@
         if (s.key !== 'gone') acts.push('<label class="add" title="' + (needA ? '选择文件：发票（PDF、OFD）按本单命名存入「订单分拣-发票」；支付记录截图、用途说明、3D 打印明细等存为本单附件，整理报销文件时放入「附件原图」'
           : '选择 PDF 文件（如卖家发送到邮箱的发票），按本单命名复制到下载文件夹的「订单分拣-发票」') + '">' + (needA ? '手动添加发票 / 附件' : '手动添加发票')
           + '<input type="file" accept="' + (needA ? '.pdf,.ofd,.xml,.png,.jpg,.jpeg,.xlsx,.xls,.csv,.doc,.docx' : '.pdf,.ofd,.xml') + '" data-inv="attach" data-no="' + esc(o.no) + '" hidden></label>');
+        // 读不出二维码的图：放一张小图，一眼看出是什么（点「查看图片」看原图）
         const okImg = u => /^https:\/\/([\w-]+\.)*(alicdn|taobao|tbcdn|tmall)\.com\//.test(u);
-        const imgs = s.key === 'replied' && c && !c.files.length && c.images.length
-          ? c.images.slice(-2).filter(im => okImg(im.src)).map(im => '<div><img class="qr" alt="卖家发送的图片" referrerpolicy="no-referrer" crossorigin="anonymous" data-qr="1" src="' + esc(im.src) + '"><div class="detail" data-qr-out></div></div>').join('') : '';
+        const imgs = s.key === 'photo' && okImg(s.thumb || '') ? '<img class="qr" alt="卖家发送的图片" referrerpolicy="no-referrer" src="' + esc(s.thumb) + '">' : '';
         const pic = x.lines.find(l => l.img);
         const t = x.lines[0].title;
         return '<tr><td>' + detailA(o.no, thumbHtml(pic && pic.img, 'inv-thumb'), 'thumb-a') + '</td>'
@@ -1367,30 +1382,113 @@
         + HEAD + xs.map(rowHtml).join('') + '</tbody></table></div></details>';
     }).join('');
     for (const d of $('list').querySelectorAll('details.inv-sect')) d.addEventListener('toggle', () => { invOpen[d.dataset.sect] = d.open; });
-    decodeQrs();
   }
-  // 卖家发来的图片：第一步看是不是二维码（jsQR 在本机读像素），是就读出里面的地址——只显示，不自动打开；
-  // 读像素要先把图拿到手：扩展里靠 manifest 的 alicdn 权限；网页版拿不到跨站图片的像素，只能提示用手机扫
-  const imgCache = new Map();
-  async function imgData(src) {
-    if (imgCache.has(src)) return imgCache.get(src);
-    const blob = await (await fetch(src)).blob();
-    const bmp = await createImageBitmap(blob);
-    const c = new OffscreenCanvas(bmp.width, bmp.height), g = c.getContext('2d');
-    g.drawImage(bmp, 0, 0);
-    const r = { data: g.getImageData(0, 0, bmp.width, bmp.height), blob };
-    imgCache.set(src, r);
+  // ── 卖家发来的图片里的二维码 ──
+  // 卖家常用手机拍电脑屏幕上的税务局「二维码交付」弹窗发过来（2026-10 实测两单：2268×2319 的 JPEG、摩尔纹明显），jsQR 直接读原图读不出，
+  // 读一次还要卡住界面几秒；以前读不出就当没看见，这单一直停在「等待回复」。现在：
+  //   - js/qr-scan.js 按几种尺寸、二值化、裁切逐个试（每张限时 3 秒），放在后台线程 js/qr-worker.js 里，界面不卡；
+  //   - 取原图（旺旺里显示的是缩略图，见 QrScan.fullSrc）：扩展主页有 alicdn 的权限，fetch → blob 直接拿到；
+  //   - 结果按图片地址记在 S.qrSeen（二维码内容，读不出是 ''），重绘、重开主页都不再重算；取不到图的（网络、权限）只记在本次运行里，下载时再试；
+  //   - 卖家没说是发票的图（weak，可能是商品照片）只试 1.5 秒，读不出记 '-'：以后要当成卖家的回复来读时再按 3 秒读一遍
+  const QR = window.QrScan;
+  const qrPend = new Map(), qrErr = new Set();
+  let qrWorker = null, qrSeq = 0, qrChain = Promise.resolve(), qrRedraw = 0;
+  const qrKnown = (src, weak) => {
+    const v = Object.prototype.hasOwnProperty.call(S.qrSeen || {}, src) ? S.qrSeen[src] : qrErr.has(src) ? '' : null;
+    return v === '-' ? (weak ? '' : null) : v;
+  };
+  function qrInWorker(blob, budget) {
+    return new Promise(resolve => {
+      if (!qrWorker) try { qrWorker = new Worker('js/qr-worker.js'); } catch (e) { qrWorker = null; }
+      if (!qrWorker) { createImageBitmap(blob).then(b => QR.scan(b, window.jsQR, { budget })).then(resolve, () => resolve('')); return; }
+      const id = ++qrSeq, w = qrWorker;
+      const on = e => { if (e.data && e.data.id === id) done(e.data.text || ''); };
+      // 一次尝试卡住太久（图特别大）：结束这个线程，下一张换新的
+      const timer = setTimeout(() => { w.terminate(); if (qrWorker === w) qrWorker = null; done(''); }, budget + 8000);
+      function done(t) { clearTimeout(timer); w.removeEventListener('message', on); resolve(t); }
+      w.addEventListener('message', on);
+      w.postMessage({ id, blob, budget });
+    });
+  }
+  async function qrDecode(src, weak) {
+    let blob = null;
+    for (const u of [...new Set([QR.fullSrc(src), src])]) {
+      try { const r = await fetch(u); if (r.ok) { blob = await r.blob(); break; } } catch (e) { /* 原图取不到：再试缩略图 */ }
+    }
+    if (!blob) { qrErr.add(src); return ''; }
+    const t = await qrInWorker(blob, weak ? 1500 : 3000);
+    qrErr.delete(src);
+    const m = S.qrSeen || (S.qrSeen = {});
+    m[src] = t || (weak ? '-' : '');
+    const ks = Object.keys(m);
+    if (ks.length > 300) ks.slice(0, ks.length - 300).forEach(k => { delete m[k]; });
+    persist();
+    return t;
+  }
+  // 一张一张来（后台线程一次只读一张）；读过的直接给结果，取不到图的每次调用都再试
+  function qrText(src, weak) {
+    const k = qrKnown(src, weak);
+    if (k != null && !qrErr.has(src)) return Promise.resolve(k);
+    if (qrPend.has(src)) return qrPend.get(src);
+    const p = qrChain = qrChain.then(() => qrDecode(src, weak)).catch(() => '');
+    p.finally(() => qrPend.delete(src));
+    qrPend.set(src, p);
+    return p;
+  }
+  // 状态里用到还没读过的图：后台读，读完重画一次（取不到图的不在这里反复重试）
+  function qrWatch(src, weak) {
+    if (qrPend.has(src) || qrKnown(src, weak) != null || !EXT) return;
+    qrText(src, weak).then(() => { clearTimeout(qrRedraw); qrRedraw = setTimeout(() => { if (derived) render(); }, 300); });
+  }
+  // 一组图里读出的二维码：tax 税务局电子发票（发票号）/ link 别的网址（inv：看得出是开票平台）；wait 还没读完的张数
+  function qrsOf(ims, weak) {
+    const r = { wait: 0, tax: [], link: [] };
+    for (const im of ims || []) {
+      const t = qrKnown(im.src, weak);
+      if (t == null) { r.wait++; qrWatch(im.src, weak); continue; }
+      const k = QR.kindOf(t);
+      if (k.kind === 'tax') r.tax.push({ url: t, invNo: k.invNo, src: im.src });
+      else if (k.kind === 'link') r.link.push({ url: t, inv: k.inv, src: im.src });
+    }
     return r;
   }
-  function decodeQrs() {
-    for (const img of document.querySelectorAll('img[data-qr]')) {
-      const out = img.parentElement.querySelector('[data-qr-out]');
-      imgData(img.src).then(({ data }) => {
-        const q = window.jsQR && window.jsQR(data.data, data.width, data.height);
-        if (q && q.data) { out.textContent = '二维码内容：' + q.data + '（请核对后再打开）'; return; }
-        out.textContent = '不是二维码';
-      }).catch(() => { out.textContent = '无法读取图片像素，请用手机扫描'; });
+  // 税务局页面上核对没通过（购买方、税号、金额不对）的票不再自动去下；页面没加载出来的下次再试
+  const qrGaveUp = invNo => { const f = (X.qrFail || {})[invNo]; return !!f && !/PDF\s*下载/.test(f.why || ''); };
+  const qrTaken = invNo => owners().src.has(invNo) || owners().inv.has(invNo);
+  /*
+   * 卖家发来的图片按读出的二维码定状态（用户 2026-10-13：卖家发的二维码要全自动识别并下载）：
+   *   税务局电子发票 → 「卖家发来发票二维码」，下载段自动打开那个地址、核对后下载；核对没通过的标红，操作「打开二维码链接」
+   *   诺诺、百望等开票平台的网址 → 红色「卖家发来发票二维码，需手动下载」，操作「打开二维码链接」
+   *   读不出二维码 → 红色「卖家发来图片，请查看」，操作「查看图片」（以前读不出就当没看见）
+   * 下单之后卖家发的别的图（没说是发票、c.maybe）：读出税务局发票二维码才算，读不出不打扰
+   */
+  function withQr(o, st) {
+    const c = chatOf(o);
+    if (!c) return st;
+    if (st.key === 'replied' && st.imgs) {
+      const q = qrsOf(c.images), sh = st.shared ? '（同店多单，请核对归属）' : '', base = { key: 'replied', shared: st.shared };
+      const tax = q.tax.filter(t => !qrTaken(t.invNo));
+      if (tax.length) {
+        const ok = tax.find(t => !qrGaveUp(t.invNo));
+        if (ok) return Object.assign(base, { qr: 'tax', url: ok.url, label: '卖家发来发票二维码' + sh, detail: '发票号码 ' + ok.invNo });
+        const f = X.qrFail[tax[0].invNo];
+        return Object.assign(base, { qr: 'fail', url: tax[0].url, label: '二维码发票核对未通过', detail: f.why + '（发票号码 ' + tax[0].invNo + '）' });
+      }
+      // 二维码的票已经下过、归到同店另一单：这单还在等
+      if (q.tax.length && !q.wait && !q.link.length) return { key: 'asked', label: I.LABEL.asked, detail: '卖家发来的二维码发票已归入同店另一单' };
+      if (q.wait) return Object.assign({}, st, { label: '卖家已发送图片，正在识别二维码' + sh, qr: 'wait' });
+      const l = q.link.find(x => x.inv) || q.link[0];
+      if (l) return Object.assign(base, { qr: 'link', url: l.url, label: (l.inv ? '卖家发来发票二维码，需手动下载' : '卖家发来二维码，请查看') + sh,
+        detail: l.url.replace(/^https?:\/\//, '').slice(0, 60) });
+      const last = c.images[c.images.length - 1];
+      return { key: 'photo', shared: st.shared, img: QR.fullSrc(last.src), thumb: last.src, label: '卖家发来图片，请查看' + sh, detail: c.images.length + ' 张，未识别出二维码' };
     }
+    // 还在等票的单：卖家没说是发票的图里读出了税务局发票二维码，也按「卖家发来发票二维码」自动下载
+    if (INV_GROUP[st.key] === 'todo' && (c.maybe || []).length) {
+      const t = qrsOf(c.maybe, true).tax.find(x => !qrTaken(x.invNo) && !qrGaveUp(x.invNo));
+      if (t) return { key: 'replied', qr: 'tax', url: t.url, shared: c.shared, label: '卖家发来发票二维码', detail: '发票号码 ' + t.invNo, loose: true };
+    }
+    return st;
   }
 
   // ── 读发票 PDF（vendor/pdfjs，第一次用到才加载，1.7 MB）──
@@ -1957,6 +2055,8 @@
           jobs.push(Object.assign({ id: 'x' + no + '_' + i, kind: 'chat', attach: '3D打印明细', conv: c.name, nick: o.nick || c.nick || '', file: f.name, time: f.time },
             base, { saveAs: base.saveAs.replace(/\.pdf$/, '_3D打印明细' + (i ? '_' + (i + 1) : '') + '.pdf') }));
         });
+      // 还在等票的单：卖家没说是发票的图里有税务局发票二维码的，也照样下（见 withQr）
+      if (c && INV_GROUP[s.key] === 'todo' && s.key !== 'badinv') { await qrJobs(c.maybe, o, base, jobs, seen, true); continue; }
       // 下载的票核对不通过的单（badinv）：卖家后来补发的、以前漏掉的文件也下（2026-10-10 实测）
       if (!['replied', 'badinv'].includes(s.key) || !c) continue;
       // 分不清是哪单的（同店几单共用一个会话）也下：下完主页读 PDF 上的金额、开票日期，归错的自动挪到对的那单（用户 2026-10-04）。
@@ -1969,16 +2069,8 @@
         jobs.push(Object.assign({ id: 'c' + no + '_' + i, kind: 'chat', conv: c.name, nick: o.nick || c.nick || '', file: f.name, time: f.time },
           base, { saveAs: c.files.length > 1 ? base.saveAs.replace(/\.pdf$/, '_' + (i + 1) + '.pdf') : base.saveAs }));
       });
-      // 卖家发的二维码：是税务局电子发票地址（dppt.<省>.chinatax.gov.cn…2_<20 位发票号>_…）就打开它下载 PDF
-      for (const im of c.images || []) {
-        const url = await qrUrl(im.src);
-        const m = url && /^https:\/\/dppt\.[a-z]+\.chinatax\.gov\.cn(?::\d+)?\/.*?2_(\d{20})_/.exec(url);
-        if (!m || seen.has('q' + m[1]) || owners().src.has(m[1]) || owners().inv.has(m[1])) continue;     // 这张二维码发票已经下过
-        seen.add('q' + m[1]);
-        const alts = invOrders().filter(y => y.o.shop === o.shop && y.o.no !== no && !settled(y.o))
-          .map(y => ({ no: y.o.no, amount: dueOf(y.o), saveAs: I.saveName({ time: y.o.time, amount: y.o.pay, shop: y.o.shop, no: y.o.no }) }));
-        jobs.push(Object.assign({ id: 'q' + m[1], kind: 'qr', url, invNo: m[1], amount: dueOf(o), title: S.invoice.title, taxId: S.invoice.taxId, alts }, base));
-      }
+      await qrJobs(c.images, o, base, jobs, seen);
+      await qrJobs(c.maybe, o, base, jobs, seen, true);
     }
     const { dlJobs } = await chrome.storage.local.get('dlJobs'), now = Date.now();
     // 旧活只留「半小时内排的、这单也还要下」的（淘宝页正在下）：连点两次不再派第二个页面重复下；
@@ -1994,10 +2086,17 @@
     return { add, again, busy: again.length };
   }
   const sleepMs = ms => new Promise(r => setTimeout(r, ms));
-  // 卖家发的图片 → 二维码里的地址（认不出就是空）
-  async function qrUrl(src) {
-    try { const { data } = await imgData(src); const q = window.jsQR && window.jsQR(data.data, data.width, data.height); return q ? q.data : ''; }
-    catch (e) { return ''; }
+  // 卖家发的二维码：是税务局电子发票地址（dppt.<省>.chinatax.gov.cn…2_<20 位发票号>_…）就排一个下载活，extension/qr.js 打开它、核对后下载 PDF。
+  // 同店还没取得发票的几单一起给（alts）：页面上的金额是哪单的就按哪单存（同店几单共用一个会话，分不清二维码是哪单的）
+  async function qrJobs(ims, o, base, jobs, seen, weak) {
+    for (const im of ims || []) {
+      const url = String(await qrText(im.src, weak)).trim(), k = QR.kindOf(url);
+      if (k.kind !== 'tax' || seen.has('q' + k.invNo) || qrTaken(k.invNo) || qrGaveUp(k.invNo)) continue;     // 已经下过、核对没通过的不再下
+      seen.add('q' + k.invNo);
+      const alts = invOrders().filter(y => y.o.shop === o.shop && y.o.no !== o.no && !settled(y.o))
+        .map(y => ({ no: y.o.no, amount: dueOf(y.o), saveAs: I.saveName({ time: y.o.time, amount: y.o.pay, shop: y.o.shop, no: y.o.no }) }));
+      jobs.push(Object.assign({ id: 'q' + k.invNo, kind: 'qr', url, invNo: k.invNo, amount: dueOf(o), title: S.invoice.title, taxId: S.invoice.taxId, alts }, base));
+    }
   }
 
   // 每张新下载的发票：插件按下载地址把 PDF 取回来读（阿里云上的文件，扩展有权限），用价税合计、开票日期核对是不是这单的；
@@ -2051,7 +2150,10 @@
           if (!r.isInvoice || r.amount == null) { done[key] = { kind: 'unread' }; continue; }
           const c = judge(r, g, no);
           record(key, c, r); res.push(c);
-        } catch (e) { done[key] = { kind: 'error', err: String(e.message || e) }; }    // 下载链接过期等：标红，请用户打开文件核对
+        } catch (e) {
+          // 税务局页面下的二维码发票：页面上已核对过购买方、税号、价税合计（extension/qr.js），取不回 PDF 也算核对过
+          done[key] = g.from === 'qr' ? { kind: 'qrpage' } : { kind: 'error', err: String(e.message || e) };     // 下载链接过期等：标红，请用户打开文件核对
+        }
       }
       let fixed = 0;
       for (const { g, no, c: old } of again) {
@@ -2077,7 +2179,7 @@
   // 核对不通过、但记下了票面金额的：订单变了可以重新配
   const RECHECK = ['short', 'amount', 'many'];
   // 核对相符（挪过来的也算：挪去的那单金额正好对得上）
-  const GOOD_CHECK = ['ok', 'more', 'merged', 'less', 'move'];
+  const GOOD_CHECK = ['ok', 'more', 'merged', 'less', 'move', 'qrpage'];
   /*
    * 核对下载的发票用的候选订单（同一家店的几张票逐个和这家店所有还没取得发票的订单配，用户 2026-10-10）：
    *   - 发票清单里还没取得发票的单（应报金额 = 实付 − 退款）
@@ -2104,7 +2206,7 @@
   const CHECK_NOTE = { ok: '✓ PDF 金额、日期相符', more: '✓ 票面略高于实付（按用券前价格开具）', merged: '✓ 同店多单合开', less: '✓ 票面低于实付不足 1 元',
     short: '⚠ 票面低于应报金额 1 元以上，请联系卖家核对',
     move: '已移至正确订单', old: '⚠ 开票日期早于下单日期：属于以往其他订单', dup: '⚠ 与已整理（已报销）的发票为同一张，不属于本单', amount: '⚠ PDF 金额不符', many: '⚠ 同店多单均可匹配，请核对',
-    title: '⚠ 抬头不符', unread: '⚠ 无法读取 PDF 金额，请打开文件核对', error: '⚠ 未能取回 PDF 核对，请打开文件核对', copy: '与已下载的发票为同一张（卖家重复发送）' };
+    qrpage: '✓ 已在税务局页面核对购买方、税号和价税合计', title: '⚠ 抬头不符', unread: '⚠ 无法读取 PDF 金额，请打开文件核对', error: '⚠ 未能取回 PDF 核对，请打开文件核对', copy: '与已下载的发票为同一张（卖家重复发送）' };
   // 核对结果按下载的实际位置记（同一个建议文件名可能先后下过两次：挪走后原订单又下了一次），旧版本按文件名记的照样认
   const fcKey = g => g.path ? 'p:' + g.path : g.file;
   const fcOf = g => { const fc = S.fileChecks || {}; return fc[fcKey(g)] || fc[g.file] || null; };
@@ -2959,7 +3061,7 @@
   // ── 备份数据 / 从备份恢复（用户 2026-10-05）：全部数据只在本机浏览器里，删掉扩展或清浏览器数据就没了 ──
   // 备份文件：{ app: 'orderTriage', kind: 'backup', format: 1, version, at, localStorage: { 'orderTriage.*': 原样字符串 }, storage: chrome.storage.local 全部 }
   // 格式有不兼容的改动时 format 加一；旧插件见到不认识的 format 就拒绝，不去猜
-  const VERSION = EXT ? chrome.runtime.getManifest().version : '0.22.0';     // 网页版读不到 manifest，selftest 核对两处一致
+  const VERSION = EXT ? chrome.runtime.getManifest().version : '0.23.0';     // 网页版读不到 manifest，selftest 核对两处一致
   const BACKUP_FORMAT = 1;
   // 恢复时丢掉的扩展存储键：进行中的任务、页面领活记录、标签页编号这类临时状态。恢复回去的话，开着的淘宝页一读到就会接着干活
   // （重新提交开票申请、给卖家发消息、找客服督促、下载），标签页编号也早已失效。

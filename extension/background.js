@@ -392,7 +392,8 @@ chrome.downloads.onChanged.addListener(d => {
     const all = dlDone || {};
     // file：我们起的名字（主页显示用）；path：Chrome 实际存的位置（重名时会自动加序号）
     // url：阿里云上的发票文件（卖家在旺旺发的、平台开的），主页拿它把 PDF 取回来读金额、开票日期核对（扩展有这个网站的权限）
-    const url = item && /^https:\/\/[\w.-]+\.aliyuncs\.com\//.test(item.finalUrl || item.url || '') ? (item.finalUrl || item.url) : '';
+    // 二维码发票从税务局页面下的：地址是 https 的也记下（页面用脚本生成的 blob: 地址取不回来，不记）
+    const url = item && /^https:\/\/([\w.-]+\.aliyuncs\.com|[\w.-]+\.chinatax\.gov\.cn(:\d+)?)\//.test(item.finalUrl || item.url || '') ? (item.finalUrl || item.url) : '';
     (all[j.no] = all[j.no] || []).push({ file: j.name, path: item ? item.filename : '', at: Date.now(), from: j.kind, src: j.file || j.invNo || '', url });
     await chrome.storage.local.set({ dlDone: all });
   }).catch(e => console.warn('[订单分拣] 记录下载失败', e));

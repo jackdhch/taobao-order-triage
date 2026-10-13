@@ -1,5 +1,6 @@
 // 税务局电子发票服务平台（卖家在旺旺里发来的发票二维码，打开就是这里；2026-10-04 实测浙江
-// dppt.zhejiang.chinatax.gov.cn:8443/v/2_<20 位发票号>_… → 跳到 /qrcode?cs=2_<发票号>_…）。
+// dppt.zhejiang.chinatax.gov.cn:8443/v/2_<20 位发票号>_… → 跳到 /qrcode?cs=2_<发票号>_…；2026-10 河北 dppt.hebei… 同样。
+// 跳转前后两个页面都会注入本脚本，都按地址里的发票号认活；跳转前那一页等不到按钮就随页面跳走了）。
 // 页面上直接写着购买方名称、税号、价税合计、开票日期，有「PDF下载」「OFD下载」「XML下载」三个按钮。
 // 主页排了这张票的下载活（dlJobs 里 kind=qr、发票号对得上）才动：抬头、税号、金额核对过再点「PDF下载」，下完关掉本页。
 // 金额不是这单的、但正好是同店另一单的（同一家店几单共用一个会话，分不清二维码是哪单的）：按那一单存
@@ -16,7 +17,9 @@
     if (!j) return;                                       // 不是插件打开的：不动，也不显示卡片
     const panel = window.otPanel('二维码发票', [], () => {});
     panel.set('正在核对发票号 ' + invNo + '…');
-    const btnOf = () => [...document.querySelectorAll('button')].find(b => /PDF\s*下载/.test(b.innerText));
+    // 「PDF下载」：浙江是 <button>；别的省可能是 <a>、<span> 之类（2026-10 河北的还没核对）。按文字找最里层的那个，点击会冒泡到外层
+    const btnOf = () => [...document.querySelectorAll('button, a, [role="button"], span, div')].reverse()
+      .find(b => /^PDF\s*下载$/.test((b.textContent || '').trim()));
     await window.otWaitFor(() => btnOf() && /价税合计/.test(document.body.innerText), 20000);
     const t = squash(document.body.innerText);
     const amt = +(((/价税合计[^￥¥\d]*[￥¥]?([\d,]+\.\d{2})/.exec(t) || [])[1]) || 'NaN').replace(/,/g, '');

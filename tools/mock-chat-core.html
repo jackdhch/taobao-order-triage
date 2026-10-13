@@ -122,6 +122,15 @@ body{margin:0;font:13px system-ui,"Microsoft YaHei";display:flex;height:100vh;co
       Object.assign(he('2026-09-10 10:00:00'), { file: { name: 'dzfp_26990000000000000194_某大学_20260910100000.pdf', size: '80 KB', oss: '26990000000000000194' } }),
       me('2026-10-09 09:00:00', '金额少了 5 元，麻烦重开'),
       Object.assign(he('2026-10-10 10:00:00'), { file: { name: 'dzfp_26990000000000000195_某大学_20261010100000.pdf', size: '80 KB', oss: '26990000000000000195' } })] },
+    // [20] 卖家发来手机拍电脑屏幕的税务局「二维码交付」照片（tools/fixtures/qr-photo-dppt.jpg，合成的）；旺旺里显示的是缩略图地址
+    { hidden: true, name: '某某虚构轴承商贸', nick: 'nick轴承商贸', orders: ['5190000000000000221'], msgs: [
+      me('2026-09-27 09:00:00', '您好，订单 5190000000000000221 需要开电子普通发票：抬头 某大学，税号 121000009999999996'),
+      Object.assign(he('2026-09-28 10:00:00'), { img: 'https://img.alicdn.com/mock/qr-photo-dppt.jpg_250x250.jpg' }),
+      he('2026-09-28 10:00:30', '亲，发票二维码，扫码下载')] },
+    // [20] 平台申请的单，旺旺里从没要过票；卖家发来一张糊得读不出的照片和「发票请查收」
+    { hidden: true, name: '某某虚构机电', nick: 'nick机电', orders: ['5190000000000000222'], msgs: [
+      Object.assign(he('2026-09-29 10:00:00'), { img: 'https://img.alicdn.com/mock/qr-photo-blur.jpg_250x250.jpg' }),
+      he('2026-09-29 10:00:20', '发票请查收')] },
     // 个人卖家：会话名是卖家自己的旺旺名，和店名「某某虚构焊接耗材」对不上（真实页面上很常见）
     { name: '某某虚构焊工小王', orders: ['5190000000000000109'], msgs: [
       me('2026-09-11 08:00:00', '你好，订单需要开发票，抬头某大学，税号121000009999999996')] },
@@ -235,7 +244,9 @@ body{margin:0;font:13px system-ui,"Microsoft YaHei";display:flex;height:100vh;co
     const m = /[?&]uid=([^&#]+)/.exec(location.search);
     if (m) {
       const nick = decodeURIComponent(m[1]).replace(/^cntaobao/, '');
-      const c = CONVS.find(x => x.name === nick || x.nick === nick);
+      // 没聊过的卖家：和真实旺旺一样打开一个空会话（标题是旺旺名，没有消息）。名字里带「打不开」的模拟打不开（[17c]）
+      let c = CONVS.find(x => x.name === nick || x.nick === nick);
+      if (!c && nick && !/打不开/.test(nick)) { c = { hidden: true, name: nick, orders: [], msgs: [] }; CONVS.push(c); }
       if (c) {
         mock.byUrl = (mock.byUrl || []).concat(nick);
         if (c.hidden || (hideAll && CONVS.indexOf(c) > 0)) {

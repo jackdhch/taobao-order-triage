@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""离线测试（数据全部虚构，不联网）：选文件夹导入已整理的发票、核对下载的发票有没有重复、读卖家图片里的二维码；插件里没有 AI 功能（用户 2026-10-04 要求删掉）；
+"""离线测试（数据全部虚构，不联网）：选文件夹导入已整理的发票、核对下载的发票有没有重复、读卖家图片里的二维码（含合成的拍屏照片）；插件里没有 AI 功能（用户 2026-10-04 要求删掉）；
 备份数据 → 清除 → 从备份恢复（进行中的任务不恢复）。
 
 用法：env -u TMPDIR python3 tools/e2e-extras.py
@@ -73,7 +73,7 @@ def run(p, tmp):
     ctx = p.chromium.launch_persistent_context(str(tmp / 'profile'), channel='chromium', headless=True, accept_downloads=True,
                                                env=dict(os.environ, HOME=str(tmp / 'home')), args=[
         '--disable-extensions-except=' + str(ROOT), '--load-extension=' + str(ROOT), '--no-proxy-server', '--host-resolver-rules=MAP * ~NOTFOUND'])
-    sent, blocked, errors = [], [], []
+    sent, blocked, errors, photo_hits = [], [], [], []
 
     def handle(route):
         r = route.request; url = r.url
@@ -81,6 +81,10 @@ def run(p, tmp):
         if m:
             return route.fulfill(status=200, headers={'Content-Type': 'image/png', 'Access-Control-Allow-Origin': '*'},
                                  body=(FIX / (m.group(1) + '-mock.png')).read_bytes())
+        # 合成的拍屏照片（原图）；旺旺里显示的缩略图地址（_200x200.jpg）不给，插件要自己去掉后缀取原图
+        if url == 'https://img.alicdn.com/mock/qr-photo-dppt.jpg':
+            photo_hits.append(url)
+            return route.fulfill(status=200, headers={'Content-Type': 'image/jpeg'}, body=(FIX / 'qr-photo-dppt.jpg').read_bytes())
         blocked.append(url); route.abort()
     ctx.route(lambda u: urlsplit(u).scheme in ('http', 'https'), handle)
     sw = ctx.service_workers[0] if ctx.service_workers else ctx.wait_for_event('serviceworker')
@@ -105,18 +109,48 @@ def run(p, tmp):
     print('\n[2] 「核对已下载的发票」已去掉（用户 2026-10-07：「更多」只留四项）；下载的发票由插件自动核对，整理报销文件时标出与已整理重复的')
     check(app.locator('#inv-check-dir, #dlg-dup').count() == 0, '界面上没有「核对已下载的发票」')
 
-    print('\n[3] 卖家图片：先判断是不是二维码，是就读出内容')
-    # 假装旺旺扫描过：订单 1 的店发来一张二维码、一张商品照片（先去掉订单 1 的已整理状态，让它显示聊天结果）
+    print('\n[3] 卖家图片里的二维码：拍屏照片读得出、读不出的标红请用户查看、开票平台的链接交给用户（只在用户点击时打开）')
+    # 假装旺旺扫描过：订单 1 的店在要过发票之后发来图片（先去掉订单 1 的已整理状态，让它显示聊天结果）
     app.evaluate("""() => { const S = JSON.parse(localStorage.getItem('orderTriage.app.v1')); S.haveIdx = S.haveIdx.filter(x => x.date !== '2026-08-05');
         localStorage.setItem('orderTriage.app.v1', JSON.stringify(S)); }""")
-    app.evaluate("""() => chrome.storage.local.set({ chatScan: { at: Date.now(), convs: { '某某虚构五金': { orders: ['5195000000000000001'], first: '2026-08-01',
-        asks: [{ time: '2026-08-02 09:00:00', text: '需要发票', nos: [] }], files: [], email: [],
-        images: [{ time: '2026-08-03 10:00:00', src: 'https://img.alicdn.com/mock/photo.png' }, { time: '2026-08-03 10:01:00', src: 'https://img.alicdn.com/mock/qr.png' }] } } } })""")
-    app.reload(); app.wait_for_timeout(800); app.click('.flow li[data-step="2"]')
-    outs = wait_until(app, lambda: (o := app.evaluate("[...document.querySelectorAll('[data-qr-out]')].map(e => e.textContent)")) and all(o) and len(o) == 2 and o, 15) or []
-    check(any('二维码内容' in o and 'https://example.invalid/fapiao/mock-001' in o for o in outs), '二维码图读出了里面的地址，只显示不打开', outs)
-    check(any(o.startswith('不是二维码') for o in outs), '商品照片判成「不是二维码」', outs)
+    def seller_sent(srcs):
+        app.evaluate("""srcs => chrome.storage.local.set({ chatScan: { at: Date.now(), convs: { '某某虚构五金': { orders: ['5195000000000000001'], first: '2026-08-01',
+            asks: [{ time: '2026-08-02 09:00:00', text: '需要发票', nos: [] }], files: [], email: [], cards: [],
+            images: srcs.map((src, i) => ({ time: '2026-08-03 10:0' + i + ':00', src })) } } } })""", srcs)
+        app.reload(); app.wait_for_timeout(800); app.click('.flow li[data-step="2"]')
+    def row1(want_st):
+        return wait_until(app, lambda: (r := app.evaluate("""() => { const tr = [...document.querySelectorAll('.inv-table tbody tr')].find(t => t.innerText.includes('5195000000000000001'));
+            if (!tr) return null; const s = tr.querySelector('.st'); const b = tr.querySelector('.acts button[data-act]');
+            return { st: s.textContent.trim(), cls: s.className, detail: [...tr.querySelectorAll('.st-cell .detail')].map(d => d.textContent).join(' | '),
+                     act: b ? b.textContent : '', img: !!tr.querySelector('img.qr'), add: !!tr.querySelector('.acts .add') }; }""")) and r['st'] == want_st and r, 25) or r
+    t0 = time.time()
+    seller_sent(['https://img.alicdn.com/mock/photo.png', 'https://img.alicdn.com/mock/qr-photo-dppt.jpg_200x200.jpg'])
+    r = row1('卖家发来发票二维码') or {}
+    print(f'  识别用时约 {time.time() - t0:.1f} 秒')
+    check(r.get('st') == '卖家发来发票二维码' and '26990000000000000106' in r.get('detail', '') and r.get('act') == '下载' and 'tone-info' in r.get('cls', ''),
+          '手机拍屏的二维码照片（2268×2319、摩尔纹）：识别出税务局发票（发票号 26990000000000000106），操作是「下载」', r)
+    check(photo_hits, '缩略图地址去掉「_200x200.jpg」后缀，取的是原图', photo_hits)
+    seen = app.evaluate("JSON.parse(localStorage.getItem('orderTriage.app.v1')).qrSeen || {}")
+    check(seen.get('https://img.alicdn.com/mock/qr-photo-dppt.jpg_200x200.jpg', '').startswith('https://dppt.hebei.chinatax.gov.cn:8443/v/2_26990000000000000106_')
+          and seen.get('https://img.alicdn.com/mock/photo.png') == '', '识别结果按图片地址存下（商品照片记为没有二维码），重绘、重开都不再重算', seen)
+    n0 = len(photo_hits)
+    app.reload(); app.wait_for_timeout(800); app.click('.flow li[data-step="2"]'); app.wait_for_timeout(1500)
+    check(len(photo_hits) == n0 and (row1('卖家发来发票二维码') or {}).get('st') == '卖家发来发票二维码', '重开主页：直接用存下的结果，没有再取图', (n0, len(photo_hits)))
+    seller_sent(['https://img.alicdn.com/mock/photo.png'])
+    r = row1('卖家发来图片，请查看') or {}
+    check(r.get('st') == '卖家发来图片，请查看' and 'tone-bad' in r.get('cls', '') and r.get('act') == '查看图片' and r.get('img') and r.get('add'),
+          '读不出二维码的图：红色「卖家发来图片，请查看」，操作「查看图片」，小图一张，次要操作「手动添加发票」', r)
+    seller_sent(['https://img.alicdn.com/mock/photo.png', 'https://img.alicdn.com/mock/qr.png'])
+    r = row1('卖家发来发票二维码，需手动下载') or {}
+    check(r.get('st') == '卖家发来发票二维码，需手动下载' and 'tone-bad' in r.get('cls', '') and r.get('act') == '打开二维码链接' and 'example.invalid/fapiao/mock-001' in r.get('detail', ''),
+          '开票平台的二维码（非税务局）：红色「卖家发来发票二维码，需手动下载」，操作「打开二维码链接」', r)
     check(not [x for x in ctx.pages if 'example.invalid' in x.url], '没有自动打开二维码里的地址', [x.url for x in ctx.pages])
+    with ctx.expect_page() as pi:
+        app.click('.inv-table tbody tr:has-text("5195000000000000001") button[data-act="qrlink"]')
+    opened = wait_until(app, lambda: [u for u in blocked if 'example.invalid/fapiao/mock-001' in u], 10)
+    check(bool(opened), '用户点「打开二维码链接」才打开（离线测试里这个地址被拦下）', blocked[-3:])
+    pi.value.close()
+    blocked[:] = [u for u in blocked if 'example.invalid' not in u]       # 用户点开的，不算插件自己发的请求
 
     print('\n[4] 没有 AI 功能（用户 2026-10-04 要求删掉）')
     app.click('#btn-settings'); app.wait_for_timeout(300)
@@ -212,9 +246,9 @@ def run(p, tmp):
 
     print('\n[5b] 自动处理发票：某段超时也接着做完；「需处理」只有一单（插件做不了的）时清单照样弹出并列出它；结束后刷新界面')
     # 三单都是实验室的：1 抬头不符（红，插件做不了，只能用户去换开）、2 刚申请淘宝开票（等待中）、3 已下载。淘宝页面全部打不开（离线），
-    # 「刷新淘宝开票记录」这段把时限改成 4 秒，必然超时；之后几段照常做完
+    # 「刷新淘宝开票记录」这段把时限改成 4 秒，必然超时；之后几段照常做完。还在等票的单都要读旺旺（卖家旺旺名先填上，不去开详情页），读旺旺也 4 秒超时
     app.evaluate('''() => { const S = JSON.parse(localStorage.getItem('orderTriage.app.v1'));
-        for (const o of S.orders) for (const l of o.lines) S.decisions[l.key] = 'lab';
+        for (const o of S.orders) { o.nick = 'nick' + o.no.slice(-3); for (const l of o.lines) S.decisions[l.key] = 'lab'; }
         S.haveIdx = []; localStorage.setItem('orderTriage.app.v1', JSON.stringify(S)); }''')
     today = app.evaluate("new Date().toISOString().slice(0, 10)")
     app.evaluate('''t => chrome.storage.local.set({ invSync: { at: Date.now() - 864e5, rows: {
@@ -225,7 +259,7 @@ def run(p, tmp):
     app.click('.flow li[data-step="2"]'); app.wait_for_timeout(300)
     red = app.evaluate("[...document.querySelectorAll('.inv-table .st.tone-bad')].map(s => s.closest('tr').innerText.match(/\\d{19}/)[0])")
     check(red == ['5195000000000000001'], '准备好的数据：发票表里只有一单标红（抬头不符）', red)
-    app.evaluate('() => { __otDev.tmo = { sync: 4000 }; }')
+    app.evaluate('() => { __otDev.tmo = { sync: 4000, scan: 4000 }; }')
     app.evaluate("chrome.storage.local.set({ autoLast: '' })")
     app.click('#summary [data-flow="inv-run"]')
     prog = wait_until(app, lambda: (t := app.inner_text('#summary')) and '第 2 / 10 段：刷新淘宝开票记录' in t and re.search(r'已等 \d+ 秒', t) and t, 15) or ''
@@ -324,7 +358,8 @@ def part5d(ctx, app, blocked):
     toast = lambda: app.evaluate("(() => { const t = document.getElementById('toast'); return t.hidden ? '' : t.innerText; })()")
     last = lambda: app.evaluate("chrome.storage.local.get('autoLast').then(r => r.autoLast)")
     at_sync = lambda: wait_until(app, lambda: (x := run()) and x.get('cur') == '刷新淘宝开票记录' and x, 30)
-    app.evaluate('() => { __otDev.tmo = { sync: 120000 }; }')         # 「我的发票」页离线打不开：这一段会一直等，正好用来测
+    # 「我的发票」页离线打不开：这一段会一直等，正好用来测；读旺旺（还在等票的单都要读）4 秒超时
+    app.evaluate('() => { __otDev.tmo = { sync: 120000, scan: 4000 }; }')
     app.evaluate("chrome.storage.local.set({ autoLast: 'Mon Jan 01 2001', autoLog: [] })")
 
     # 1 每天自动刷新正在等「我的发票」页，用户点了一单的「换开发票」
@@ -383,6 +418,7 @@ def part5d(ctx, app, blocked):
           {'tab': tid, '结果': gone, '用时': round(time.time() - t_c)})
     nxt = wait_until(app, lambda: (x := run()) and x.get('cur') not in (None, '刷新淘宝开票记录') and x, 15) or app.locator('#dlg-list[open]').count()
     check(bool(nxt), '接着做下一段', run())
+    wait_until(app, lambda: app.locator('#dlg-list[open]').count() or not run()['busy'], 40)
     if app.locator('#dlg-list[open]').count():
         app.click('#list-ok')
     wait_until(app, lambda: not run()['busy'], 30)

@@ -85,7 +85,8 @@
     function readMsg(m) {
       const fileEl = m.querySelector('.file-msg');
       // 商品卡片（.item-pic 之类）、模板卡片里的图不算；只在消息内容里面找，别找到外层 .message-item-line 上去
-      const img = [...m.querySelectorAll('.content img')].find(i => i.getBoundingClientRect().width > 60 && !i.closest('.content [class*="item-"]') && !i.closest(TPL_SEL));
+      // 图还没加载完时显示宽度是 0：按图片本身的尺寸（naturalWidth）也算，免得卖家发来的大图（拍屏照片）被当成小表情漏掉
+      const img = [...m.querySelectorAll('.content img')].find(i => (i.getBoundingClientRect().width > 60 || i.naturalWidth > 60) && !i.closest('.content [class*="item-"]') && !i.closest(TPL_SEL));
       return {
         self: m.classList.contains('self'),
         time: text(m.querySelector('.time')),
@@ -148,14 +149,15 @@
     const unreliable = (msgs, prev) => !header() || (!msgs.length && (document.querySelectorAll('.message-item').length > 0
       || !!(prev && (prev.first || (prev.asks || []).length || (prev.files || []).length))));
     const MAYBE_CHANGED = '消息未能读取（旺旺页可能改版）';
-    // 主页给的清单按店分组：{ shop, nick, nos, fresh }（同一家店的几单只读一次会话；fresh：这几单都还没联系过卖家，主页状态 st 是 ask）
+    // 主页给的清单按店分组：{ shop, nick, nos, fresh }（同一家店的几单只读一次会话；fresh：这几单都还没联系过卖家——主页状态 st 是 ask，
+    // 或者主页标了 fresh：平台申请等还在等票、从没读到过这家会话的单，也要看看卖家有没有直接发票过来，没有会话不算失败）
     const shopsOf = want => {
       const m = new Map();
       for (const o of want) {
         const k = squash(o.shop) || squash(o.nick);
         const g = m.get(k) || { shop: o.shop || o.nick, nick: '', nos: [], fresh: true };
         if (!g.nick && o.nick) g.nick = o.nick;
-        if (o.st !== 'ask') g.fresh = false;
+        if (o.st !== 'ask' && !o.fresh) g.fresh = false;
         g.nos.push(o.no); m.set(k, g);
       }
       return [...m.values()];
@@ -458,6 +460,9 @@
           if (got.some(h => isConvOf(g, h.name))) continue;                 // 和前面某家是同一个会话，已读过
           const it = convItems().find(x => isConvOf(g, convName(x)));
           // 左侧最近会话列表里没有（聊得太久以前、列表没加载全、会话名和店名对不上）：知道卖家旺旺名的按网址打开，不依赖列表
+          // 同一个卖家旺旺名的几家（店名写法不同）只打开一次
+          const same = g.nick && queue.find(q => q.nick === g.nick);
+          if (same) { same.nos.push(...g.nos); same.fresh = same.fresh && g.fresh; continue; }
           if (!it) { if (g.nick) queue.push(g); else skip(failed, g, '左侧会话列表中没有这家店，且未读到卖家旺旺名，无法打开会话', none); continue; }
           const name = convName(it);
           panel.set('正在读取第 ' + (++k) + ' / ' + groups.length + ' 家：' + name);

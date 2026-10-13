@@ -2,28 +2,39 @@
 <meta charset="utf-8">
 <title>国家税务总局电子发票服务平台（模拟）</title>
 <!-- 模拟税务局电子发票页面（卖家发的二维码打开就是这里；2026-10-04 实测浙江 dppt.zhejiang.chinatax.gov.cn:8443/qrcode?cs=2_<发票号>_…）：
-     直接显示购买方、税号、价税合计，有「PDF下载」「OFD下载」「XML下载」三个按钮。下载的文件名形如 dzfp_<发票号>_<销售方>_<时间>.pdf。全部虚构 -->
+     直接显示购买方、税号、价税合计，有「PDF下载」「OFD下载」「XML下载」三个按钮。下载的文件名形如 dzfp_<发票号>_<销售方>_<时间>.pdf。
+     二维码里的地址是 /v/2_<发票号>_<时间串>RC008（2026-10 河北），打开后跳到 /qrcode?cs=2_…：这里也照样跳一次。全部虚构 -->
 <body>
 <div id="app">加载中…</div>
 <script>
 (function () {
-  // 发票号 → 这张票的内容
-  const INV = { '26332000000000000106': { buyer: '某大学', tax: '121000009999999996', amount: '21.00', seller: '某某虚构传感器经营部', no: '5190000000000000106' } };
+  // /v/2_… → /qrcode?cs=2_…（真实页面是服务器跳转，这里用脚本跳）
+  const jump = /\/v\/(2_[^/?#]+)/.exec(location.pathname);
+  if (jump) { setTimeout(() => location.replace(location.origin + '/qrcode?cs=' + jump[1]), 300); return; }
+  // 发票号 → 这张票的内容；file：PDF 从同一网站的 https 地址下载（真实页面可能这样），没有就是页面里生成的 blob
+  const INV = {
+    '26332000000000000106': { buyer: '某大学', tax: '121000009999999996', amount: '21.00', seller: '某某虚构传感器经营部', no: '5190000000000000106' },
+    '26990000000000000106': { buyer: '某大学', tax: '121000009999999996', amount: '72.00', seller: '某某虚构轴承商贸', no: '5190000000000000221', file: true },
+  };
   const inv = (/2_(\d{20})_/.exec(decodeURIComponent(location.href)) || [])[1] || '';
   const mock = window.__mock = { clicks: [] };
   setTimeout(() => {
     const v = INV[inv];
     if (!v) { document.getElementById('app').textContent = '发票不存在'; return; }
+    // 河北那张的下载按钮做成 div > span（真实页面的按钮不一定是 <button>）
     document.getElementById('app').innerHTML = '<h3>电子发票（普通发票）</h3>'
       + '<div>购买方纳税人识别号：' + v.tax + '购买方名称：' + v.buyer + '</div><div>销售方名称：' + v.seller + '</div>'
       + '<div>数电发票号码：' + inv + '开票日期：2026-08-16 10:00:00价税合计（元）：￥' + v.amount + '</div>'
-      + '<button class="t-button">PDF下载</button><button class="t-button">OFD下载</button><button class="t-button">XML下载</button>';
-    document.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
+      + (v.file ? '<div class="t-button"><span>PDF下载</span></div><div class="t-button"><span>OFD下载</span></div>'
+        : '<button class="t-button">PDF下载</button><button class="t-button">OFD下载</button><button class="t-button">XML下载</button>');
+    document.querySelectorAll('.t-button').forEach(b => b.addEventListener('click', () => {
       mock.clicks.push(b.textContent);
       if (!/PDF/.test(b.textContent)) return;
+      const name = 'dzfp_' + inv + '_' + v.seller + '_20261004120000.pdf';
       const a = document.createElement('a');
-      a.href = URL.createObjectURL(new Blob(['%PDF-1.4\n%虚构测试发票 订单 ' + v.no + ' 发票号 ' + inv + '\n%%EOF\n'], { type: 'application/pdf' }));
-      a.download = 'dzfp_' + inv + '_' + v.seller + '_20261004120000.pdf';
+      a.href = v.file ? location.origin + '/mock-pdf/' + inv + '.pdf?name=' + encodeURIComponent(name)
+        : URL.createObjectURL(new Blob(['%PDF-1.4\n%虚构测试发票 订单 ' + v.no + ' 发票号 ' + inv + '\n%%EOF\n'], { type: 'application/pdf' }));
+      a.download = name;
       document.body.appendChild(a); a.click(); a.remove();
     }));
   }, 800);

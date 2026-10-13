@@ -57,9 +57,11 @@
   // 聊天里的时间「2026-08-12 23:54:10」直接字符串比大小
   const ASK_RE = /发票|开票/;
   const EMAIL_RE = /邮箱|邮件|e-?mail|@[\w-]+\.\w+/i;
+  const SENT_RE = /查收|已开|开好|开出|开具|开了|扫码|扫一扫|二维码|下载/;
+  const mins = t => { const d = Date.parse(String(t || '').replace(' ', 'T')); return isNaN(d) ? -1e9 : d / 60000; };
   /*
    * msgs: [{ self: bool, time, text, file: { name, size }, img: src, card: { title, price } }]，从旧到新
-   * 返回 { asks: [{ time, text, nos }], files, images, email, cards } —— asks 是我们要发票的消息（nos = 里面提到的订单号）；
+   * 返回 { asks: [{ time, text, nos }], files, images, email, cards, docs, pics } —— asks 是我们要发票的消息（nos = 里面提到的订单号）；
    * files/images/email 只收我们第一次要发票之后对方发来的。从没要过的会话，文件只收明显是发票的（别把产品资料当发票）。
    * cards：卖家（或客服）发来的「请填写发票申请」卡片，点卡片上的「去申请」就能让这单进入淘宝平台开票流程（2026-10-05 实测）；
    *   卖家常常不等我们要就主动发，所以不看要没要过。卡片里没有订单号，只有商品标题和价格，归哪单见 chatForOrder
@@ -81,7 +83,13 @@
     const cards = msgs.filter(m => !m.self && m.card).map(m => ({ time: m.time, title: String(m.card.title || '').slice(0, 120), price: m.card.price || '' }));
     // docs：要过发票之后卖家发来的表格、Word（3D 打印订单的明细清单常常是 xlsx），不算发票；3D 打印订单缺明细时主页把它下下来挂成附件
     const docs = since ? after.filter(m => m.file && /\.(xlsx?|csv|docx?)$/i.test(m.file.name)).map(m => Object.assign({ time: m.time }, m.file)) : [];
-    return { asks, files, images, email, cards, docs };
+    // pics：卖家发的全部图片（不管要没要过票，最近 30 张）。平台申请开票的单、没在旺旺要过票的单，卖家也会直接发发票二维码过来
+    // （2026-10 实测：平台申请后卖家在旺旺发了二维码和「发票请查收」，插件从没打开这家的会话）。
+    // hint：前后 10 分钟内卖家说了「发票请查收」「已开」「扫码」这类话——这样的图当成卖家的回复；别的图只在读出发票二维码时才算
+    const said = msgs.filter(m => !m.self && m.text && SENT_RE.test(m.text) && /票|码/.test(m.text)).map(m => mins(m.time));
+    const pics = msgs.filter(m => !m.self && m.img && !m.card).slice(-30)
+      .map(m => ({ time: m.time, src: m.img, hint: said.some(t => Math.abs(t - mins(m.time)) <= 10) }));
+    return { asks, files, images, email, cards, docs, pics };
   }
 
   // 商品标题相似度 0~1（开票卡片上只有商品标题，可能被截断）：去掉空白和符号，一个包含另一个算 1，否则按相邻两字的重合比例
@@ -146,6 +154,15 @@
       myAsks = generic; shared = true;
     }
     const inSpan = m => spans.some(([s, e]) => m.time >= s && m.time < e) || loose.some(([s, e]) => m.time >= s && m.time < e);
+    // 这单在旺旺里没要过票（平台申请的、还没联系的）：下单之后卖家主动发来的、一看就是发票的（dzfp_ 文件、说了「发票请查收」的图）也算这单的；
+    // 同店还有别的单时归属要核对（下载后按金额归单）
+    // 带别的订单号要过票之后发来的，是那几单的回复，不算
+    const others = asks.filter(k => k.nos.length && !k.nos.includes(no)).map(k => [k.time, (asks.find(x => x.time > k.time) || {}).time || '9999']);
+    const after0 = m => (!d0 || String(m.time).slice(0, 10) >= d0) && !others.some(([s, e]) => m.time >= s && m.time < e);
+    const plain = !spans.length && !loose.length;
+    const evFiles = plain ? (a.files || []).filter(m => m.parsed && after0(m)) : [];
+    const evPics = plain ? (a.pics || []).filter(m => m.hint && after0(m)) : [];
+    if ((evFiles.length || evPics.length) && (shopOrders || 1) > 1) shared = true;
     // 只落在手打那几段里的文件，同店还有别的单要发票时归属要核对（下载后按金额自动归单）
     if (loose.length && (shopOrders || 1) > 1 && (a.files || []).some(m => !spans.some(([s, e]) => m.time >= s && m.time < e) && inSpan(m))) shared = true;
     const ps = peers && peers.length ? peers : [{ no, titles: [], time: orderTime }];
@@ -153,8 +170,11 @@
       const own = cardOwner(k, ps);
       return own.nos.includes(no) ? Object.assign({}, k, { shared: own.nos.length > 1 || !own.sure }) : null;
     }).filter(Boolean);
-    return { asks: myAsks, files: (a.files || []).filter(inSpan), images: (a.images || []).filter(inSpan), email: (a.email || []).filter(inSpan), cards, shared,
-             docs: (a.docs || []).filter(inSpan) };
+    const images = (a.images || []).filter(inSpan).concat(evPics.map(m => ({ time: m.time, src: m.src })));
+    // maybe：下单之后卖家发的别的图（没说是发票）：主页读出税务局发票二维码才算这单的票，读不出不打扰
+    const maybe = (a.pics || []).filter(m => after0(m) && !images.some(x => x.src === m.src)).map(m => ({ time: m.time, src: m.src }));
+    return { asks: myAsks, files: (a.files || []).filter(inSpan).concat(evFiles), images, email: (a.email || []).filter(inSpan), cards, shared,
+             docs: (a.docs || []).filter(inSpan), maybe };
   }
 
   /*
@@ -188,18 +208,20 @@
       if (p.canDownload === false && !/电子/.test(p.type || '')) return { key: 'paper', label: '已开纸质发票（无电子文件）', detail: (p.type || '') + (p.date ? ' · ' + p.date : '') + '，随快递寄送' };
       return { key: 'ready', label: '已开票，待下载', detail: (p.type || '') + (p.date ? ' · ' + p.date : '') };
     }
+    // 卖家在旺旺发来了文件、图片：就算这单在淘宝平台申请中，也是卖家直接把票发过来了（2026-10 实测：平台申请的单，卖家在旺旺发了二维码）
+    const sh = c && c.shared ? SHARED : '';
+    if (c && c.files && c.files.length) return { key: 'replied', label: '卖家已发送文件' + sh, detail: c.files.map(f => f.name).join('、'), files: c.files.map(f => f.name), shared: !!sh };
+    // 卖家同时发了开票卡片的，按卡片申请（下面），不按图片
+    if (c && c.images && c.images.length && !(c.cards || []).length) return { key: 'replied', label: '卖家已发送图片（可能为二维码）' + sh, detail: c.images.length + ' 张', shared: !!sh, imgs: true };
     // 「全部发票 → 申请中」里的单：淘宝写的进度可能是「申请中」或「开票中」，对用户都是同一件事——等商家开出（用户 2026-10-05）。
     // 进度原文、申请日期、商家剩余处理时间（同步时读得到才有）放在说明里
     if (p && p.tab === 'applying') return { key: 'applying', label: LABEL.applying, detail: [p.progress, p.date ? '申请于 ' + p.date : '', p.remain].filter(Boolean).join(' · ') };
     // 按卖家发来的开票卡片提交过申请（extension/apply-card.js 记下的）：下次同步「全部发票」时会出现在「申请中」
     if (ctx.cardApplied) return { key: 'applying', label: LABEL.applying, detail: '已通过卖家的开票入口提交申请 · ' + new Date(ctx.cardApplied).toLocaleDateString('zh-CN') };
-    const sh = c && c.shared ? SHARED : '';
-    if (c && c.files && c.files.length) return { key: 'replied', label: '卖家已发送文件' + sh, detail: c.files.map(f => f.name).join('、'), files: c.files.map(f => f.name), shared: !!sh };
     if (c && c.cards && c.cards.length) {
       const s2 = c.cards.some(k => k.shared) ? SHARED : '';
       return { key: 'card', label: LABEL.card + s2, detail: c.cards.map(k => String(k.time).slice(0, 16) + ' ' + k.title + (k.price ? ' ¥' + k.price : '')).join('；'), shared: !!s2 };
     }
-    if (c && c.images && c.images.length) return { key: 'replied', label: '卖家已发送图片（可能为二维码）' + sh, detail: c.images.length + ' 张', shared: !!sh };
     if (c && c.email && c.email.length) return { key: 'replied', label: '卖家要求提供邮箱' + sh, detail: c.email[0].text, shared: !!sh, email: true };
     if (c && c.asks && c.asks.length) return { key: 'asked', label: LABEL.asked, detail: c.asks[c.asks.length - 1].time };
     if ((p && p.tab === 'unapplied') || ctx.canApply) return { key: 'apply', label: LABEL.apply };

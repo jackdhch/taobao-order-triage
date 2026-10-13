@@ -194,6 +194,59 @@ assert.deepEqual(I.chatForOrder(redo, '5190000000000000191', 1, '2026-08-08').fi
 assert.equal(I.chatForOrder(redo, '5190000000000000191', 1, '2026-08-08').shared, false);
 assert.equal(I.parseInvoiceName('dzfp_26990000000000000191_某某大学_20260827153948(1).pdf').invNo, '26990000000000000191');   // 重发的「(1)」也认得出发票号
 
+// 卖家发来的二维码图片（2026-10 实测：手机拍电脑屏幕的税务局「二维码交付」弹窗，2268×2319、摩尔纹明显，jsQR 直接读原图读不出）。
+// tools/make-qr-photo.py 合成的虚构拍屏照片：多尺寸、二值化、裁切逐个试能读出来；糊掉的那张读不出（3 秒内放弃）
+{
+  const Q = req('../js/qr-scan.js'), jsQR = req('../vendor/jsqr/jsQR.js');
+  const { decodeLuma } = await import('./jpeg-luma.mjs');
+  const photo = decodeLuma(fs.readFileSync(new URL('./fixtures/qr-photo-dppt.jpg', import.meta.url)));
+  assert.ok(photo.width > 2000 && photo.height > 2000, '合成的拍屏照片是两千多像素的大图');
+  const got = Q.scanSync(photo, jsQR, { budget: 8000 });
+  assert.equal(got, 'https://dppt.hebei.chinatax.gov.cn:8443/v/2_26990000000000000106_20261008103000000RC008', '拍屏照片读出税务局发票地址');
+  assert.deepEqual(Q.kindOf(got), { kind: 'tax', invNo: '26990000000000000106' });
+  const t0 = Date.now();
+  assert.equal(Q.scanSync(decodeLuma(fs.readFileSync(new URL('./fixtures/qr-photo-blur.jpg', import.meta.url))), jsQR, { budget: 1500 }), '', '糊掉的照片读不出');
+  assert.ok(Date.now() - t0 < 8000, '读不出时按时限放弃');
+  // 二维码内容分类：开票平台的网址交给用户；看不出是开票平台的网址、文字分开
+  assert.deepEqual(Q.kindOf('https://nnfp.nuonuo.com/invoice/scan/abc'), { kind: 'link', inv: true });
+  assert.deepEqual(Q.kindOf('https://example.invalid/shop'), { kind: 'link', inv: false });
+  assert.equal(Q.kindOf('你好').kind, 'text');
+  // 旺旺里显示的是缩略图：去掉 alicdn 的尺寸后缀取原图
+  assert.equal(Q.fullSrc('https://img.alicdn.com/imgextra/i1/O1CN01x_!!0.jpg_200x200.jpg'), 'https://img.alicdn.com/imgextra/i1/O1CN01x_!!0.jpg');
+  assert.equal(Q.fullSrc('https://img.alicdn.com/a.png_q50.jpg_.webp'), 'https://img.alicdn.com/a.png');
+  assert.equal(Q.fullSrc('https://gw.alicdn.com/a.jpg?x-oss-process=image/resize,w_200'), 'https://gw.alicdn.com/a.jpg');
+  assert.equal(Q.fullSrc('https://img.alicdn.com/a.jpg'), 'https://img.alicdn.com/a.jpg');
+  // 尝试清单：先缩小再试，原尺寸大图放最后
+  const at = Q.attempts(2268, 2319);
+  assert.ok(at[0].long <= 900 && at.some(a => a.crop) && at.some(a => a.mode === 'adaptive') && at.some(a => a.mode === 'otsu'));
+}
+
+// 平台申请开票的单，卖家在旺旺直接发了二维码和「发票请查收」（2026-10 实测漏过一单：没在旺旺要过票，插件从没读这家会话）：
+// 下单之后卖家说了「发票请查收」前后的图算这单的回复（就算平台显示申请中）；没说是发票的图只放进 maybe（主页读出发票二维码才算）
+{
+  const a = I.chatAnalyze([
+    { self: false, time: '2026-08-20 10:00:00', img: 'https://img.alicdn.com/old.jpg' },                 // 下单前的商品图
+    { self: false, time: '2026-09-02 09:00:00', img: 'https://img.alicdn.com/goods.jpg' },               // 没说是发票的图
+    { self: false, time: '2026-09-03 10:00:00', img: 'https://img.alicdn.com/qr.jpg' },
+    { self: false, time: '2026-09-03 10:00:30', text: '发票请查收' },
+  ]);
+  assert.deepEqual(a.asks, []);
+  assert.deepEqual(a.pics.map(m => m.hint), [false, false, true]);
+  const c = I.chatForOrder(a, '500000000000000077', 1, '2026-09-01 10:00:00');
+  assert.deepEqual(c.images.map(m => m.src), ['https://img.alicdn.com/qr.jpg']);
+  assert.deepEqual(c.maybe.map(m => m.src), ['https://img.alicdn.com/goods.jpg']);
+  const st = I.status({ plat: { tab: 'applying', progress: '开票中' }, chat: c }, { title: '某大学' });
+  assert.equal(st.key, 'replied', '平台申请中、卖家在旺旺发来发票图：按卖家已回处理');
+  assert.ok(st.imgs);
+  assert.equal(I.chatForOrder(a, '500000000000000077', 2, '2026-09-01 10:00:00').shared, true, '同店还有别的单：归属要核对');
+  // 卖家只发了图、没说是发票：状态不变（平台申请中）
+  const b = I.chatForOrder(I.chatAnalyze([{ self: false, time: '2026-09-02 09:00:00', img: 'https://img.alicdn.com/goods.jpg' }]), '500000000000000077', 1, '2026-09-01');
+  assert.equal(I.status({ plat: { tab: 'applying' }, chat: b }, { title: '某大学' }).key, 'applying');
+  // 同时发了开票卡片的：按卡片申请，不按图片
+  const k = I.chatForOrder(Object.assign({}, a, { cards: [{ time: '2026-09-03 11:00:00', title: 'x', price: '' }] }), '500000000000000077', 1, '2026-09-01');
+  assert.equal(I.status({ chat: k }, { title: '某大学' }).key, 'card');
+}
+
 // 已整理过的发票：平台票按开票日期+金额；卖家票按金额+下单后 180 天内且只有一张
 const idx = [{ date: '2026-08-10', amount: 27.3, file: 'a.pdf' }, { date: '2026-08-20', amount: 9.9, file: 'b.pdf' }, { date: '2026-08-21', amount: 9.9, file: 'c.pdf' }];
 assert.equal(I.findHave(idx, { time: '2026-08-01', amount: 27.3 }, { tab: 'issued', date: '2026-08-10', amount: 27.3 }).file, 'a.pdf');
@@ -363,6 +416,10 @@ assert.equal(I.detailRefund('某商品 退货退款成功 ￥12.25 x1 实付款 
 assert.equal(I.detailRefund('某商品 退款完成 ￥12.25 x1').refunded, true);
 // manifest：天猫店的订单详情会被重定向到 trade.tmall.com，详情页脚本也要在那里运行；开票申请页、旺旺页里记新窗口地址的脚本
 {
+  // 找客服督促：插件发出的每句话都是写死的完整句子（「人工」、督促话术、「OK」、「是的，卖家一直没开」），没有单独的数字
+  const vip = fs.readFileSync(new URL('../extension/vip.js', import.meta.url), 'utf8');
+  const says = [...vip.matchAll(/say\(('[^']*'|[^)]*)\)/g)].map(m => m[1]);
+  assert.ok(says.length >= 4 && says.every(x => !/^'\s*\d+\s*'$/.test(x)) && says.includes("'是的，卖家一直没开'"), 'vip.js 发的话：' + says.join(' / '));
   const mf = JSON.parse(fs.readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
   const scriptsFor = url => mf.content_scripts.filter(c => c.matches.some(m => new RegExp('^' + m.replace(/[.?+^$()|[\]{}\\]/g, '\\$&').replace(/\*/g, '.*') + '$').test(url))).flatMap(c => c.js);
   assert.ok(scriptsFor('https://trade.tmall.com/detail/orderDetail.htm?biz_order_id=5190000000000000101&forward_action=').includes('extension/detail.js'));
@@ -370,7 +427,7 @@ assert.equal(I.detailRefund('某商品 退款完成 ￥12.25 x1').refunded, true
   assert.ok(scriptsFor('https://invoice-ua.taobao.com/e-invoice/invoice-apply-online.html?disableNav=YES%2CYES&orderId=1&channel=card').includes('extension/apply-card.js'));
   assert.ok(scriptsFor('https://invoice-ua.taobao.com/e-invoice/invoice-detail-tm.html?disableNav=YES&orderId=1').includes('extension/apply-card.js'));
   assert.ok(scriptsFor('https://market.m.taobao.com/app/im/chat-core/index.html').includes('extension/chat-main.js'));
-  assert.equal(mf.version, '0.22.0');
+  assert.equal(mf.version, '0.23.0');
   // 备份文件里写的插件版本：网页版读不到 manifest，用 app.js 里写死的版本号，两处要一致
   const appJs = fs.readFileSync(new URL('../js/app.js', import.meta.url), 'utf8');
   assert.equal((/const VERSION = EXT \? chrome\.runtime\.getManifest\(\)\.version : '([\d.]+)'/.exec(appJs) || [])[1], mf.version);
@@ -588,4 +645,4 @@ const RB = req('../js/reimburse.js'), OF = req('../js/office.js');
   for (const u of ['https://trade.taobao.com/trade/detail/trade_order_detail.htm?biz_order_id=1', 'https://trade.tmall.com/detail/orderDetail.htm?biz_order_id=1',
     'https://trade.taobao.com/trade/confirm_goods.htm?biz_order_id=1']) assert.ok(scriptsFor(u).includes('extension/recv.js'), u);
 }
-console.log('自检通过：读表（xml:space）、合并规则、日期格式、先抓后导表、关键词建议、发票逻辑、已整理发票去重、读发票 PDF 文字、补差价待定、同店默认实验室、下载发票按金额日期对单、给卖家的消息、详情页退款、zip 打包、开票卡片、manifest 匹配与版本号、回主页按钮、措辞、调试日志不进备份、催卖家话术、发票状态的文件名、低值品判断表、与科研无关的字样、3D 打印识别、到账差额组合、历史批次文件夹名、xlsx / docx 结构、整理目录结构、应开票截止日（10 日）、签收与交易成功日期、确认收货不碰密码框');
+console.log('自检通过：读表（xml:space）、合并规则、日期格式、先抓后导表、关键词建议、发票逻辑、已整理发票去重、读发票 PDF 文字、补差价待定、同店默认实验室、下载发票按金额日期对单、给卖家的消息、详情页退款、zip 打包、开票卡片、manifest 匹配与版本号、回主页按钮、措辞、调试日志不进备份、催卖家话术、发票状态的文件名、低值品判断表、与科研无关的字样、3D 打印识别、到账差额组合、历史批次文件夹名、xlsx / docx 结构、整理目录结构、应开票截止日（10 日）、签收与交易成功日期、确认收货不碰密码框、拍屏二维码照片识别、平台申请的单读卖家直接发来的发票图、客服确认时回完整的话');

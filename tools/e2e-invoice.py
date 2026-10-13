@@ -35,6 +35,7 @@ MOCKS = [(INV_URL, 'mock-invoice.html'),
          ('https://trade.tmall.com/detail/', 'mock-detail.html'),                      # 天猫店的订单详情（淘宝详情页地址会重定向到这里）
          ('https://trade.taobao.com/trade/confirm_goods', 'mock-detail.html'),         # 确认收货的确认页（地址是假设的，待真实页面核对）
          ('https://dppt.zhejiang.chinatax.gov.cn:8443/', 'mock-qr.html'),                # 税务局电子发票页（卖家发的二维码）
+         ('https://dppt.hebei.chinatax.gov.cn:8443/', 'mock-qr.html'),                   # 同上（[20] 拍屏照片里的二维码，/v/… 跳到 /qrcode?cs=…）
          ('https://ai.alimebot.taobao.com/', 'mock-alime.html')]                         # 淘宝官方客服（找 88VIP 人工客服督促）
 TITLE, TAX = '某大学', '121000009999999996'
 NAME, SID = '张三', '12345678'                          # 虚构的报销人（整理报销文件的文件夹名「学号_姓名_总金额元」）
@@ -111,7 +112,9 @@ def make_pdfs(p):
                            # [19]：同店两单的 450、300 两张，补发店先少 5 元（45）后补发的 50，手动添加的 66
                            ('26990000000000000191', '2026-08-27', 450.0), ('26990000000000000192', '2026-10-08', 300.0),
                            ('26990000000000000194', '2026-09-10', 45.0), ('26990000000000000195', '2026-10-10', 50.0),
-                           ('26990000000000000196', '2026-09-21', 66.0)):
+                           ('26990000000000000196', '2026-09-21', 66.0),
+                           # [20]：拍屏照片里的税务局二维码发票（72.00）
+                           ('26990000000000000106', '2026-09-28', 72.0)):
         out[inv] = mk(inv, date, amt)
     out['26990000000000000123'] = mk('', '2026-09-10', 0, html='<meta charset="utf-8"><h2>USB 示波器 产品说明书</h2>'
                                      '<p>型号 X1，额定电压 5V，额定电流 1A。使用前请仔细阅读本说明书，按图连接探头后开机，保修一年。</p>')
@@ -128,10 +131,13 @@ def pdf_of(pdfs, inv):
 ASK = '需向卖家索要发票'
 AFTER_SYNC = {'A': '已开票，待下载', 'B': '已开票，抬头不符', 'C': '已申请淘宝开票，等待商家开具', 'D': '可在淘宝平台申请', 'E': ASK,
               'F': ASK, 'G': ASK, 'H': ASK, 'I': ASK}
-AFTER_SCAN = dict(AFTER_SYNC, E='卖家已发送文件', F='卖家已发送图片（可能为二维码）', G='卖家要求提供邮箱', I='已向卖家索要发票，等待回复')
+# F：卖家发的图（模拟页里一张 7×7 的小图）读不出二维码 → 红色「卖家发来图片，请查看」（以前读不出就当没看见）
+AFTER_SCAN = dict(AFTER_SYNC, E='卖家已发送文件', F='卖家发来图片，请查看', G='卖家要求提供邮箱', I='已向卖家索要发票，等待回复')
 # 该被点开的会话：发票栏里有订单的店（A 的店没聊过发票也算）；个人、已关闭、无关的店不该点
 # 旺旺只看还需要卖家回复的单（需找卖家 / 已要过 / 卖家回了还没下）：A 已开票、B 抬头不对、C 申请中、D 能平台申请的店都不打开，
 # 免得一大批店看到「已读」
+# 2026-10-13 起还在等票的单都要读（平台申请中的 C、能平台申请的 D 也在读取范围里：卖家可能直接在旺旺发票）；
+# 这里 C、D 还不知道卖家旺旺名、左侧列表里也没有这两家：记为「尚未联系过、没有会话」，不算读取失败
 CONV_OPEN = {'某某虚构电子元器件专营店', '某某虚构传感器店', '某某虚构碳纤维加工', '某某虚构焊工小王'}   # 焊接耗材的会话名是卖家旺旺名
 # 「全部发票」页上允许点的按钮：标签、翻页、下载。点了「申请开票 / 撤销申请 / 换开」就是动了账号
 PAGE_OK = re.compile(r'^(已开具发票|申请中发票|未申请|下一页|上一页|\d+|下载到本地)$')
@@ -202,11 +208,20 @@ def fake_oss(tmp, pdfs):
 
     class H(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
-            m = re.match(r'/mock/OSTB_(\d+)\.pdf', self.path)
+            # 税务局页面（[20]）：插件开的标签页有时没被 ctx.route 接住（Playwright 还没接管新标签页），直接连到这里，回应同一个模拟页
+            if re.match(r'/(v/|qrcode)', self.path):
+                body = (TOOLS / 'mock-qr.html').read_bytes()
+                self.send_response(200); self.send_header('Content-Type', 'text/html; charset=utf-8'); self.send_header('Content-Length', str(len(body))); self.end_headers()
+                self.wfile.write(body); return
+            m = re.match(r'/mock/OSTB_(\d+)\.pdf', self.path) or re.match(r'/mock-pdf/(\d+)\.pdf', self.path)
             body = m and pdf_of(pdfs, m.group(1))
             if not body:
                 self.send_error(404); return
-            self.send_response(200); self.send_header('Content-Type', 'application/pdf'); self.send_header('Content-Length', str(len(body))); self.end_headers()
+            nm = re.search(r'[?&]name=([^&]+)', self.path)
+            self.send_response(200); self.send_header('Content-Type', 'application/pdf'); self.send_header('Content-Length', str(len(body)))
+            if nm:
+                self.send_header('Content-Disposition', "attachment; filename*=UTF-8''" + nm.group(1))
+            self.end_headers()
             self.wfile.write(body)
 
         def log_message(self, *a):
@@ -231,7 +246,9 @@ def run(p, tmp):
         '--disable-extensions-except=' + str(ROOT), '--load-extension=' + str(ROOT),
         # 双保险不联网：不走系统代理；域名一律解析失败（模拟页由下面的 route 直接回应，不需要解析）
         '--no-proxy-server', '--ignore-certificate-errors',
-        f'--host-resolver-rules=MAP einvoice-file.oss-cn-beijing.aliyuncs.com 127.0.0.1:{oss.server_address[1]}, MAP * ~NOTFOUND'])
+        # 税务局页面下的发票（[20]）：扩展取回 PDF 核对时也走这个本机服务
+        f'--host-resolver-rules=MAP einvoice-file.oss-cn-beijing.aliyuncs.com 127.0.0.1:{oss.server_address[1]}, '
+        f'MAP dppt.hebei.chinatax.gov.cn 127.0.0.1:{oss.server_address[1]}, MAP * ~NOTFOUND'])
     blocked, errors, dialogs, pages = [], [], [], []
     pages_html = {f: (TOOLS / f).read_text(encoding='utf-8') for _, f in MOCKS}
 
@@ -252,6 +269,13 @@ def run(p, tmp):
                 return route.fulfill(status=302, headers={'Location': 'https://trade.tmall.com/detail/orderDetail.htm?biz_order_id=' + tm + '&forward_action='})
         if url == 'https://img.alicdn.com/mock/qr-dppt-106.png':     # 能解码的二维码：税务局电子发票地址
             return route.fulfill(status=200, content_type='image/png', body=(TOOLS / 'fixtures' / 'qr-dppt-106.png').read_bytes())
+        m = re.match(r'https://img\.alicdn\.com/mock/(qr-photo-(?:dppt|blur))\.jpg', url)
+        if m:                                                          # 合成的拍屏照片（缩略图地址也给原图）
+            return route.fulfill(status=200, content_type='image/jpeg', body=(TOOLS / 'fixtures' / (m.group(1) + '.jpg')).read_bytes())
+        m = re.match(r'https://dppt\.hebei\.chinatax\.gov\.cn:8443/mock-pdf/(\d+)\.pdf\?name=([^&]+)', url)
+        if m and pdf_of(pdfs, m.group(1)):                            # 税务局页面上点「PDF下载」
+            return route.fulfill(status=200, content_type='application/pdf', headers={'Content-Disposition': "attachment; filename*=UTF-8''" + m.group(2)},
+                                 body=pdf_of(pdfs, m.group(1)))
         for prefix, f in MOCKS:
             if url.startswith(prefix):
                 return route.fulfill(status=200, content_type='text/html; charset=utf-8', body=pages_html[f])
@@ -364,7 +388,11 @@ def run(p, tmp):
     cm = core.evaluate('({ opened: window.__mock.opened, sent: window.__mock.sent })') if core else {'opened': [], 'sent': []}
     print(f'  扫描用时 {time.time() - t0:.0f} 秒；点开过的会话：{cm["opened"]}')
     check(set(cm['opened']) == CONV_OPEN and len(cm['opened']) == len(CONV_OPEN),
-          '只点开还需要卖家回复的店的会话，每个一次（没点已开票、平台申请中、能平台申请的店，也没点零食铺、日用百货、已关闭订单的模型配件）', cm['opened'])
+          '还在等票、有会话的店都点开了，每个一次（已开票待下载的店、零食铺、日用百货、已关闭订单的模型配件不点）', cm['opened'])
+    none = {n for x in (scan or {}).get('none', []) for n in x.get('nos', [])}
+    failed = {n for x in (scan or {}).get('failed', []) for n in x.get('nos', [])}
+    check({NO['C'], NO['D']} <= none and not ({NO['C'], NO['D']} & failed),
+          '平台申请中的 C、能平台申请的 D 也在读取范围里；没有会话、不知道旺旺名的记为「尚未联系过」，不算读取失败', {'none': none, 'failed': failed})
     check(not cm['sent'], '没碰输入框、没点「发送」', cm['sent'])
     convs = (scan or {}).get('convs', {})
     e = convs.get('某某虚构电子元器件专营店', {})
@@ -383,9 +411,10 @@ def run(p, tmp):
           f'images={f.get("images")}（如果是 []：chat.js readMsgs 里 img 过滤条件 !i.closest(\'[class*="item-"]\') '
           f'会命中外层 .message-item-line，所有图片都被滤掉）')
     app.wait_for_timeout(500)
-    rows = check_status(AFTER_SCAN, '扫描后主页状态：E 卖家已发送文件，F 图片（二维码），G 要求提供邮箱，I 已向卖家索要等回复，H 仍需向卖家索要', F_HINT)
+    wait_until(app, lambda: inv_rows().get(NO['F'], {}).get('st') == AFTER_SCAN['F'], 20)       # 图片在后台识别，等它读完
+    rows = check_status(AFTER_SCAN, '扫描后主页状态：E 卖家已发送文件，F 图片读不出二维码（请查看），G 要求提供邮箱，I 已向卖家索要等回复，H 仍需向卖家索要', F_HINT)
     # 「操作」列按状态只有一个主要操作（用户 2026-10-08）；I 单 09-11 索要、已过应开票截止日（10 日），所以是「找客服督促」而不是「催卖家」；C 单 09-02 申请、也已过截止日
-    want_acts = {'A': '下载', 'B': '换开发票', 'C': '找客服督促', 'D': '申请开票', 'E': '下载', 'F': '下载', 'G': '回复邮箱', 'H': '索要发票', 'I': '找客服督促'}
+    want_acts = {'A': '下载', 'B': '换开发票', 'C': '找客服督促', 'D': '申请开票', 'E': '下载', 'F': '查看图片', 'G': '回复邮箱', 'H': '索要发票', 'I': '找客服督促'}
     acts = {k: rows.get(NO[k], {}).get('btns') for k in LAB}
     check(all(acts[k] == [v] for k, v in want_acts.items()), '「操作」列每行只有一个主要操作：待下载 → 下载，抬头不符 → 换开发票，已申请 / 超期 → 找客服督促，可平台申请 → 申请开票，需索要 → 索要发票',
           {k: (acts[k], want_acts[k]) for k in LAB if acts[k] != [want_acts[k]]})
@@ -795,9 +824,11 @@ def run(p, tmp):
     # 发完以后：客服问要不要投诉 → 插件回「OK」；客服发「提交投诉」卡片 → 插件点
     got = wait_until(app, lambda: (pg2 := core()) and pg2.evaluate('window.__mock.complained || 0') and pg2, 30)
     m = (got or core()).evaluate('window.__mock')
+    check(m.get('sent', []).count('是的，卖家一直没开') == 1 and '1' not in m.get('sent', []),
+          '客服先问「是订单卖家一直没有开票吗」：插件回一句「是的，卖家一直没开」（不是孤零零的「1」），只回一次', m.get('sent', [])[-4:])
     check(m.get('complained') == 1 and m.get('sent', []).count('OK') == 1, '客服问「发起投诉…您看可以吗」，插件回了「OK」；「提交投诉」按钮点了一次', (m.get('complained'), m.get('sent', [])[-3:]))
     pnl = (got or core()).inner_text('div[style*="2147483647"]')
-    check('已点「提交投诉」' in pnl and '已回复「OK」' in pnl, '卡片上写明回了 OK、点了提交投诉', pnl)
+    check('已点「提交投诉」' in pnl and '已回复「OK」' in pnl and '是的，卖家一直没开' in pnl, '卡片上写明回了确认、OK，点了提交投诉', pnl)
 
     print('\n[12b] 发票表里某一单点「找客服督促」：只为这一单打开官方客服、转人工后发这一单的督促（点了按钮就算确认这一单）')
     app.bring_to_front(); app.click('.flow li[data-step="2"]'); app.wait_for_timeout(500)
@@ -917,6 +948,7 @@ def run(p, tmp):
         part17(ctx, home, tmp, pdfs, dl_dir)
         part18(ctx, home, tmp)
         part19(ctx, home, tmp, pdfs, dl_dir)
+        part20(ctx, home, tmp, dl_dir)
     ctx.close()
 
 
@@ -1340,6 +1372,86 @@ def part19(ctx, app, tmp, pdfs, dl_dir):
     r2 = rec[-1]
     check(r2.get('file') and r2.get('file') != exp1 and Path(r2.get('path', '')).name == r2.get('file') and (inv_dir / r2['file']).is_file(),
           '再添加一次：Chrome 自动存成「… (1).pdf」，插件按 chrome.downloads 回报的实际文件名记录', (r2, sorted(p.name for p in inv_dir.iterdir() if Q1 in p.name)))
+
+
+# [20] 卖家发来的发票二维码图片（2026-10 实测两单没认出来；数据虚构）：T1 卖家在要票之后发来手机拍屏的照片（2268×2319、摩尔纹）；
+# T2 平台申请中、旺旺里从没要过票，卖家发来一张糊得读不出的照片和「发票请查收」
+X20 = {
+    'T1': ('5190000000000000221', '2026-09-25', '交易成功', '某某虚构轴承商贸', '72.00', [('虚构 深沟球轴承 6001', '10 只', 1, '72.00')]),
+    'T2': ('5190000000000000222', '2026-09-26', '交易成功', '某某虚构机电', '35.00', [('虚构 直流减速电机 12V', '1 个', 1, '35.00')]),
+}
+NICK20 = {'T1': 'nick轴承商贸', 'T2': 'nick机电'}
+
+
+def part20(ctx, app, tmp, dl_dir):
+    print('\n[20] 卖家发来的发票二维码图片：自动处理发票时识别拍屏照片 → 打开税务局页面 → 核对后下载 → 读 PDF 核对、挂单；读不出的标红请用户查看；'
+          '平台申请中的单也读卖家旺旺')
+    store = lambda k: app.evaluate('k => chrome.storage.local.get(k).then(r => r[k])', k)
+    T1, T2 = X20['T1'][0], X20['T2'][0]
+    app.bring_to_front(); app.wait_for_selector('#main:not([hidden])')
+    ctx.new_cdp_session(app).send('Browser.setDownloadBehavior', {'behavior': 'default'})
+    for pg in [pg for pg in ctx.pages if pg is not app and 'chrome-extension://' not in pg.url]: pg.close()
+    csv5 = tmp / '虚构订单表5.csv'
+    write_csv(csv5, X20)
+    app.set_input_files('#file', str(csv5)); app.wait_for_timeout(800)
+    app.evaluate('s => chrome.storage.local.get("scraped").then(r => chrome.storage.local.set({ scraped: Object.assign({}, r.scraped, s) }))',
+                 {X20[k][0]: {'no': X20[k][0], 'nick': n, 'status': '交易成功', 'lines': [{'title': X20[k][5][0][0]}]} for k, n in NICK20.items()})
+    app.wait_for_timeout(800)
+    app.evaluate("""nos => { const S = JSON.parse(localStorage.getItem('orderTriage.app.v1'));
+        for (const o of S.orders) if (nos.includes(o.no)) for (const l of o.lines) S.decisions[l.key] = 'lab';
+        localStorage.setItem('orderTriage.app.v1', JSON.stringify(S)); }""", [T1, T2])
+    app.reload(); app.wait_for_selector('#main:not([hidden])'); app.wait_for_timeout(800)
+
+    def row(no):
+        app.click('.flow li[data-step="2"]'); app.wait_for_timeout(300)
+        return app.evaluate("""no => { const tr = [...document.querySelectorAll('.inv-table tbody tr')].find(tr => tr.textContent.includes(no)); if (!tr) return null;
+            const b = tr.querySelector('.acts button[data-act]'), s = tr.querySelector('.st');
+            return { st: s.textContent.trim(), cls: s.className, act: b ? b.textContent : '', add: !!tr.querySelector('.acts .add'),
+                     detail: [...tr.children[5].querySelectorAll('.detail')].map(d => d.textContent).join(' | ') }; }""", no)
+
+    # 「自动处理发票」：读详情（旺旺名已知，跳过）→ 刷新开票记录 → 读旺旺 → 下载（这里识别图片、打开税务局页面）→ 确认清单（取消，不做对外操作）
+    app.evaluate('() => { __otDev.tmo = { apply: 4000 }; }')
+    s0 = (store('chatScan') or {}).get('at', 0)
+    wait_until(app, lambda: not app.evaluate('__otDev.run()')['busy'], 60)
+    app.click('.flow li[data-step="2"]'); app.wait_for_timeout(500)
+    t0 = time.time()
+    app.click('#summary [data-flow="inv-run"]')
+    dlg = wait_until(app, lambda: app.locator('#dlg-list[open]').count() or ((t := app.inner_text('#summary')) and '发票处理完成' in t), 900)
+    dtxt = app.inner_text('#dlg-list') if app.locator('#dlg-list[open]').count() else ''
+    if dtxt:
+        app.click('#list-cancel' if app.is_visible('#list-cancel') else '#list-ok')
+    fin = wait_until(app, lambda: (t := app.inner_text('#summary')) and '发票处理完成' in t and t, 300) or app.inner_text('#summary')
+    print(f'  自动处理发票用时 {time.time() - t0:.0f} 秒')
+    cs = store('chatScan') or {}
+    convs = cs.get('convs') or {}
+    check(cs.get('at', 0) != s0 and '某某虚构机电' in convs and '某某虚构轴承商贸' in convs,
+          '读旺旺：平台申请中、旺旺里从没要过票的 T2 也读了这家的会话（2026-10 实测漏过）', sorted(convs)[:12])
+    jd = next((l for l in fin.split('\n') if '下载已开具的发票' in l), '')
+    dl = store('dlDone') or {}
+    got = dl.get(T1) or []
+    check(len(got) == 1 and got[0].get('from') == 'qr' and got[0].get('src') == '26990000000000000106',
+          'T1：识别出拍屏照片里的税务局二维码，插件打开税务局页面、核对后下载（下载段：' + jd + '）', got)
+    path = Path(got[0].get('path', '')) if got else None
+    d, shop, pay = X20['T1'][1], X20['T1'][3], X20['T1'][4]
+    want_name = f'{d}_{js_num(pay)}_{shop}_{T1}.pdf'
+    check(bool(path) and path.is_file() and path.parent == dl_dir / '订单分拣-发票' and path.name == want_name and path.read_bytes().startswith(b'%PDF'),
+          f'T1 的发票存成「订单分拣-发票/{want_name}」（原名 dzfp_<发票号>_…）', path)
+    check(bool(got) and got[0].get('url', '').startswith('https://dppt.hebei.chinatax.gov.cn:8443/mock-pdf/'), '税务局页面下的 https 地址记下了，供取回 PDF 核对', got and got[0].get('url'))
+    S = app.evaluate("JSON.parse(localStorage.getItem('orderTriage.app.v1'))")
+    fc = (S.get('fileChecks') or {}).get('p:' + (got[0].get('path', '') if got else '')) or {}
+    check(fc.get('kind') == 'ok' and fc.get('amount') == 72 and fc.get('invNo') == '26990000000000000106', 'T1：取回 PDF 读出价税合计 72.00、发票号，核对相符', fc)
+    r1 = row(T1) or {}
+    check(r1.get('st') == '已下载' and '相符' in r1.get('detail', ''), 'T1：状态变成「已下载」（PDF 金额、日期相符）', r1)
+    closed = wait_until(app, lambda: not [pg for pg in ctx.pages if 'chinatax' in pg.url], 15)
+    check(bool(closed), '下完后税务局页面自己关掉了', [pg.url for pg in ctx.pages if 'chinatax' in pg.url])
+    r2 = wait_until(app, lambda: (r := row(T2)) and r.get('st') == '卖家发来图片，请查看' and r, 20) or row(T2) or {}
+    check(r2.get('st') == '卖家发来图片，请查看' and 'tone-bad' in r2.get('cls', '') and r2.get('act') == '查看图片' and r2.get('add'),
+          'T2：平台申请中，卖家在旺旺发来的图读不出二维码 → 红色「卖家发来图片，请查看」，操作「查看图片」，次要「手动添加发票」（不再静默）', r2)
+    seg = dtxt[dtxt.find('需手动处理'):] if '需手动处理' in dtxt else ''
+    check('某某虚构机电' in seg and '卖家发来图片，请查看' in seg and '查看图片' in seg, '确认清单的「需手动处理」里列出 T2（卖家发来图片，请查看 → 点「查看图片」）', seg[:400])
+    jobs = app.evaluate('nos => __otDev.jobsFor(nos)', [T1, T2])
+    check(not jobs, '下过的二维码发票不再排下载；读不出的图不排', jobs)
+    app.evaluate('() => { __otDev.tmo = null; }')
 
 
 def main():
