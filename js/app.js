@@ -1507,8 +1507,11 @@
       return { key: 'photo', shared: st.shared, img: QR.fullSrc(last.src), thumb: last.src, label: '卖家发来图片，请查看' + sh, detail: c.images.length + ' 张，未识别出二维码' };
     }
     // 还在等票的单：卖家没说是发票的图里读出了税务局发票二维码，也按「卖家发来发票二维码」自动下载
-    if (INV_GROUP[st.key] === 'todo' && (c.maybe || []).length) {
-      const t = qrsOf(c.maybe, true).tax.find(x => !qrTaken(x.invNo) && !qrGaveUp(x.invNo));
+    // 平台已申请、已督促等状态下，卖家要票之后直接发来的图（c.images）也读：2026-10-14 实测新开航模店在平台申请中，
+    // 卖家在旺旺里只发了一张税务局二维码图、没写字，以前因为状态是「已申请淘宝开票」而没去识别
+    const pool = (c.maybe || []).concat(st.key === 'replied' ? [] : c.images || []);
+    if (INV_GROUP[st.key] === 'todo' && pool.length) {
+      const t = qrsOf(pool, true).tax.find(x => !qrTaken(x.invNo) && !qrGaveUp(x.invNo));
       if (t) return { key: 'replied', qr: 'tax', url: t.url, shared: c.shared, label: '卖家发来发票二维码', detail: '发票号码 ' + t.invNo, loose: true };
     }
     return st;
@@ -3095,7 +3098,7 @@
   // ── 备份数据 / 从备份恢复（用户 2026-10-05）：全部数据只在本机浏览器里，删掉扩展或清浏览器数据就没了 ──
   // 备份文件：{ app: 'orderTriage', kind: 'backup', format: 1, version, at, localStorage: { 'orderTriage.*': 原样字符串 }, storage: chrome.storage.local 全部 }
   // 格式有不兼容的改动时 format 加一；旧插件见到不认识的 format 就拒绝，不去猜
-  const VERSION = EXT ? chrome.runtime.getManifest().version : '0.25.0';     // 网页版读不到 manifest，selftest 核对两处一致
+  const VERSION = EXT ? chrome.runtime.getManifest().version : '0.25.1';     // 网页版读不到 manifest，selftest 核对两处一致
   const BACKUP_FORMAT = 1;
   // 恢复时丢掉的扩展存储键：进行中的任务、页面领活记录、标签页编号这类临时状态。恢复回去的话，开着的淘宝页一读到就会接着干活
   // （重新提交开票申请、给卖家发消息、找客服督促、下载），标签页编号也早已失效。
