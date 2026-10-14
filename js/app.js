@@ -2200,7 +2200,7 @@
   // 核对不通过、但记下了票面金额的：订单变了可以重新配
   const RECHECK = ['short', 'amount', 'many'];
   // 核对相符（挪过来的也算：挪去的那单金额正好对得上）
-  const GOOD_CHECK = ['ok', 'more', 'merged', 'less', 'move', 'qrpage'];
+  const GOOD_CHECK = ['ok', 'more', 'merged', 'less', 'noship', 'move', 'qrpage'];
   /*
    * 核对下载的发票用的候选订单（同一家店的几张票逐个和这家店所有还没取得发票的订单配，用户 2026-10-10）：
    *   - 发票清单里还没取得发票的单（应报金额 = 实付 − 退款）
@@ -2216,7 +2216,7 @@
       return c ? GOOD_CHECK.includes(c.kind) : !g.url;              // 没核对过、也没法核对的（手动添加、旧版本下载的）当作有票
     });
     const pick = new Map();
-    const put = (o, extra) => { if (o && !pick.has(o.no)) pick.set(o.no, Object.assign({ no: o.no, shop: o.shop, time: o.time, amount: dueOf(o), taken: good(o) }, extra)); };
+    const put = (o, extra) => { if (o && !pick.has(o.no)) pick.set(o.no, Object.assign({ no: o.no, shop: o.shop, time: o.time, amount: dueOf(o), ship: +o.ship || 0, taken: good(o) }, extra)); };
     for (const no of nos) put(S.orders.find(y => y.no === no));
     for (const x of invOrders()) if (!good(x.o)) put(x.o);
     const shops = new Set([...pick.values()].map(o => o.shop)), gone = new Set(X.goneNos || []);
@@ -2225,6 +2225,7 @@
     return [...pick.values()];
   }
   const CHECK_NOTE = { ok: '✓ PDF 金额、日期相符', more: '✓ 票面略高于实付（按用券前价格开具）', merged: '✓ 同店多单合开', less: '✓ 票面低于实付不足 1 元',
+    noship: '✓ 票面为实付减运费（运费未开票）',
     short: '⚠ 票面低于应报金额 1 元以上，请联系卖家核对',
     move: '已移至正确订单', old: '⚠ 开票日期早于下单日期：属于以往其他订单', dup: '⚠ 与已整理（已报销）的发票为同一张，不属于本单', amount: '⚠ PDF 金额不符', many: '⚠ 同店多单均可匹配，请核对',
     qrpage: '✓ 已在税务局页面核对购买方、税号和价税合计', title: '⚠ 抬头不符', unread: '⚠ 无法读取 PDF 金额，请打开文件核对', error: '⚠ 未能取回 PDF 核对，请打开文件核对', copy: '与已下载的发票为同一张（卖家重复发送）' };
@@ -2284,7 +2285,7 @@
     if (st.key !== 'done') return st;
     const got = (X.dlDone[o.no] || []).concat(S.invFiles[o.no] || []);
     const cs = got.map(fcOf).filter(Boolean);
-    const notes = cs.map(c => (CHECK_NOTE[c.kind] || '') + (c.kind === 'short' ? '（少 ' + yuan(+c.short) + '）' : '') + (c.amount != null && c.kind !== 'error' ? '（' + yuan(+c.amount) + '，' + (c.date || '日期未读取') + '）' : '') + (c.dup ? '；与已整理的 ' + c.dup + ' 为同一张' : ''));
+    const notes = cs.map(c => (CHECK_NOTE[c.kind] || '') + (c.kind === 'short' ? '（少 ' + yuan(+c.short) + '）' : c.kind === 'noship' ? '（运费 ' + yuan(+c.short) + '）' : '') + (c.amount != null && c.kind !== 'error' ? '（' + yuan(+c.amount) + '，' + (c.date || '日期未读取') + '）' : '') + (c.dup ? '；与已整理的 ' + c.dup + ' 为同一张' : ''));
     const s2 = notes.length ? Object.assign({}, st, { detail: st.detail + ' · ' + notes.join('；'), checks: notes.join('；') }) : st;
     // 已有一张核对相符的票：别的文件配不上（说明里照样标 ⚠）不再把整单标红——这单的票已经到手了
     return cs.some(c => BAD_CHECK.includes(c.kind)) && !cs.some(c => GOOD_CHECK.includes(c.kind)) ? Object.assign({}, s2, { key: 'badinv', label: '下载的发票核对不通过' }) : s2;
@@ -3082,7 +3083,7 @@
   // ── 备份数据 / 从备份恢复（用户 2026-10-05）：全部数据只在本机浏览器里，删掉扩展或清浏览器数据就没了 ──
   // 备份文件：{ app: 'orderTriage', kind: 'backup', format: 1, version, at, localStorage: { 'orderTriage.*': 原样字符串 }, storage: chrome.storage.local 全部 }
   // 格式有不兼容的改动时 format 加一；旧插件见到不认识的 format 就拒绝，不去猜
-  const VERSION = EXT ? chrome.runtime.getManifest().version : '0.24.4';     // 网页版读不到 manifest，selftest 核对两处一致
+  const VERSION = EXT ? chrome.runtime.getManifest().version : '0.24.5';     // 网页版读不到 manifest，selftest 核对两处一致
   const BACKUP_FORMAT = 1;
   // 恢复时丢掉的扩展存储键：进行中的任务、页面领活记录、标签页编号这类临时状态。恢复回去的话，开着的淘宝页一读到就会接着干活
   // （重新提交开票申请、给卖家发消息、找客服督促、下载），标签页编号也早已失效。

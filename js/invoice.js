@@ -319,6 +319,7 @@
    *   old    开票日期比下单还早：是以前别的单的票
    *   more   票面比实付多一点（不超过 3 成）、日期对：多半是按优惠前的价开的，算这单的
    *   less   票面比应报金额少，但少得不到 1 元：算这单的
+   *   noship 票面正好等于应报金额减运费（卖家没把运费开进发票）：算这单的（带 short = 运费）
    *   short  票面比应报金额少了超过 1 元：要提醒用户（带 short = 少了多少）
    *   amount 金额对不上，同店也找不到
    *   title  抬头不是你的单位
@@ -347,6 +348,8 @@
       // 卖家按用券前的价开（实付 10.00、票面 10.50）时，同店正好有一单实付 10.50，以前这张票会被挪过去
       if (dateOk(f, o) && f.amount != null && f.amount > o.amount && f.amount <= o.amount * 1.3) return Object.assign(base, { kind: 'more' });
       if (dateOk(f, o) && f.amount != null && f.amount < o.amount && o.amount - f.amount <= 1 + 0.005) return Object.assign(base, { kind: 'less', short: Math.round((o.amount - f.amount) * 100) / 100 });
+      // 卖家只按商品开、没把运费开进去（2026-10-14 实测：亲乐熊 OTG 实付 67.08 含运费 6.18，票面 60.90）
+      if (dateOk(f, o) && f.amount != null && o.ship > 0 && eq(f.amount, o.amount - o.ship)) return Object.assign(base, { kind: 'noship', short: o.ship });
       const same = orders.filter(x => x.shop === o.shop && dateOk(f, x));
       const hit = same.filter(x => eq(f.amount, x.amount));
       if (hit.length === 1) return Object.assign(base, { kind: 'move', to: hit[0].no });

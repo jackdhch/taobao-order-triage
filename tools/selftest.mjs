@@ -333,6 +333,10 @@ assert.equal(I.parseInvoiceText('电子发票 发票号码： 开票日期： 1 
   assert.equal(I.checkFiles([f('100000000000000201', 10.5, '2026-07-03')], coupon)[0].kind, 'more');
   // 少 1 元以内也先认它；同店另一单正好等于票面也不挪
   assert.equal(I.checkFiles([f('100000000000000202', 10, '2026-07-03')], coupon)[0].kind, 'less');
+  // 票面正好是实付减运费：卖家没把运费开进去，算这单的；不是运费的差额照样提醒
+  const ship = [{ no: '100000000000000301', shop: '丁店', time: '2026-07-24 10:00:00', amount: 67.08, ship: 6.18 }];
+  assert.equal(I.checkFiles([f('100000000000000301', 60.9, '2026-10-14')], ship)[0].kind, 'noship');
+  assert.equal(I.checkFiles([f('100000000000000301', 60, '2026-10-14')], ship)[0].kind, 'short');
   // 明显不符（多出 3 成以上）才去同店找：正好是另一单的金额 → 挪过去
   assert.equal(I.checkFiles([f('100000000000000201', 30, '2026-07-03')], coupon.concat({ no: '100000000000000203', shop: '丙店', time: '2026-07-02', amount: 30 }))[0].to, '100000000000000203');
   assert.equal(r[2].to, '100000000000000102');
@@ -427,7 +431,7 @@ assert.equal(I.detailRefund('某商品 退款完成 ￥12.25 x1').refunded, true
   assert.ok(scriptsFor('https://invoice-ua.taobao.com/e-invoice/invoice-apply-online.html?disableNav=YES%2CYES&orderId=1&channel=card').includes('extension/apply-card.js'));
   assert.ok(scriptsFor('https://invoice-ua.taobao.com/e-invoice/invoice-detail-tm.html?disableNav=YES&orderId=1').includes('extension/apply-card.js'));
   assert.ok(scriptsFor('https://market.m.taobao.com/app/im/chat-core/index.html').includes('extension/chat-main.js'));
-  assert.equal(mf.version, '0.24.4');
+  assert.equal(mf.version, '0.24.5');
   // 备份文件里写的插件版本：网页版读不到 manifest，用 app.js 里写死的版本号，两处要一致
   const appJs = fs.readFileSync(new URL('../js/app.js', import.meta.url), 'utf8');
   assert.equal((/const VERSION = EXT \? chrome\.runtime\.getManifest\(\)\.version : '([\d.]+)'/.exec(appJs) || [])[1], mf.version);
