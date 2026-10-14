@@ -1035,6 +1035,18 @@
     }
     return [...by.values()];
   }
+  // 已付款、还没交易成功的实验室订单（用户 2026-10-14：新买的实验室东西要及时让卖家先开起来，同一家能一起就一起）：
+  // 只在「向卖家索要发票」里一起发消息，不进发票表、不算应开、不督促、不整理；交易成功后照常进发票表，已发过的消息算「已向卖家索要」
+  const EARLY_ST = /等待卖家发货|买家已付款|卖家已发货|待发货|待收货/;
+  function earlyOrders() {
+    const by = new Map(), gone = new Set(X.goneNos || []);
+    for (const x of derived.rows) {
+      if (effCat(x) !== 'lab' || x.ref || x.past || doneDeal(x.o) || gone.has(x.o.no) || !EARLY_ST.test(x.o.statusLive || x.o.status || '')) continue;
+      const g = by.get(x.o.no) || { o: x.o, lines: [], early: true };
+      g.lines.push(x.l); by.set(x.o.no, g);
+    }
+    return [...by.values()];
+  }
   // 发票表空着时说清楚为什么：实验室订单还没点确认收货（不是「交易成功」）、已退款的都不进发票表，新人会以为漏读了
   function emptyInvWhy() {
     const why = new Map();
@@ -1128,13 +1140,13 @@
   // 要给卖家发消息的：需找卖家、或卖家回来要邮箱的。按卖家合并，一家一条
   function askList() {
     const by = new Map(), noNick = new Set(), noNickOrders = [];
-    for (const x of invOrders()) {
+    for (const x of invOrders().concat(earlyOrders())) {
       const st = invStatus(x);
       if (!needsMsg(st)) continue;
       const o = x.o;
       if (!o.nick) { noNick.add(o.shop); noNickOrders.push(o); continue; }
       const g = by.get(o.nick) || { nick: o.nick, shop: o.shop, orders: [] };
-      g.orders.push({ no: o.no, date: (o.time || '').slice(0, 10), amount: dueOf(o), p3d: needOf([x]).p3d,
+      g.orders.push({ no: o.no, date: (o.time || '').slice(0, 10), amount: dueOf(o), p3d: needOf([x]).p3d, early: !!x.early,
         lines: x.lines.map(l => ({ title: l.title, img: l.img || '', qty: l.qty || 1 })) });
       by.set(o.nick, g);
     }
@@ -1159,7 +1171,7 @@
     return askList();
   }
   // 清单里每家一行：店铺、订单、要发的话
-  const askRows = items => items.map(g => '<b>' + esc(g.shop) + '</b><span class="detail">' + g.orders.map(o => esc(o.date) + ' ' + esc(yuan(+o.amount)) + ' ' + esc(o.no)).join('；') + '</span>'
+  const askRows = items => items.map(g => '<b>' + esc(g.shop) + '</b><span class="detail">' + g.orders.map(o => esc(o.date) + ' ' + esc(yuan(+o.amount)) + ' ' + esc(o.no) + (o.early ? '（尚未确认收货，先请卖家开）' : '')).join('；') + '</span>'
     + '<span class="ask-msg">' + esc(g.msg) + '</span>');
   // 已确认的店铺：旺旺页（extension/chat.js）逐家打开会话、核对属于该店铺后自动发送，每家间隔数秒；等它发完（chatQueue 清掉），超时就停掉队列。
   // auto=false 是填好、由用户自己点发送的写法：发票表里逐单的「索要发票」「催卖家」（follow = 催促的那句）用它；
@@ -3083,7 +3095,7 @@
   // ── 备份数据 / 从备份恢复（用户 2026-10-05）：全部数据只在本机浏览器里，删掉扩展或清浏览器数据就没了 ──
   // 备份文件：{ app: 'orderTriage', kind: 'backup', format: 1, version, at, localStorage: { 'orderTriage.*': 原样字符串 }, storage: chrome.storage.local 全部 }
   // 格式有不兼容的改动时 format 加一；旧插件见到不认识的 format 就拒绝，不去猜
-  const VERSION = EXT ? chrome.runtime.getManifest().version : '0.24.5';     // 网页版读不到 manifest，selftest 核对两处一致
+  const VERSION = EXT ? chrome.runtime.getManifest().version : '0.25.0';     // 网页版读不到 manifest，selftest 核对两处一致
   const BACKUP_FORMAT = 1;
   // 恢复时丢掉的扩展存储键：进行中的任务、页面领活记录、标签页编号这类临时状态。恢复回去的话，开着的淘宝页一读到就会接着干活
   // （重新提交开票申请、给卖家发消息、找客服督促、下载），标签页编号也早已失效。
