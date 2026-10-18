@@ -538,6 +538,7 @@
     chrome.storage.local.get('cardRun').then(r => resumeCard(r.cardRun)).catch(e => { panel.set('按开票入口申请出错：' + e.message); return true; })
       .then(busy => busy || resumeQueue())
       // 旺旺页只有一个：旧页面领了活还没做完就被跳转掉的，本页接着做（takeover）
-      .then(busy => { if (!busy) window.otTakeJob(['scan', 'chatDownload'], (kind) => kind === 'scan' ? scan() : download(), { takeover: true }); });
+      .then(busy => { if (!busy) window.otTakeJob(['scan', 'chatDownload'], (kind) => kind === 'scan' ? scan() : download(), { takeover: true,
+        isDone: async (kind, at) => kind === 'scan' && (((await chrome.storage.local.get('chatScan')).chatScan || {}).at || 0) >= at }); });
   }
 })();

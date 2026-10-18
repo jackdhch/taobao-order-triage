@@ -130,6 +130,9 @@ window.otTakeJob = function (kinds, run, opts) {
     for (const kind of kinds) {
       const at = jobs && jobs[kind];
       if (!at || Date.now() - at > 120000) continue;
+      // 这份活的结果已经交回去了（opts.isDone，比如旺旺页的读取：chatScan 比这份活新）：不再领（2026-10-18 实测：读取刚记完 done，
+      // 同一刻另一次领取把记录盖掉，下载那一段旺旺页又把读取重做一遍）
+      if (opts && opts.isDone && await opts.isDone(kind, at)) continue;
       const key = 'invClaim_' + kind;
       const c = (await chrome.storage.local.get(key))[key];
       // 这份活已经有页面领了（旺旺页：领活的旧页面已经不在、活又没做完的除外）
