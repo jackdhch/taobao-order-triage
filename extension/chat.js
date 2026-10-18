@@ -180,6 +180,10 @@
         skip(failed, g, '未找到这家店的会话', none);
       }
       await chrome.storage.local.set({ chatScan: { at: Date.now(), convs: out, failed, read, none } });
+      // 读取这份活到这里才算做完（2026-10-18 实测：逐家打开会话时页面跳走，领取记录没记 done，下载那一段新开的旺旺页把读取重做一遍，
+      // 下载一直排在后面，2 分钟没进展就超时）
+      const { invClaim_scan: cl } = await chrome.storage.local.get('invClaim_scan');
+      if (cl && !cl.done) await chrome.storage.local.set({ invClaim_scan: Object.assign({}, cl, { done: true }) });
       const fl = failed.length ? '；未能读取 ' + failed.length + ' 家：' + failed.map(f => f.name + '（' + f.why + '）').join('、') : '';
       // 一个都没读成也只记日志、不把旺旺页切到前台：原因已写进 failed，主页这一段写明
       window.otLog('scan', !read && failed.length ? 'fail' : 'end', (!read && failed.length ? '一个会话都没能读取' : '读取 ' + read + ' 个会话') + fl);
@@ -445,6 +449,7 @@
         const want = (invWant && invWant.chat) || [];
         // 主页排活前会写好清单；读不到清单也要回话，不能让主页干等到超时
         if (!want.length) { window.otFail('scan', '旺旺页未收到要读取的店铺清单，请在分拣主页重新点「自动处理发票」'); return; }
+        if (window.otNeedsLogin()) { window.otFail('scan', window.OT_LOGIN_WHY); return; }
         if (!await window.otWaitFor(() => convItems().length, 15000)) { window.otFail('scan', '旺旺页 15 秒内未显示会话列表（可能未登录或页面已改版）'); return; }
         // 左侧列表是陆续渲染出来的：等条目数 1.5 秒不再变化（最多再等 6 秒）再找，免得只看到最先出来的几条
         for (let i = 0, n = -1, same = 0; i < 20 && same < 5; i++) { const c = convItems().length; same = c === n ? same + 1 : 0; n = c; await sleep(300); }
@@ -495,6 +500,7 @@
       const { dlJobs } = await chrome.storage.local.get('dlJobs');
       const jobs = (dlJobs || []).filter(j => j.kind === 'chat');
       if (!jobs.length) { panel.set('没有待下载的文件'); return; }
+      if (window.otNeedsLogin()) { window.otFail('chatDownload', window.OT_LOGIN_WHY); return; }
       await window.otWaitFor(() => convItems().length, 15000);
       const done = [], later = [];
       for (const j of jobs) {

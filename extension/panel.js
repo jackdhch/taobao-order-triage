@@ -84,6 +84,18 @@ window.otNeedsVerify = function () {
   return /拖动.{0,6}滑块|滑动验证|安全验证|请完成验证/.test(dlg);
 };
 
+// 淘宝隔一段时间要求重新确认登录：页面顶上「您需要登录才能继续访问」，嵌着登录框「请确认继续用当前账号登录 / 快速进入」
+// （2026-10-18 实测：旺旺页被它挡住，读取、下载都没进展，主页只报超时）
+window.otNeedsLogin = function () {
+  if (/login\.(m\.)?taobao\.com/.test(location.host)) return true;
+  // 旺旺的会话在同源的内层页面里，登录框盖在外层页面上：两层都看
+  const docs = [document];
+  try { if (window.top !== window && window.top.document) docs.push(window.top.document); } catch (e) { /* 跨域的外层看不到 */ }
+  return docs.some(d => [...d.querySelectorAll('iframe[src*="login.m.taobao.com"],iframe[src*="login.taobao.com"],iframe[src*="havanaone"]')].some(f => f.getBoundingClientRect().width > 0)
+    || /您需要登录才能继续访问/.test((d.body && d.body.innerText || '').slice(0, 3000)));
+};
+window.OT_LOGIN_WHY = '淘宝要求重新确认登录：请在该页面点「快速进入」（继续使用当前账号）或重新登录，然后在分拣主页重新点「自动处理发票」';
+
 // 一个页面只有一条排队线：同步、下载、扫描一件做完再做下一件（各排各的会互相抢页面，同步翻到一半被下载切走标签，2026-09 离线复现）。
 // 同一种活已经排着没开始的，不再重复排
 window.otQueue = function () {
