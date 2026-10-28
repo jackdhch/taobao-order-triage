@@ -155,7 +155,7 @@ docs/assets/               README 横幅、功能图标、状态色块（图标�
   网页版（「补充图片 → 复制抓取脚本」生成 `(orderTriageScraper 源码)({nos, from})`，index.html 用 `<script data-no-run>` 只取函数不运行）
 - 扩展测试：Playwright 的 Chromium 用 `launch_persistent_context(channel='chromium', args=['--load-extension=项目根目录'])`；
   manifest 里匹配了 `127.0.0.1/tools/mock-taobao.html`；有 readJob 时模拟页会自动开始读取
-- README 图片：界面改动较大时 `env -u TMPDIR python3 tools/screenshots.py` 重新生成（要 Pillow；可只生成一类：`banner` / `shots` / `gifs`），
+- README 图片：界面改动较大时 `env -u TMPDIR python3 tools/screenshots.py` 重新生成（要 Pillow；可只生成一类：`banner` / `flows` / `shots` / `gifs`），
   生成后逐张看图、动图抽帧看，确认没有真实订单、店铺、抬头税号；按钮名、状态名改了要同步改 README 和脚本里的说明文字
 - 测完清掉测试浏览器里的 `localStorage`（键名 `orderTriage.app.v1`、`orderTriage.scraped.v1`），不要把用户数据留在浏览器里
 - 操作用户真实的淘宝页面（Claude in Chrome）前必须先征得用户同意；遇到滑块/验证码停下让用户自己处理，不要尝试绕过

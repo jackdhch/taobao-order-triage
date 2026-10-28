@@ -3,9 +3,10 @@
 生成 README 用的图片。全程离线，数据全部虚构：
 
     env -u TMPDIR python3 tools/screenshots.py                 # 全部重新生成
-    env -u TMPDIR python3 tools/screenshots.py banner shots    # 只生成其中几类：banner / shots / gifs
+    env -u TMPDIR python3 tools/screenshots.py banner shots    # 只生成其中几类：banner / flows / shots / gifs
 
 - banner：tools/readme-banner.html 按浅色、深色各渲染一次（2 倍清晰度）→ docs/assets/banner-light.png、banner-dark.png
+- flows： README 的两张流程图（四步、自动处理发票）→ docs/assets/flow-*-light.svg、flow-*-dark.svg（手写 SVG，不开浏览器）
 - shots： 静态截图 → docs/screenshots/*.png（「开始使用」卡片、主页浅色 / 深色对照、发票栏、整理报销文件对话框）
 - gifs：  演示动图 → docs/screenshots/demo-*.gif（主页总览、键盘分拣、发票状态变化）
 
@@ -481,7 +482,7 @@ def gif_overview(page, home):
 
 
 def gif_sorting(page, home):
-    """核对商品：按 1 / 2 判断两件待定 → 自动切到「实验室」→「这 N 件都是实验室，确认」→「个人」同样确认 → 进度和步骤条更新"""
+    """核对商品：按 1 / 2 判断两件待定 →「确认核对完成」→ 进度和步骤条更新（0.20.0 起默认「全部」，不再分类确认）"""
     page.set_viewport_size({'width': GW, 'height': GH})
     reset(page, home)
     load_sample(page, home)
@@ -493,8 +494,7 @@ def gif_sorting(page, home):
     r.key('2', '判为个人', hold=1600)
     r.note('')
     r.scroll_to(0, 280)
-    r.click('#summary [data-flow="sort-cat"]', hold=1800)          # 实验室这一类一次确认，自动切到「个人」
-    r.click('#summary [data-flow="sort-cat"]', hold=1800)
+    r.click('#summary [data-flow="sort-done"]', hold=2200)
     r.glide(GW - 8, 330, 400)                    # 指针停到页边，不挡按钮
     r.snap(3000)
     r.save('demo-sorting')
@@ -601,11 +601,78 @@ def run(p, tmp, what):
     ctx.close()
 
 
+# README 的两张流程图（代替 mermaid：GitHub 画 mermaid 时右上角的缩放按钮会挡住最后一个框）。
+# 手写 SVG，浅色 / 深色各一张，颜色取自 tools/readme-banner.html 的 :root 变量。字号按 README 正文约 900px 宽（缩到 0.75）定：正文 ≥ 18。
+FLOW_THEMES = {
+    'light': dict(bg='#F4F5F3', card='#FFFFFF', line='#DCE1DC', text='#1D2629', muted='#5F6C72', acc='#1C6E8C', wash='#E2EEF3',
+                  ok_bg='#E4F3EA', ok='#2E9D5B', ok_ink='#2F7D4F', on_acc='#FFFFFF', key='#1C6E8C'),
+    'dark': dict(bg='#121516', card='#1A1E20', line='#30373A', text='#E3E7E8', muted='#9AA6AB', acc='#3E92B3', wash='#16303A',
+                 ok_bg='#173426', ok='#4CC27E', ok_ink='#86D3A5', on_acc='#FFFFFF', key='#25698A'),   # 深色主色底再压暗一点，白字才清楚
+}
+FLOW_FONT = '&quot;Microsoft YaHei UI&quot;, &quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, &quot;Noto Sans CJK SC&quot;, system-ui, sans-serif'
+STEPS = [('读取订单', ['自动翻页读订单、', '商品图片和退款']), ('核对商品', ['关键词判实验室 / 个人，', '按 1 / 2 判完待定']),
+         ('处理发票', ['申请、索要、督促、', '下载，一张清单确认']), ('整理报销文件', ['按格式命名，', '附报销清单和压缩包'])]
+INV = [('刷新发票情况', ['开票记录、', '卖家旺旺回复'], ''), ('下载发票', ['读 PDF 核对', '金额和日期'], ''),
+       ('一张确认清单', ['可取消勾选，', '确认一次'], 'ok'), ('自动依次完成', ['索要、按入口申请、', '督促、确认收货'], ''),
+       ('平台批量申请', ['用户在淘宝页', '点「确认提交」'], '')]
+
+
+def flow_svg(c, title, desc, nodes, h, numbered):
+    n, gap = len(nodes), 36
+    w = (1200 - 2 * 40 - gap * (n - 1)) / n
+    s = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 {h}" width="1200" height="{h}" font-family="{FLOW_FONT}" role="img" aria-labelledby="t d">',
+         f'<title id="t">{title}</title><desc id="d">{desc}</desc>',
+         f'<rect x="0.5" y="0.5" width="1199" height="{h - 1}" rx="18" fill="{c["bg"]}" stroke="{c["line"]}"/>']
+    top, ch = 40, h - 80
+    for i, (name, lines, kind) in enumerate(nodes):
+        x = 40 + i * (w + gap)
+        key = numbered and i in (1, 2)       # 第 2、3 步是每次都要做的主操作，和 README 原来的配色一样用主色
+        if kind == 'ok':
+            fill, stroke, ink, sub = c['ok_bg'], c['ok'], c['ok_ink'], c['ok_ink']
+        elif key:
+            fill, stroke, ink, sub = c['key'], c['key'], c['on_acc'], c['on_acc']
+        else:
+            fill, stroke, ink, sub = c['card'], c['line'], c['text'], c['muted']
+        s.append(f'<rect x="{x:.1f}" y="{top}" width="{w:.1f}" height="{ch}" rx="14" fill="{fill}" stroke="{stroke}" stroke-width="1.5"/>')
+        if numbered:
+            s.append(f'<circle cx="{x + 38:.1f}" cy="{top + 40}" r="17" fill="{c["on_acc"] if key else c["wash"]}"/>'
+                     f'<text x="{x + 38:.1f}" y="{top + 47}" text-anchor="middle" font-size="20" font-weight="700" fill="{c["key"] if key else c["acc"]}">{i + 1}</text>'
+                     f'<text x="{x + 66:.1f}" y="{top + 48}" font-size="23" font-weight="700" fill="{ink}">{name}</text>')
+            for j, ln in enumerate(lines):
+                s.append(f'<text x="{x + 22:.1f}" y="{top + 92 + j * 28}" font-size="18" fill="{sub}">{ln}</text>')
+        else:
+            s.append(f'<text x="{x + w / 2:.1f}" y="{top + 50}" text-anchor="middle" font-size="22" font-weight="700" fill="{ink}">{name}</text>')
+            for j, ln in enumerate(lines):
+                s.append(f'<text x="{x + w / 2:.1f}" y="{top + 94 + j * 28}" text-anchor="middle" font-size="18" fill="{sub}">{ln}</text>')
+        if i < n - 1:                        # 箭头
+            ax, ay = x + w + 6, top + ch / 2
+            s.append(f'<path d="M{ax:.1f} {ay} H{ax + gap - 13:.1f}" stroke="{c["muted"]}" stroke-width="2.5" stroke-linecap="round"/>'
+                     f'<path d="M{ax + gap - 20:.1f} {ay - 7} L{ax + gap - 12:.1f} {ay} L{ax + gap - 20:.1f} {ay + 7}" fill="none" stroke="{c["muted"]}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>')
+    return '\n'.join(s) + '\n</svg>\n'
+
+
+def make_flows():
+    ASSETS.mkdir(parents=True, exist_ok=True)
+    for scheme, c in FLOW_THEMES.items():
+        for name, svg in (
+            ('flow-steps', flow_svg(c, '订单分拣的四步', '读取订单、核对商品、处理发票、整理报销文件：主页顶部一条线的四步', [s + ('',) for s in STEPS], 220, True)),
+            ('flow-invoice', flow_svg(c, '点一次「自动处理发票」', '刷新发票情况、下载发票、一张确认清单、自动依次完成索要申请督促和确认收货，最后由用户在淘宝页点确认提交平台批量申请', INV, 230, False)),
+        ):
+            path = ASSETS / f'{name}-{scheme}.svg'
+            path.write_text(svg, encoding='utf-8')
+            print('  ', path.relative_to(ROOT))
+
+
 def main():
-    what = sys.argv[1:] or ['banner', 'shots', 'gifs']
-    bad = set(what) - {'banner', 'shots', 'gifs'}
+    what = sys.argv[1:] or ['banner', 'flows', 'shots', 'gifs']
+    bad = set(what) - {'banner', 'flows', 'shots', 'gifs'}
     if bad:
-        sys.exit('不认识的参数：' + ' '.join(bad) + '（可选 banner / shots / gifs）')
+        sys.exit('不认识的参数：' + ' '.join(bad) + '（可选 banner / flows / shots / gifs）')
+    if 'flows' in what:
+        make_flows()
+        what = [x for x in what if x != 'flows']
+        if not what:
+            return
     tmp = Path(tempfile.mkdtemp(prefix='ot-shot-', dir='/tmp'))
     try:
         with sync_playwright() as p:

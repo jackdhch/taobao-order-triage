@@ -128,14 +128,12 @@
 
 主页顶部是一条线的四步，当前步骤标黄、完成的打勾；每步只有一个按钮。
 
-```mermaid
-flowchart LR
-    s1["1 读取订单"] --> s2["2 核对商品"] --> s3["3 处理发票"] --> s4["4 整理报销文件"]
-    classDef step fill:#E2EEF3,stroke:#1C6E8C,color:#17596F
-    classDef key fill:#1C6E8C,stroke:#1C6E8C,color:#FFFFFF
-    class s1,s4 step
-    class s2,s3 key
-```
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/flow-steps-dark.svg">
+    <img src="docs/assets/flow-steps-light.svg" width="100%" alt="四步：1 读取订单，2 核对商品，3 处理发票，4 整理报销文件">
+  </picture>
+</p>
 
 | 步骤 | 按钮 | 插件做什么 | 用户做什么 |
 |---|---|---|---|
@@ -190,14 +188,12 @@ flowchart LR
 
 点一次「自动处理发票」：
 
-```mermaid
-flowchart LR
-    a["刷新发票情况<br>（开票记录、卖家旺旺回复）"] --> c["下载发票"] --> b["一张确认清单"] --> d["向卖家索要<br>按开票入口申请<br>请客服督促<br>确认收货（天猫）"] --> e["平台批量申请<br>（用户在淘宝点确认提交）"]
-    classDef act fill:#FFFFFF,stroke:#5F6C72,color:#1D2629
-    classDef ok fill:#E4F3EA,stroke:#2E9D5B,color:#2F7D4F
-    class a,c,d,e act
-    class b ok
-```
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/flow-invoice-dark.svg">
+    <img src="docs/assets/flow-invoice-light.svg" width="100%" alt="刷新发票情况（开票记录、卖家旺旺回复）→ 下载发票 → 一张确认清单 → 自动依次完成索要、按入口申请、督促、确认收货（天猫）→ 平台批量申请，由用户在淘宝页点「确认提交」">
+  </picture>
+</p>
 
 需要在淘宝上提交、发送或确认收货的操作，按「向卖家索要 / 按卖家的开票入口申请 / 请淘宝客服督促 / 确认收货（天猫，确认后申请平台开票）/ 申请平台开票」分组列在一张清单里，可取消勾选；确认一次后自动依次完成。插件无法处理的订单也列在清单里。下载的发票存入下载文件夹的「订单分拣-发票」。处理时步骤条下方显示当前第几段、在等什么，可点「停止」（已发出的申请和消息不撤回）；插件打开的淘宝页面被关掉时，这一段立即结束并写明原因；结束后逐段列出结果。
 
@@ -213,6 +209,9 @@ flowchart LR
 | <img src="docs/assets/status/wait.svg" width="12" height="12" alt=""> 黄 | 等待卖家回复 |
 | <img src="docs/assets/status/urge.svg" width="12" height="12" alt=""> 青 | 已由淘宝客服督促 |
 | <img src="docs/assets/status/bad.svg" width="12" height="12" alt=""> 红 | 需处理（含下载的发票核对不通过、旺旺会话未能读取、卖家发来的图片读不出二维码、开票平台的二维码需手动下载；下次「自动处理发票」会列进清单） |
+
+<details>
+<summary>报销材料标签、每行的操作、应开票截止日</summary>
 
 发票状态下方另有报销材料标签：
 
@@ -242,6 +241,8 @@ flowchart LR
 | 淘宝 | 向商家发出开票要求（平台申请或旺旺索要）后 10 日 |
 
 交易成功日期取订单详情页上的确认收货时间；读不到时用插件在订单列表上看到状态变为「交易成功」的日期（第一次读到时就已交易成功的不用，按申请 / 索要日期算）。
+
+</details>
 
 **天猫订单先确认收货**：天猫的订单都能平台批量开票，交易成功后卖家须在 10 日内开票。已判为实验室、天猫、卖家已发货且物流显示已签收的订单，单独一组「确认收货（天猫，确认后申请平台开票）」列在确认清单里（默认勾选）；确认后插件逐单打开订单、点「确认收货」并在确认页点「确定」，看到交易成功后排进同一轮的平台申请。确认收货会把货款打给卖家，且不可撤销；读不到签收信息的订单不列入。淘宝页面出现密码框、验证码或扫码时插件停下、不填任何内容，由用户在该页完成后自动继续。
 

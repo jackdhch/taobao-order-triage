@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 220" width="1200" height="220" font-family="&quot;Microsoft YaHei UI&quot;, &quot;Microsoft YaHei&quot;, &quot;PingFang SC&quot;, &quot;Noto Sans CJK SC&quot;, system-ui, sans-serif" role="img" aria-labelledby="t d">
+<title id="t">订单分拣的四步</title><desc id="d">读取订单、核对商品、处理发票、整理报销文件：主页顶部一条线的四步</desc>
+<rect x="0.5" y="0.5" width="1199" height="219" rx="18" fill="#F4F5F3" stroke="#DCE1DC"/>
+<rect x="40.0" y="40" width="253.0" height="140" rx="14" fill="#FFFFFF" stroke="#DCE1DC" stroke-width="1.5"/>
+<circle cx="78.0" cy="80" r="17" fill="#E2EEF3"/><text x="78.0" y="87" text-anchor="middle" font-size="20" font-weight="700" fill="#1C6E8C">1</text><text x="106.0" y="88" font-size="23" font-weight="700" fill="#1D2629">读取订单</text>
+<text x="62.0" y="132" font-size="18" fill="#5F6C72">自动翻页读订单、</text>
+<text x="62.0" y="160" font-size="18" fill="#5F6C72">商品图片和退款</text>
+<path d="M299.0 110.0 H322.0" stroke="#5F6C72" stroke-width="2.5" stroke-linecap="round"/><path d="M315.0 103.0 L323.0 110.0 L315.0 117.0" fill="none" stroke="#5F6C72" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="329.0" y="40" width="253.0" height="140" rx="14" fill="#1C6E8C" stroke="#1C6E8C" stroke-width="1.5"/>
+<circle cx="367.0" cy="80" r="17" fill="#FFFFFF"/><text x="367.0" y="87" text-anchor="middle" font-size="20" font-weight="700" fill="#1C6E8C">2</text><text x="395.0" y="88" font-size="23" font-weight="700" fill="#FFFFFF">核对商品</text>
+<text x="351.0" y="132" font-size="18" fill="#FFFFFF">关键词判实验室 / 个人，</text>
+<text x="351.0" y="160" font-size="18" fill="#FFFFFF">按 1 / 2 判完待定</text>
+<path d="M588.0 110.0 H611.0" stroke="#5F6C72" stroke-width="2.5" stroke-linecap="round"/><path d="M604.0 103.0 L612.0 110.0 L604.0 117.0" fill="none" stroke="#5F6C72" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="618.0" y="40" width="253.0" height="140" rx="14" fill="#1C6E8C" stroke="#1C6E8C" stroke-width="1.5"/>
+<circle cx="656.0" cy="80" r="17" fill="#FFFFFF"/><text x="656.0" y="87" text-anchor="middle" font-size="20" font-weight="700" fill="#1C6E8C">3</text><text x="684.0" y="88" font-size="23" font-weight="700" fill="#FFFFFF">处理发票</text>
+<text x="640.0" y="132" font-size="18" fill="#FFFFFF">申请、索要、督促、</text>
+<text x="640.0" y="160" font-size="18" fill="#FFFFFF">下载，一张清单确认</text>
+<path d="M877.0 110.0 H900.0" stroke="#5F6C72" stroke-width="2.5" stroke-linecap="round"/><path d="M893.0 103.0 L901.0 110.0 L893.0 117.0" fill="none" stroke="#5F6C72" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="907.0" y="40" width="253.0" height="140" rx="14" fill="#FFFFFF" stroke="#DCE1DC" stroke-width="1.5"/>
+<circle cx="945.0" cy="80" r="17" fill="#E2EEF3"/><text x="945.0" y="87" text-anchor="middle" font-size="20" font-weight="700" fill="#1C6E8C">4</text><text x="973.0" y="88" font-size="23" font-weight="700" fill="#1D2629">整理报销文件</text>
+<text x="929.0" y="132" font-size="18" fill="#5F6C72">按格式命名，</text>
+<text x="929.0" y="160" font-size="18" fill="#5F6C72">附报销清单和压缩包</text>
+</svg>
